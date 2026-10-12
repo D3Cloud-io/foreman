@@ -486,6 +486,9 @@ model Task {
   blockedReason String? @map("blocked_reason")
   size      Size?
   doneWhen  String? @map("done_when")
+  /// What the task is about, in Markdown: context and the owner's words (FRM-T-017). Capped at
+  /// 2000 by the API, as `foreman_create` always advertised; null when there is none.
+  body      String?
   sortOrder Int     @default(0) @map("sort_order")
   /// True when the human ID was synthesized by the importer rather than authored, so a synthesized
   /// ID is never mistaken for a canonical one (FRM-REQ-045, FRM-REQ-151).

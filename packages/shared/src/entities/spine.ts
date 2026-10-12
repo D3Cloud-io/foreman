@@ -149,6 +149,17 @@ export type TaskFilePath = z.infer<typeof TaskFilePath>;
 /** At most 100 declared files or globs per task — a scope of work, not a file manifest. */
 export const TaskFiles = z.array(TaskFilePath).max(100);
 
+/**
+ * A task's body: what it is about, in Markdown — the context and the owner's words that a title and
+ * a `doneWhen` have no room for (FRM-T-017).
+ *
+ * The cap is the one `foreman_create` and `foreman_update` advertised for `body` all along. Until
+ * 2026-10-12 a task had no column for it, so a body sent with a task was accepted and dropped —
+ * twenty FLR task bodies vanished that way in one session. Long-form design belongs in a document;
+ * this is room for a paragraph or two of why.
+ */
+export const TASK_BODY_MAX = 2000;
+
 export const Task = z
   .object({
     id: Uuid,
@@ -160,6 +171,8 @@ export const Task = z
     blockedReason: z.string().max(1000).nullable(),
     size: Size.nullable(),
     doneWhen: z.string().max(2000).nullable(),
+    /** What the task is about, in Markdown — context, and the owner's own words. */
+    body: z.string().max(TASK_BODY_MAX).nullable(),
     sortOrder: z.number().int(),
     /** True when the importer invented the ID rather than reading one (FRM-REQ-045). */
     idSynthesized: z.boolean(),
@@ -179,6 +192,8 @@ const TaskFields = z.object({
   blockedReason: z.string().max(1000).nullish(),
   size: Size.optional(),
   doneWhen: z.string().max(2000).optional(),
+  /** Markdown. Null or blank clears it. */
+  body: z.string().max(TASK_BODY_MAX).nullish(),
   sortOrder: z.number().int().optional(),
   files: TaskFiles.optional(),
   requirementIds: z.array(Uuid).optional(),

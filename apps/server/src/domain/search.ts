@@ -91,17 +91,25 @@ export async function search(db: Db, query: string, options: SearchOptions = {})
 
   if (wants('task')) {
     const rows = await db.task.findMany({
-      where: { deletedAt: null, ...project, OR: [{ title: contains }, { humanId: contains }] },
+      // The body and `doneWhen` too: a task's context is where the words somebody would search
+      // for actually are, and a title is a handful of them.
+      where: {
+        deletedAt: null,
+        ...project,
+        OR: [{ title: contains }, { humanId: contains }, { body: contains }, { doneWhen: contains }],
+      },
       take: perType,
       include: { project: { select: { code: true } } },
     });
+    const has = (text: string | null) => text !== null && text.toLowerCase().includes(q.toLowerCase());
     for (const row of rows) {
       hits.push({
         type: 'task',
         humanId: row.humanId,
         projectCode: row.project.code,
         title: row.title,
-        snippet: snippet(row.doneWhen, q),
+        // Where it matched, if it matched past the title; otherwise what it is done when.
+        snippet: snippet(has(row.body) && !has(row.doneWhen) ? row.body : row.doneWhen ?? row.body, q),
       });
     }
   }

@@ -14,6 +14,7 @@ import {
   Stack,
 } from '@d3cloud/ui';
 import { foreman } from '../lib/api';
+import { Markdown } from '../components/Markdown';
 import { useAsync } from '../lib/useAsync';
 import { EditForm, SIZES } from './EditForms';
 import { OpenInConstellation } from '../components/OpenInConstellation';
@@ -29,6 +30,8 @@ interface TaskEntity {
   blockedReason: string | null;
   size: string | null;
   doneWhen: string | null;
+  /** Markdown: what the task is about, in the owner's words. */
+  body: string | null;
   idSynthesized: boolean;
   startedAt: string | null;
   completedAt: string | null;
@@ -110,6 +113,7 @@ export function TaskDetail({ humanId }: { humanId: string }) {
                 title: task.title,
                 size: task.size ?? '',
                 doneWhen: task.doneWhen ?? '',
+                body: task.body ?? '',
                 ...(task.status === 'blocked'
                   ? { blockedReason: task.blockedReason ?? '' }
                   : {}),
@@ -123,6 +127,13 @@ export function TaskDetail({ humanId }: { humanId: string }) {
                   kind: 'textarea',
                   optional: true,
                   help: 'What would show this task is finished.',
+                },
+                {
+                  name: 'body',
+                  label: 'Context',
+                  kind: 'textarea',
+                  optional: true,
+                  help: 'Markdown. What this is about and why, in your own words.',
                 },
                 // Offered only while the task is blocked: a reason with nothing to explain is
                 // a field nobody knows how to fill in.
@@ -154,6 +165,13 @@ export function TaskDetail({ humanId }: { humanId: string }) {
           none. It is not a canonical ID somebody chose.
         </Alert>
       ) : null}
+
+      {task.body === null ? null : (
+        <Card>
+          <CardTitle>Context</CardTitle>
+          <Markdown>{task.body}</Markdown>
+        </Card>
+      )}
 
       <Card>
         <CardTitle>What it is</CardTitle>

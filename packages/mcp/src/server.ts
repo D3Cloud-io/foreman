@@ -82,7 +82,10 @@ export function createServer({ client, name, version }: ServerOptions): McpServe
       {
         title: tool.title,
         description: tool.description,
-        inputSchema: tool.inputSchema.shape,
+        // The whole schema, not its shape: the shape alone is rebuilt by the SDK as a plain
+        // object, which strips a field it does not know and drops the per-kind refinement — the
+        // silent loss these schemas exist to refuse (FRM-T-017).
+        inputSchema: tool.inputSchema,
         annotations: {
           readOnlyHint: false,
           // Not destructive by default: most writes here add or advance. The ones that lose

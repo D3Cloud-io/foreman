@@ -280,6 +280,15 @@ export async function updateRequirement(
 
 // ─── Tasks ─────────────────────────────────────────────────────────────────
 
+/**
+ * A task body as stored: Markdown, or null when there is none. A blank body is no body — the
+ * console clears the field by sending an empty string, and a task "with a body" of three spaces
+ * would say there was context to read when there is not.
+ */
+function bodyOf(body: string | null): string | null {
+  return body === null || body.trim().length === 0 ? null : body;
+}
+
 export async function createTask(db: Db, actor: Actor, code: string, input: TaskCreate) {
   const project = await findProject(db, code);
 
@@ -337,6 +346,7 @@ export async function createTask(db: Db, actor: Actor, code: string, input: Task
           : { blockedReason: input.blockedReason }),
         ...(input.size !== undefined ? { size: input.size } : {}),
         ...(input.doneWhen !== undefined ? { doneWhen: input.doneWhen } : {}),
+        ...(input.body !== undefined ? { body: bodyOf(input.body) } : {}),
         sortOrder: input.sortOrder ?? siblings,
         ...(input.files !== undefined
           ? { files: { create: input.files.map((path) => ({ path })) } }
@@ -404,6 +414,7 @@ export async function updateTask(db: Db, actor: Actor, humanId: string, input: T
           : {}),
         ...(input.size !== undefined ? { size: input.size } : {}),
         ...(input.doneWhen !== undefined ? { doneWhen: input.doneWhen } : {}),
+        ...(input.body !== undefined ? { body: bodyOf(input.body) } : {}),
         ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
         // A status change is also a timestamp: "when did this start" is asked constantly.
         ...(input.status === 'in_progress' && before.startedAt === null

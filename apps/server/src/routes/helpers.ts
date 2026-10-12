@@ -98,21 +98,48 @@ export function param(req: Request, name: string): string {
   return value;
 }
 
+/**
+ * The top-level fields a body sends that its schema does not declare.
+ *
+ * A zod object strips an unknown key and parses, so a field the entity has no column for used to
+ * be accepted and dropped: the request answered 200, and the text was gone (FRM-T-017 — twenty FLR
+ * task bodies). Every write refuses one by name instead. Top level only: that is where a field is
+ * a column, and a nested shape is the schema's own business.
+ */
+function unknownFields(schema: z.ZodType, body: unknown): string[] {
+  if (!(schema instanceof z.ZodObject)) return [];
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return [];
+  const known = new Set(Object.keys(schema.shape));
+  return Object.keys(body).filter((key) => !known.has(key));
+}
+
 /** Parse a body against a schema, or answer 400 with per-field detail. */
 export function parseBody<T extends z.ZodType>(
   schema: T,
   req: Request,
   res: Response,
 ): z.infer<T> | null {
+  const unknown = unknownFields(schema, req.body);
   const parsed = schema.safeParse(req.body);
-  if (parsed.success) return parsed.data;
+  if (parsed.success && unknown.length === 0) return parsed.data;
 
   res.status(400).json({
-    error: 'the request body is not valid',
-    fields: parsed.error.issues.map((issue) => ({
-      path: issue.path.join('.'),
-      message: issue.message,
-    })),
+    error:
+      unknown.length > 0
+        ? `not a field this stores, so it would be lost: ${unknown.join(', ')}`
+        : 'the request body is not valid',
+    fields: [
+      ...unknown.map((key) => ({
+        path: key,
+        message: 'not a field this stores — it would be lost, so it is refused',
+      })),
+      ...(parsed.success
+        ? []
+        : parsed.error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            message: issue.message,
+          }))),
+    ],
   });
   return null;
 }

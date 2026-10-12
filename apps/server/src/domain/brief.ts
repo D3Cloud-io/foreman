@@ -61,6 +61,11 @@ export interface Brief {
     readonly status: string;
     readonly size: string | null;
     readonly doneWhen: string | null;
+    /**
+     * Whether the task has a body to read. The body itself stays out — the brief is read every
+     * session and kept short; `foreman_get` on the task returns it.
+     */
+    readonly hasBody: boolean;
     readonly requirements: readonly string[];
   }[];
   /**
@@ -238,6 +243,7 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
       status: task.status,
       size: task.size,
       doneWhen: task.doneWhen,
+      hasBody: task.body !== null,
       requirements: task.requirements.map((r) => r.requirement.humanId),
     })),
     waitingOnDependencies: waiting,
