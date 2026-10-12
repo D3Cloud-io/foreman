@@ -102,12 +102,17 @@ describe.skipIf(url === undefined)('the spine', () => {
 
     it('cannot change a code — it is not a field an update has', async () => {
       await makeProject();
+      // Refused by name rather than stripped (FRM-T-017): a stripped code answered 200, which read
+      // as the rename having worked.
       const res = await patch('/projects/SPN', { code: 'NEW', name: 'Renamed' });
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(400);
+      const refusal = (await res.json()) as { fields: { path: string }[] };
+      expect(refusal.fields.map((f) => f.path)).toEqual(['code']);
 
-      const body = (await res.json()) as { code: string; name: string };
-      expect(body.code).toBe('SPN');
-      expect(body.name).toBe('Renamed');
+      // Nothing in the refused request was applied — not even the field that was allowed.
+      const after = (await (await api('/projects/SPN')).json()) as { code: string; name: string };
+      expect(after.code).toBe('SPN');
+      expect(after.name).not.toBe('Renamed');
       // And the new code resolves to nothing, because it was never applied.
       expect((await api('/projects/NEW')).status).toBe(404);
     });

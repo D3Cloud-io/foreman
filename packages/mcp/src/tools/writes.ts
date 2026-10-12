@@ -111,14 +111,18 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
           break;
         case 'task':
           body['title'] = args.text;
+          if (args.body !== undefined) body['body'] = args.body;
           if (args.doneWhen !== undefined) body['doneWhen'] = args.doneWhen;
           if (args.size !== undefined) body['size'] = args.size;
           break;
         case 'phase':
           body['name'] = args.text;
           body['number'] = args.number ?? 0;
+          if (args.size !== undefined) body['size'] = args.size;
           break;
       }
+      // Anything a kind does not store was refused by `CreateInput` (CREATE_FIELDS) before this
+      // ran, so every field that reached here is one the switch above sends.
 
       // Every remaining kind required a project code, enforced by `CreateInput` itself.
       return client.post(`/api/projects/${args.project ?? ''}/${args.kind}s`, body, {
@@ -131,7 +135,9 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
   {
     name: 'foreman_update',
     title: 'Update',
-    description: 'Change an entity’s text, priority, size, phase or (a task) its declared files.',
+    description:
+      'Change an entity’s text, body, priority, size, phase or (a task) its declared files. A field ' +
+      'its kind does not store is refused.',
     inputSchema: UpdateInput,
     gate: (_client, input) => {
       const args = UpdateInput.parse(input);
@@ -154,7 +160,11 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
         if (args.reason !== undefined) body['reason'] = args.reason;
         return client.patch(`/api/project-ideas/${args.id}`, body);
       }
-      if (args.text !== undefined) body[kind === 'requirements' ? 'statement' : 'title'] = args.text;
+      // What `text` is called on each kind. A phase's is `name`: sending it as `title` was
+      // stripped by the API, so renaming a phase reported success and changed nothing.
+      if (args.text !== undefined) {
+        body[kind === 'requirements' ? 'statement' : kind === 'phases' ? 'name' : 'title'] = args.text;
+      }
       if (args.priority !== undefined) body['priority'] = args.priority;
       if (args.size !== undefined) body['size'] = args.size;
       if (args.doneWhen !== undefined) body['doneWhen'] = args.doneWhen;

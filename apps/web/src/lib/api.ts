@@ -196,6 +196,7 @@ export interface TaskRow {
   blockedReason: string | null;
   size: string | null;
   doneWhen: string | null;
+  body: string | null;
   phaseId: string | null;
   files: string[];
   requirements: string[];

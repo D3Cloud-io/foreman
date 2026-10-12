@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { Priority, Size } from '../enums.js';
 import { AnyId, HumanId, parseAnyId, ProjectCode } from '../ids.js';
 import { IdeaFieldKey } from './record.js';
-import { TaskFiles } from './spine.js';
+import { TASK_BODY_MAX, TaskFiles } from './spine.js';
 
 /**
  * The write surface, shared by the API and the MCP shim (FRM-REQ-089, FRM-REQ-090, FRM-REQ-091).
@@ -55,7 +55,27 @@ function fromJsonText(value: unknown): unknown {
   }
 }
 
-export const CreateInput = z.object({
+/**
+ * What each kind of entity takes from `foreman_create`, beyond `project`, `kind` and `text`.
+ *
+ * **A field a kind does not store is refused, by name — never dropped.** Every field here used to
+ * be accepted for every kind and silently ignored by the ones with nowhere to put it: on
+ * 2026-10-12 twenty FLR task bodies were written, reported as created, and lost, because a task had
+ * no body. Silent loss is the worst outcome a write can have, so the table is the contract and the
+ * refinement below enforces it; adding a column to a kind means adding its field here.
+ */
+export const CREATE_FIELDS: Readonly<Record<CreatableKind, readonly string[]>> = {
+  project: ['pitch'],
+  project_idea: ['pitch', 'canvas'],
+  requirement: ['priority', 'phase'],
+  task: ['body', 'doneWhen', 'size', 'phase', 'satisfies'],
+  phase: ['number', 'size'],
+  idea: ['body'],
+};
+
+const ALWAYS_CREATE = new Set(['project', 'kind', 'text']);
+
+export const CreateInput = z.strictObject({
   /**
    * Optional only because of `project_idea`, which is the one kind that belongs to no project —
    * it is a candidate *for* one. Required for every other kind, enforced below so the message
@@ -69,8 +89,11 @@ export const CreateInput = z.object({
   text: z.string().min(1).max(4000).describe('The statement, title or name'),
   /** Project only. Its one-line pitch. */
   pitch: z.string().max(2000).optional(),
-  /** Idea only. What it buys, in basic terms — so one call is enough to record a whole idea. */
-  body: z.string().max(2000).optional(),
+  /**
+   * Markdown. A task's body — its context, in the owner's words — or an idea's line of what it
+   * buys. Refused for any other kind.
+   */
+  body: z.string().max(TASK_BODY_MAX).optional(),
   phase: HumanId.optional().describe('The phase to file it under'),
   priority: Priority.optional(),
   size: Size.optional(),
@@ -102,6 +125,16 @@ export const CreateInput = z.object({
     .optional()
     .describe('Project idea only: sections in Markdown, lists as plain items'),
 }).superRefine((value, ctx) => {
+  const takes = CREATE_FIELDS[value.kind];
+  for (const [field, given] of Object.entries(value)) {
+    if (given === undefined || ALWAYS_CREATE.has(field) || takes.includes(field)) continue;
+    ctx.addIssue({
+      code: 'custom',
+      path: [field],
+      message: `a ${value.kind} has no ${field}, so it would not be stored — leave it out`,
+    });
+  }
+
   if (value.kind === 'project_idea') {
     if (value.project !== undefined) {
       ctx.addIssue({
@@ -124,14 +157,47 @@ export const CreateInput = z.object({
 });
 export type CreateInput = z.infer<typeof CreateInput>;
 
-export const UpdateInput = z.object({
+/**
+ * What each kind takes from `foreman_update`, beyond `id`, keyed by the ID's type segment.
+ *
+ * The same contract as `CREATE_FIELDS`: a field the kind does not store is refused by name. Before
+ * this, `body` on a task or requirement, `priority` on a task, `size` on a requirement, `section`
+ * on anything but a project idea, a `reason` on anything but an idea, and `text` on a phase (sent
+ * as a `title` a phase does not have) all reported success and changed nothing.
+ */
+const FINDING_FIELDS = ['text', 'fixedCommitSha'] as const;
+export const UPDATE_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  REQ: ['text', 'priority', 'phase'],
+  T: ['text', 'size', 'doneWhen', 'body', 'phase', 'files'],
+  P: ['text', 'size'],
+  CR: FINDING_FIELDS,
+  DA: FINDING_FIELDS,
+  FR: FINDING_FIELDS,
+  API: FINDING_FIELDS,
+  IDEA: ['text', 'body', 'reason'],
+  PI: ['text', 'body', 'reason', 'section'],
+};
+
+const KIND_NAMES: Readonly<Record<string, string>> = {
+  REQ: 'requirement',
+  T: 'task',
+  P: 'phase',
+  CR: 'finding',
+  DA: 'finding',
+  FR: 'finding',
+  API: 'finding',
+  IDEA: 'idea',
+  PI: 'project idea',
+};
+
+export const UpdateInput = z.strictObject({
   id: AnyId.describe('The entity to change, e.g. BND-T-0.3 or PI-007'),
   text: z.string().min(1).max(4000).optional().describe('Replaces the statement, title or name'),
   priority: Priority.optional(),
   size: Size.optional(),
   doneWhen: z.string().max(2000).optional(),
-  /** An idea's body — what it buys, in basic terms. */
-  body: z.string().max(2000).optional(),
+  /** Markdown. A task's body, an idea's line of what it buys, or a project idea's pitch. */
+  body: z.string().max(TASK_BODY_MAX).optional(),
   /**
    * Why an idea was parked or rejected.
    *
@@ -168,14 +234,52 @@ export const UpdateInput = z.object({
   files: TaskFiles.optional().describe(
     'Task only: replaces its declared files/globs wholesale. Repo-relative, no leading / or .. segment, max 100',
   ),
+}).superRefine((value, ctx) => {
+  const type = parseAnyId(value.id)?.type;
+  const takes = type === undefined ? undefined : UPDATE_FIELDS[type];
+  // An ID this tool cannot change at all is refused by the tool, with its own message.
+  if (type === undefined || takes === undefined) return;
+  for (const [field, given] of Object.entries(value)) {
+    if (given === undefined || field === 'id' || takes.includes(field)) continue;
+    ctx.addIssue({
+      code: 'custom',
+      path: [field],
+      message: `${value.id} is a ${KIND_NAMES[type] ?? type}, which has no ${field} — it would not be stored`,
+    });
+  }
 });
 export type UpdateInput = z.infer<typeof UpdateInput>;
 
-export const SetStatusInput = z.object({
+export const SetStatusInput = z.strictObject({
   id: AnyId,
   status: z.string().min(1).max(40).describe('The new status for this kind of entity'),
   /** Required when moving a task to `blocked`: a blocked task must say what is blocking it. */
   reason: z.string().max(1000).optional(),
+}).superRefine((value, ctx) => {
+  const type = parseAnyId(value.id)?.type;
+  // A requirement has a priority and a phase, not a status: setting one answered success and
+  // changed nothing.
+  if (type === 'REQ') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['status'],
+      message: `${value.id} is a requirement, which has no status — it is covered by its tasks`,
+    });
+  }
+  // Where a reason is kept: on an idea or a project idea, and on a task only while it is blocked.
+  // Anywhere else it used to be accepted and dropped — a note on why a task was cancelled, or why
+  // a finding was closed wont_fix, reported success and was never written down.
+  if (value.reason === undefined) return;
+  if (type === 'IDEA' || type === 'PI') return;
+  if (type === 'T' && value.status === 'blocked') return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['reason'],
+    message:
+      type === 'T'
+        ? 'a task keeps a reason only while blocked — put the context in its body with foreman_update'
+        : `${value.id} keeps no reason for a status change, so it would not be stored — leave it out`,
+  });
 });
 export type SetStatusInput = z.infer<typeof SetStatusInput>;
 
@@ -204,7 +308,7 @@ export type SetStatusInput = z.infer<typeof SetStatusInput>;
  */
 const DELETABLE = ['IDEA', 'PI'];
 
-export const DeleteInput = z.object({
+export const DeleteInput = z.strictObject({
   id: AnyId.refine((value) => DELETABLE.includes(parseAnyId(value)?.type ?? ''), {
     message:
       'only an idea or a project idea can be deleted over MCP — anything else is cited by ' +
@@ -213,7 +317,7 @@ export const DeleteInput = z.object({
 });
 export type DeleteInput = z.infer<typeof DeleteInput>;
 
-export const LinkInput = z.object({
+export const LinkInput = z.strictObject({
   from: HumanId,
   to: HumanId,
   /**
@@ -235,7 +339,7 @@ export type LinkInput = z.infer<typeof LinkInput>;
  * a commit message or a file list and guess; this is the one party that was actually there saying
  * what it did. So a declaration arrives confirmed, where a proposal does not.
  */
-export const AttributeInput = z.object({
+export const AttributeInput = z.strictObject({
   /** The commit. A short SHA is fine — that is what anybody has to hand. */
   sha: z
     .string()

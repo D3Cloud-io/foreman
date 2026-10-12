@@ -144,6 +144,10 @@ async function seed(db: Db, config: ReturnType<typeof loadConfig>): Promise<void
           ...(spec.synthesized === true ? { idSynthesized: true } : {}),
           size: (['XS', 'S', 'M', 'L', 'XL'] as const)[index % 5] ?? 'M',
           doneWhen: `${spec.title} is demonstrably working.`,
+          // Every other task carries a body, so both shapes — with context and without — show.
+          ...(index % 2 === 0
+            ? { body: `Why **${spec.title.toLowerCase()}** matters, in the owner's words.` }
+            : {}),
           sortOrder: index,
           files: { create: [{ path: `apps/server/src/${spec.seq.replace('.', '-')}.ts` }] },
           requirements: {

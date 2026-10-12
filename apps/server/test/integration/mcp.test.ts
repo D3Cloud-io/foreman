@@ -418,14 +418,161 @@ describe.skipIf(url === undefined)('the MCP shim, end to end', () => {
       // Found while marking the cutover's own tasks done through this tool: the reason was sent
       // whatever the status was, so a note explaining why something was *finished* landed in
       // `blockedReason` — which reads, to anyone who finds it later, as a record of it being stuck.
-      await client.callTool({
+      //
+      // It was then dropped instead, which lost the note silently (FRM-T-017). Now it is refused
+      // by name, nothing changes, and the move goes through once the note is left out.
+      const refused = await client.callTool({
         name: 'foreman_set_status',
         arguments: { id: taskId, status: 'done', reason: 'Snapshot taken and verified.' },
       });
+      expect(refused.isError).toBe(true);
+      expect(text(refused)).toMatch(/reason/);
+      expect((await db.task.findUniqueOrThrow({ where: { humanId: taskId } })).status).not.toBe(
+        'done',
+      );
+
+      const moved = await client.callTool({
+        name: 'foreman_set_status',
+        arguments: { id: taskId, status: 'done' },
+      });
+      expect(moved.isError, text(moved)).toBeFalsy();
       const task = await db.task.findUniqueOrThrow({ where: { humanId: taskId } });
 
       expect(task.status).toBe('done');
       expect(task.blockedReason).toBeNull();
+    });
+  });
+
+  describe('a task keeps its body (FRM-T-017)', () => {
+    // 2026-10-12: twenty FLR task bodies were written through foreman_create, each answered as
+    // created, and every one was lost — a task had no body column, and nothing said so.
+    const get = async (client: Awaited<ReturnType<typeof connect>>, id: string) => {
+      const result = await client.callTool({ name: 'foreman_get', arguments: { id } });
+      expect(result.isError, text(result)).toBeFalsy();
+      return (JSON.parse(text(result)) as { entity: { body: string | null } }).entity;
+    };
+
+    it('round-trips through create → get → update → get, and audits the change', async () => {
+      const client = await connect(writeToken);
+      const written = '## Why\n\nThe owner said: *"it has to survive a power cut."*';
+      const created = await client.callTool({
+        name: 'foreman_create',
+        arguments: { project: CODE, kind: 'task', text: 'A task with a body', body: written },
+      });
+      expect(created.isError, text(created)).toBeFalsy();
+      const { humanId } = JSON.parse(text(created)) as { humanId: string };
+      expect((await get(client, humanId)).body).toBe(written);
+
+      const rewritten = 'Context, rewritten.';
+      const updated = await client.callTool({
+        name: 'foreman_update',
+        arguments: { id: humanId, body: rewritten },
+      });
+      expect(updated.isError, text(updated)).toBeFalsy();
+      expect((await get(client, humanId)).body).toBe(rewritten);
+
+      const event = await db.auditEvent.findFirstOrThrow({
+        where: { entityHumanId: humanId, action: 'update' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect((event.before as { body: string }).body).toBe(written);
+      expect((event.after as { body: string }).body).toBe(rewritten);
+
+      // A blank body is no body.
+      await client.callTool({ name: 'foreman_update', arguments: { id: humanId, body: '  ' } });
+      expect((await get(client, humanId)).body).toBeNull();
+    });
+
+    it('is found by search', async () => {
+      const client = await connect(writeToken);
+      await client.callTool({
+        name: 'foreman_create',
+        arguments: { project: CODE, kind: 'task', text: 'Searchable', body: 'mentions a quokka' },
+      });
+      const result = await client.callTool({
+        name: 'foreman_search',
+        arguments: { q: 'quokka', project: CODE, types: ['task'] },
+      });
+      expect(text(result)).toMatch(/Searchable/);
+    });
+  });
+
+  describe('a field a kind does not store is refused, never dropped (FRM-T-017)', () => {
+    it('refuses a body on a requirement, by name, and creates nothing', async () => {
+      const client = await connect(writeToken);
+      const result = await client.callTool({
+        name: 'foreman_create',
+        arguments: {
+          project: CODE,
+          kind: 'requirement',
+          text: 'Foreman shall refuse what it cannot keep.',
+          body: 'This would have been lost.',
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatch(/body/);
+      expect(
+        await db.requirement.count({
+          where: { statement: 'Foreman shall refuse what it cannot keep.' },
+        }),
+      ).toBe(0);
+    });
+
+    it('refuses a field no kind has', async () => {
+      const client = await connect(writeToken);
+      const result = await client.callTool({
+        name: 'foreman_create',
+        arguments: { project: CODE, kind: 'task', text: 'Never made', description: 'lost' },
+      });
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatch(/description/);
+      expect(await db.task.count({ where: { title: 'Never made' } })).toBe(0);
+    });
+
+    it('refuses section on anything but a project idea, and files on anything but a task', async () => {
+      const client = await connect(writeToken);
+      const section = await client.callTool({
+        name: 'foreman_update',
+        arguments: { id: taskId, text: 'A new title', section: 'risks' },
+      });
+      expect(section.isError).toBe(true);
+      expect(text(section)).toMatch(/section/);
+
+      const files = await client.callTool({
+        name: 'foreman_update',
+        arguments: { id: `${CODE}-P-1`, files: ['src/a.ts'] },
+      });
+      expect(files.isError).toBe(true);
+      expect(text(files)).toMatch(/files/);
+    });
+
+    it('renames a phase — text was sent as a title a phase does not have', async () => {
+      const client = await connect(writeToken);
+      const result = await client.callTool({
+        name: 'foreman_update',
+        arguments: { id: `${CODE}-P-1`, text: 'The renamed phase' },
+      });
+      expect(result.isError, text(result)).toBeFalsy();
+      const phase = await db.phase.findFirstOrThrow({ where: { humanId: `${CODE}-P-1` } });
+      expect(phase.name).toBe('The renamed phase');
+    });
+
+    it('refuses a status on a requirement, which has none', async () => {
+      const client = await connect(writeToken);
+      const result = await client.callTool({
+        name: 'foreman_set_status',
+        arguments: { id: `${CODE}-REQ-001`, status: 'done' },
+      });
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatch(/no status/);
+    });
+
+    it('refuses an unknown field over the REST API too, naming it', async () => {
+      const res = await post(`/projects/${CODE}/tasks`, { title: 'REST', description: 'lost' });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { fields: { path: string }[] };
+      expect(body.fields.map((f) => f.path)).toContain('description');
+      expect(await db.task.count({ where: { title: 'REST' } })).toBe(0);
     });
   });
 
