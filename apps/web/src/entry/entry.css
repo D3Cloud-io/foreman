@@ -329,3 +329,10 @@
     animation: none;
   }
 }
+
+/* FRM-REQ-219: a way round is still a control, and a thumb needs 44px of it. */
+@media (pointer: coarse) {
+  .fm-entry-link {
+    min-height: 44px;
+  }
+}

@@ -49,7 +49,7 @@ export function CoverageSummary({ code }: { code: string }) {
             label={`${String(percent)}%`}
             caption="Musts covered"
           />
-          <Grid minItemWidth="sm" className="fm-grow">
+          <Grid minItemWidth="sm" className="fm-glance">
             <StatCard
               label="Requirements"
               value={requirements.total}

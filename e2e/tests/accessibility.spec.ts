@@ -14,7 +14,9 @@ import type { NodeResult, Result } from 'axe-core';
  * list somebody reads once.
  *
  * Every screen is checked in **both themes**, because a contrast failure only exists in one of
- * them and checking the default alone is how half of them ship.
+ * them and checking the default alone is how half of them ship — and at **both widths**, 1440 and
+ * 390 (FRM-REQ-218): below the shell's 1024px line the sidebar becomes a drawer and a tab bar,
+ * cards lose their inset, and a phone is a different page as far as axe is concerned.
  */
 
 const EMAIL = process.env['E2E_EMAIL'] ?? 'dev@localhost';
@@ -42,6 +44,7 @@ const SCREENS: { name: string; path: string }[] = [
   { name: 'audits', path: '/projects/EXMP/audits' },
   { name: 'activity', path: '/projects/EXMP/activity' },
   { name: 'drift', path: '/projects/EXMP/drift' },
+  { name: 'screens', path: '/projects/EXMP/screens' },
   { name: 'findings', path: '/findings' },
   { name: 'finding detail', path: '/findings/EXMP-CR-001' },
   { name: 'search', path: '/search?q=decision' },
@@ -72,20 +75,46 @@ async function violationsOn(page: Page): Promise<string[]> {
   );
 }
 
+/** A laptop, and a phone — the two sides of the shell's 1024px line (FRM-REQ-218). */
+const WIDTHS = [
+  { name: '1440', width: 1440, height: 900 },
+  { name: '390', width: 390, height: 844 },
+] as const;
+
 for (const theme of ['light', 'dark'] as const) {
   test.describe(`axe — ${theme}`, () => {
-    for (const screen of SCREENS) {
-      test(`${screen.name} has no violations`, async ({ page }) => {
-        await page.emulateMedia({ colorScheme: theme });
-        await signIn(page);
-        await page.goto(screen.path);
-        // Let the screen's own fetches land: axe on a skeleton tests the skeleton.
-        await page.waitForLoadState('networkidle');
+    for (const width of WIDTHS) {
+      for (const screen of SCREENS) {
+        test(`${screen.name} at ${width.name} has no violations`, async ({ page }) => {
+          await page.setViewportSize({ width: width.width, height: width.height });
+          await page.emulateMedia({ colorScheme: theme });
+          await signIn(page);
+          await page.goto(screen.path);
+          // Let the screen's own fetches land: axe on a skeleton tests the skeleton.
+          await page.waitForLoadState('networkidle');
 
-        const violations = await violationsOn(page);
-        expect(violations, `${screen.name} (${theme}):\n  ${violations.join('\n  ')}`).toEqual([]);
-      });
+          const violations = await violationsOn(page);
+          expect(
+            violations,
+            `${screen.name} (${theme}, ${width.name}):\n  ${violations.join('\n  ')}`,
+          ).toEqual([]);
+        });
+      }
     }
+
+    // On a phone the sidebar is a drawer, which the sweep above never opens.
+    test('the navigation drawer at 390 has no violations', async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.emulateMedia({ colorScheme: theme });
+      await signIn(page);
+      await page.goto('/projects/EXMP/requirements');
+      await page.waitForLoadState('networkidle');
+      await page.getByRole('button', { name: 'Open navigation' }).click();
+      await page.getByRole('dialog', { name: 'Navigation' }).getByRole('link', { name: 'Screens' }).waitFor();
+
+      const violations = await violationsOn(page);
+      expect(violations, `drawer (${theme}):\n  ${violations.join('\n  ')}`).toEqual([]);
+    });
 
     // FRM-T-13.2: the front door, signed out, with its story panel showing.
     test('sign in has no violations', async ({ page }) => {

@@ -11,6 +11,7 @@ import {
   Input,
   Page,
   PageHeader,
+  Section,
   SegmentedControl,
   Skeleton,
   Stack,
@@ -363,68 +364,66 @@ function SectionCard({
   };
 
   return (
-    <Card padding="md">
-      <section aria-label={heading}>
-        <Stack gap="12">
+    // A Section, which on the recessed sheet is a card with a 16px title (D-085) — the size the
+    // hand-rolled heading this replaced was set to by hand.
+    <Section
+      title={heading}
+      actions={
+        editable && !editing ? (
+          // Ghost: seven sections each with a solid Edit button is seven buttons louder than
+          // the writing they sit beside.
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setDraft(value ?? '');
+              setEditing(true);
+            }}
+          >
+            {written ? 'Edit' : 'Write'}
+          </Button>
+        ) : undefined
+      }
+    >
+      {editing ? (
+        <Stack gap="8">
+          <p className="fm-muted">{prompt}</p>
+          <Textarea
+            aria-label={heading}
+            rows={small ? 5 : 10}
+            value={draft}
+            autoFocus
+            maxLength={20_000}
+            onKeyDown={keys}
+            onChange={(e) => { setDraft(e.target.value); }}
+          />
           <Cluster gap="8" align="center" justify="between">
-            <h2 className="fm-section__heading">{heading}</h2>
-            {editable && !editing && (
-              // Ghost: seven sections each with a solid Edit button is seven buttons louder than
-              // the writing they sit beside.
+            <span className="fm-muted">
+              Markdown, and ```mermaid``` diagrams. ⌘↵ saves, Esc cancels.
+            </span>
+            <FormActions>
               <Button
-                variant="ghost"
+                type="button"
                 onClick={() => {
                   setDraft(value ?? '');
-                  setEditing(true);
+                  setEditing(false);
                 }}
               >
-                {written ? 'Edit' : 'Write'}
+                Cancel
               </Button>
-            )}
+              <Button type="button" variant="primary" disabled={busy} onClick={commit}>
+                {busy ? 'Saving…' : 'Save'}
+              </Button>
+            </FormActions>
           </Cluster>
-
-          {editing ? (
-            <Stack gap="8">
-              <p className="fm-muted">{prompt}</p>
-              <Textarea
-                aria-label={heading}
-                rows={small ? 5 : 10}
-                value={draft}
-                autoFocus
-                maxLength={20_000}
-                onKeyDown={keys}
-                onChange={(e) => { setDraft(e.target.value); }}
-              />
-              <Cluster gap="8" align="center" justify="between">
-                <span className="fm-muted">
-                  Markdown, and ```mermaid``` diagrams. ⌘↵ saves, Esc cancels.
-                </span>
-                <FormActions>
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      setDraft(value ?? '');
-                      setEditing(false);
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button type="button" variant="primary" disabled={busy} onClick={commit}>
-                    {busy ? 'Saving…' : 'Save'}
-                  </Button>
-                </FormActions>
-              </Cluster>
-            </Stack>
-          ) : written ? (
-            <div className="fm-markdown">
-              <Markdown>{value}</Markdown>
-            </div>
-          ) : (
-            <p className="fm-section__prompt">{prompt}</p>
-          )}
         </Stack>
-      </section>
-    </Card>
+      ) : written ? (
+        <div className="fm-markdown">
+          <Markdown>{value}</Markdown>
+        </div>
+      ) : (
+        <p className="fm-section__prompt">{prompt}</p>
+      )}
+    </Section>
   );
 }
 
@@ -544,17 +543,9 @@ function Momentum({ idea }: { idea: Detail }) {
 
 function AsideCard({ title, meta, children }: { title: string; meta?: string; children: ReactNode }) {
   return (
-    <Card padding="md">
-      <section aria-label={title}>
-        <Stack gap="12">
-          <Cluster gap="8" align="center" justify="between">
-            <h2 className="fm-section__heading">{title}</h2>
-            {meta !== undefined && <span className="fm-muted">{meta}</span>}
-          </Cluster>
-          {children}
-        </Stack>
-      </section>
-    </Card>
+    <Section title={title} actions={meta === undefined ? undefined : <span className="fm-muted">{meta}</span>}>
+      {children}
+    </Section>
   );
 }
 

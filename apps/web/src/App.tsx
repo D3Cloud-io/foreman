@@ -1,47 +1,8 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import {
-  AccountMenu,
-  Alert,
-  AppShell,
-  AppShellBrand,
-  Button,
-  EmptyState,
-  MenuItem,
-  MenuSeparator,
-  SideNav,
-  SideNavGroup,
-  SideNavItem,
-  Spinner,
-  ThemeProvider,
-  ThemeSwitch,
-} from '@d3cloud/ui';
-import {
-  Activity as ActivityIcon,
-  BookText,
-  Compass,
-  CalendarRange,
-  FileStack,
-  FolderKanban,
-  GitBranch,
-  Home as HomeIcon,
-  Lightbulb,
-  ListChecks,
-  ListTodo,
-  MonitorSmartphone,
-  Radar,
-  ScrollText,
-  KeyRound,
-  Search,
-  ShieldAlert,
-  SquareStack,
-  Table2,
-  Users,
-} from 'lucide-react';
-import { ForemanMark } from './brand/ForemanMark';
+import { useCallback, useEffect, useState } from 'react';
+import { Alert, Button, EmptyState, Spinner, ThemeProvider } from '@d3cloud/ui';
+import { Shell } from './components/Shell';
 import { EntryHeading, EntryShell } from './entry/EntryShell';
 import { fetchSession, logout, type SessionState } from './lib/api';
-import { briefFor, projectCodeFor, SECTIONS } from './lib/project';
-import { useAsync } from './lib/useAsync';
 import { routeFor, useLocation } from './lib/router';
 import { SessionProvider } from './lib/session';
 import { Login } from './screens/Login';
@@ -175,161 +136,18 @@ export function App() {
   return (
     <ThemeProvider>
       <SessionProvider session={state.session}>
-      <AppShell
-        storageKey="foreman.nav"
-        brand={<AppShellBrand name="Foreman" href="/" mark={<ForemanMark decorative className="fm-brand-mark" />} />}
-        nav={
-          <SideNav>
-            {/* A fixed set of destinations that does not grow with the data. The project list
-                used to live here and would have been unusable at twenty projects — it is a screen
-                of its own now, and project ideas sit beside it because they are what becomes one. */}
-            <SideNavItem href="/" icon={<HomeIcon />} label="Dashboard" current={path === '/'} />
-            {/* A fund board has submissions, not a portfolio. The ledger's screens are still
-                reachable by URL — the data is the same shape — but leading with them would
-                describe a product nobody there is using. */}
-            {!board && (
-              <SideNavItem
-                href="/projects"
-                icon={<FolderKanban />}
-                label="Projects"
-                current={path === '/projects'}
-              />
-            )}
-            <SideNavItem
-              href="/project-ideas"
-              icon={<Lightbulb />}
-              label={board ? 'Submissions' : 'Project ideas'}
-              current={path.startsWith('/project-ideas')}
-            />
-            {!board && (
-              <SideNavItem
-                href="/guidelines"
-                icon={<Compass />}
-                label="Guidelines"
-                current={path === '/guidelines'}
-              />
-            )}
-            {board && user.role === 'admin' && (
-              <SideNavItem
-                href="/members"
-                icon={<Users />}
-                label="Members"
-                current={path === '/members'}
-              />
-            )}
-            <SideNavItem
-              href="/findings"
-              icon={<ListChecks />}
-              label="Findings"
-              current={path.startsWith('/findings')}
-            />
-            <SideNavItem
-              href="/search"
-              icon={<Search />}
-              label="Search"
-              current={path === '/search'}
-            />
-            <SideNavItem
-              href="/system"
-              icon={<ActivityIcon />}
-              label="Health"
-              current={path === '/system'}
-            />
-            <SideNavItem
-              href="/tokens"
-              icon={<KeyRound />}
-              label="API tokens"
-              current={path === '/tokens'}
-            />
-            <ProjectSections path={path} />
-          </SideNav>
-        }
-        footer={
-          <AccountMenu name={user.displayName} detail={user.email}>
-            <ThemeSwitch />
-            <MenuSeparator />
-            <MenuItem
-              tone="danger"
-              onSelect={() => {
-                void logout().finally(load);
-              }}
-            >
-              Sign out
-            </MenuItem>
-          </AccountMenu>
-        }
-      >
-        <Screen path={path} search={search} />
-      </AppShell>
+        <Shell
+          path={path}
+          user={user}
+          nav={{ board, admin: user.role === 'admin' }}
+          onSignOut={() => {
+            void logout().finally(load);
+          }}
+        >
+          <Screen path={path} search={search} />
+        </Shell>
       </SessionProvider>
     </ThemeProvider>
-  );
-}
-
-/**
- * The sections of the project you are currently in — and nothing when you are not in one.
- *
- * This replaced a list of every project, which had two problems: it grew without bound (nine
- * projects today, and the sidebar is the one surface that cannot scroll away), and it offered the
- * one destination you already had while offering nothing from inside a project. Two clicks into
- * `/projects/BND/adrs` the sidebar showed you ten other projects and no way to Bindery's phases.
- *
- * Grouped the way the tool thinks: what was planned, what was decided, and what is actually there.
- */
-const SECTION_ICONS: Record<string, ReactNode> = {
-  phases: <CalendarRange />,
-  requirements: <ListTodo />,
-  'scope-of-work': <SquareStack />,
-  register: <Table2 />,
-  documents: <FileStack />,
-  adrs: <ScrollText />,
-  risks: <ShieldAlert />,
-  glossary: <BookText />,
-  ideas: <Lightbulb />,
-  activity: <GitBranch />,
-  audits: <ListChecks />,
-  drift: <Radar />,
-  screens: <MonitorSmartphone />,
-};
-
-function ProjectSections({ path }: { path: string }) {
-  const code = projectCodeFor(path);
-  const { state } = useAsync(
-    () => (code === null ? Promise.resolve(null) : briefFor(code)),
-    [code],
-  );
-
-  if (code === null) return null;
-
-  // The code until the name arrives. A group title that appears a beat late shifts every item
-  // under it, which is worse than a title that is briefly terse.
-  const name = state.status === 'ready' && state.value !== null ? state.value.project.name : code;
-  const groups = ['Plan', 'Knowledge', 'Reality'] as const;
-
-  return (
-    <>
-      <SideNavGroup title={name}>
-        <SideNavItem
-          href={`/projects/${code}`}
-          icon={<HomeIcon />}
-          label="Overview"
-          current={path === `/projects/${code}`}
-        />
-      </SideNavGroup>
-      {groups.map((group) => (
-        <SideNavGroup key={group} title={group}>
-          {SECTIONS.filter((section) => section.group === group).map((section) => (
-            <SideNavItem
-              key={section.slug}
-              href={`/projects/${code}/${section.slug}`}
-              icon={SECTION_ICONS[section.slug]}
-              label={section.label}
-              current={path.startsWith(`/projects/${code}/${section.slug}`)}
-            />
-          ))}
-        </SideNavGroup>
-      ))}
-    </>
   );
 }
 
