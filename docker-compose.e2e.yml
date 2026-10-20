@@ -1,0 +1,13 @@
+# CI's e2e overlay, used only by the `compose` job, on top of docker-compose.dev.yml.
+#
+# D3 Auth is configured and pointing at nothing (FRM-REQ-017, FRM-T-025). Port 9 on the server's
+# own loopback refuses at once, so discovery fails fast at boot and the server starts with the
+# password path alone — `/health` says configured, not reachable. The whole e2e suite runs this way:
+# the console offers the D3 Auth link only when the provider is reachable, so every other spec sees
+# the same screens it would with no provider at all, and oidc-down.spec.ts asserts the difference.
+services:
+  server:
+    environment:
+      D3AUTH_ISSUER: http://127.0.0.1:9
+      D3AUTH_CLIENT_ID: foreman-e2e
+      D3AUTH_CLIENT_SECRET: not-a-real-secret

@@ -209,20 +209,29 @@ jobs:
           node scripts/dev-env.mjs
           # The worker too: attribution proposals are drained from the queue, so the activity
           # tests have nothing to assert on without it, and it is part of the deployed stack.
-          docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait postgres server worker
-          docker compose -f docker-compose.yml -f docker-compose.dev.yml logs server > server.log
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.e2e.yml up -d --wait postgres server worker
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.e2e.yml logs server > server.log
           # FRM-REQ-007: the dump's path is logged, and it is logged *before* the migration runs.
           grep -q 'pre-migration dump written' server.log
           awk '/pre-migration dump written/ { dumped = NR }
                /migrations applied/ { applied = NR }
                END { if (!(dumped && applied && dumped < applied)) exit 1 }' server.log
+          # FRM-REQ-017: D3 Auth is configured at a dead issuer (docker-compose.e2e.yml), and the
+          # server started anyway, with the password path alone.
+          grep -q 'D3 Auth discovery failed; the password path is unaffected' server.log
       - name: The seed exercises every entity, and runs twice
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.e2e.yml \
             exec -T -e OPERATOR_PASSWORD=ci-operator-password server \
             node dist/cli/seed-example.js
-          docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.e2e.yml \
             exec -T server node dist/cli/seed-example.js
+          # A second account for oidc-down.spec.ts, which enrols an authenticator on it. Not the
+          # operator: an enrolled account needs a code to sign in, and every other spec signs the
+          # operator in with a password alone.
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.e2e.yml \
+            exec -T -e OPERATOR_EMAIL=totp@localhost -e OPERATOR_PASSWORD=ci-totp-password \
+            server node dist/cli/seed-example.js
       # e2e last, against the stack that is already running: the exit demo is a property of the
       # deployed thing, not of a bundle a dev server happens to serve.
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
@@ -237,6 +246,8 @@ jobs:
           FOREMAN_URL: http://127.0.0.1:3200
           E2E_EMAIL: dev@localhost
           E2E_PASSWORD: ci-operator-password
+          E2E_TOTP_EMAIL: totp@localhost
+          E2E_TOTP_PASSWORD: ci-totp-password
         run: pnpm --filter e2e test
       - name: Keep the report when e2e failed
         if: failure()
@@ -247,10 +258,10 @@ jobs:
           retention-days: 7
       - name: Always show the logs when something failed
         if: failure()
-        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml logs
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.e2e.yml logs
       - name: Stop
         if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.e2e.yml down -v
 
   # The only job that publishes, and only from main once the whole gate above is green. Deploying
   # stays a deliberate pull-and-restart on the host — CI builds the artifact, it does not ship it.
