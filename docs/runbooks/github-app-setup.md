@@ -37,7 +37,7 @@ within three minutes:
 
 | Project | Linked repositories |
 |---|---|
-| `FRM` | `matdemers1/foreman` |
+| `FRM` | `D3Cloud-io/foreman` (moved from `matdemers1/foreman` on 2026-10-19, FRM-T-014; the link followed by GitHub id) |
 | `BND` | `matdemers1/bindery` |
 | `AUTH` | `matdemers1/d3-auth` |
 | `DS` | `matdemers1/d3-design-system` |

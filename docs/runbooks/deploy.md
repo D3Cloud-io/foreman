@@ -43,7 +43,7 @@ copy of the stack — it is **not** a checkout of this repo:
 
 Two deliberate differences from the compose file in this repo:
 
-- **Images, not builds.** CI publishes `ghcr.io/matdemers1/foreman/{server,worker}` tagged by long
+- **Images, not builds.** CI publishes `ghcr.io/d3cloud-io/foreman/{server,worker}` tagged by long
   SHA, from `main`, once the whole gate is green.
 - **No `${...}` interpolation anywhere.** ZimaOS parses compose files with its own loader, which
   does not read `.env`. One unresolved variable makes the whole stack fail to load, and it then
