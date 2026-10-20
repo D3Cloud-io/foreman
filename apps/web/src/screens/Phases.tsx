@@ -1,5 +1,5 @@
 import { Card, Cluster, EmptyState, Grid, Page, Section, Skeleton, Stack } from '@d3cloud/ui';
-import { foreman, type PhaseRow, type TaskRow } from '../lib/api';
+import { api, type PhaseRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { percentClosed } from '../lib/completion';
 import { ProjectHeader } from '../components/ProjectHeader';
@@ -19,6 +19,15 @@ import { phaseStatusTone, SERIES } from '../ui/tone';
  * card with a ring now, and the strip at the top is the whole project in one bar.
  */
 
+/**
+ * A phase with its task counts, as the server counted them (FRM-REQ-242). The browser counts
+ * nothing here: it used to tally one page of `/tasks`, capped at 200, so a project of 212 tasks
+ * drew its last phases as empty while the overview said 8 of 12.
+ */
+export interface PhaseWithProgress extends PhaseRow {
+  readonly tasks: { readonly done: number; readonly cancelled: number; readonly total: number };
+}
+
 interface Counted {
   readonly phase: PhaseRow;
   readonly done: number;
@@ -26,7 +35,7 @@ interface Counted {
   readonly total: number;
 }
 
-function PhaseCard({ counted, code }: { counted: Counted; code: string }) {
+export function PhaseCard({ counted, code }: { counted: Counted; code: string }) {
   const { phase, done, cancelled, total } = counted;
   const percent = percentClosed(done, cancelled, total);
 
@@ -67,21 +76,19 @@ function PhaseCard({ counted, code }: { counted: Counted; code: string }) {
 }
 
 export function Phases({ code }: { code: string }) {
-  const phases = useAsync(() => foreman.phases(code), [code]);
-  const tasks = useAsync(() => foreman.tasks(code), [code]);
+  const phases = useAsync(
+    () => api.get<{ items: PhaseWithProgress[] }>(`/api/projects/${code}/phase-progress`),
+    [code],
+  );
 
   const items = phases.state.status === 'ready' ? phases.state.value.items : [];
-  const taskItems: TaskRow[] = tasks.state.status === 'ready' ? tasks.state.value.items : [];
 
-  const counted: Counted[] = items.map((phase) => {
-    const mine = taskItems.filter((task) => task.phaseId === phase.id);
-    return {
-      phase,
-      done: mine.filter((task) => task.status === 'done').length,
-      cancelled: mine.filter((task) => task.status === 'cancelled').length,
-      total: mine.length,
-    };
-  });
+  const counted: Counted[] = items.map((phase) => ({
+    phase,
+    done: phase.tasks.done,
+    cancelled: phase.tasks.cancelled,
+    total: phase.tasks.total,
+  }));
 
   const complete = items.filter((phase) => phase.status === 'complete').length;
   const active = items.filter((phase) => phase.status === 'active').length;

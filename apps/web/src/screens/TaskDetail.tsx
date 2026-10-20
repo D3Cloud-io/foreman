@@ -68,6 +68,14 @@ function DependencyList({ edges }: { edges: DependencyEdge[] }) {
   );
 }
 
+/**
+ * What "Started" says when nothing was recorded. A done task with no start was never recorded as
+ * started — "not yet" would say it is still to come, which a finished task cannot be.
+ */
+export function startedWhenMissing(status: string): string {
+  return status === 'done' ? 'not recorded' : 'not yet';
+}
+
 export function TaskDetail({ humanId }: { humanId: string }) {
   const { state, reload } = useAsync(() => foreman.entity(humanId), [humanId]);
 
@@ -203,7 +211,9 @@ export function TaskDetail({ humanId }: { humanId: string }) {
             <DescriptionItem term="Done when">{task.doneWhen}</DescriptionItem>
           )}
           <DescriptionItem term="Started">
-            {task.startedAt === null ? 'not yet' : new Date(task.startedAt).toLocaleDateString()}
+            {task.startedAt === null
+              ? startedWhenMissing(task.status)
+              : new Date(task.startedAt).toLocaleDateString()}
           </DescriptionItem>
           <DescriptionItem term="Completed">
             {task.completedAt === null ? 'not yet' : new Date(task.completedAt).toLocaleDateString()}

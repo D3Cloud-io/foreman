@@ -368,24 +368,31 @@ export interface InboxQuery {
  * vaults, and "what is the worst thing outstanding anywhere" was not a question anybody could ask.
  */
 export async function inbox(db: Db, query: InboxQuery = {}) {
-  const findings = await db.finding.findMany({
-    where: {
-      deletedAt: null,
-      // Open by default. An inbox showing everything ever found is an archive.
-      status: query.status ?? 'open',
-      ...(query.severity === undefined ? {} : { severity: query.severity }),
-      ...(query.lens === undefined ? {} : { lenses: { has: query.lens } }),
-      project: { deletedAt: null, ...codeFilter(query.codes, query.project) },
-    },
-    include: {
-      project: { select: { code: true, name: true } },
-      audit: { select: { humanId: true, kind: true, runDate: true } },
-      locations: { orderBy: { sortOrder: 'asc' }, select: { path: true, lines: true } },
-    },
-    take: query.limit ?? 50,
-  });
+  const where = {
+    deletedAt: null,
+    // Open by default. An inbox showing everything ever found is an archive.
+    status: query.status ?? 'open',
+    ...(query.severity === undefined ? {} : { severity: query.severity }),
+    ...(query.lens === undefined ? {} : { lenses: { has: query.lens } }),
+    project: { deletedAt: null, ...codeFilter(query.codes, query.project) },
+  } as const;
 
-  return findings
+  // The count and the page share one `where`, so `total` is the size of the set the page is cut
+  // from (FRM-REQ-242), not the number of rows that survived `take`.
+  const [findings, total] = await Promise.all([
+    db.finding.findMany({
+      where,
+      include: {
+        project: { select: { code: true, name: true } },
+        audit: { select: { humanId: true, kind: true, runDate: true } },
+        locations: { orderBy: { sortOrder: 'asc' }, select: { path: true, lines: true } },
+      },
+      take: query.limit ?? 50,
+    }),
+    db.finding.count({ where }),
+  ]);
+
+  const items = findings
     .map((finding) => ({
       humanId: finding.humanId,
       project: finding.project.code,
@@ -405,4 +412,5 @@ export async function inbox(db: Db, query: InboxQuery = {}) {
         a.project.localeCompare(b.project) ||
         a.humanId.localeCompare(b.humanId),
     );
+  return { items, total };
 }

@@ -353,6 +353,33 @@ describe.skipIf(url === undefined)('findings', () => {
       const listed = await get<{ items: { severity: string }[] }>('/findings?severity=critical');
       expect(listed.items.every((f) => f.severity === 'critical')).toBe(true);
     });
+
+    it('counts the whole matching set in total, however small the page (FRM-REQ-242)', async () => {
+      await makeFinding(A, { title: 'First critical', severity: 'critical' });
+      await makeFinding(A, { title: 'Second critical', severity: 'critical' });
+      await makeFinding(B, { title: 'Third critical', severity: 'critical' });
+      await makeFinding(B, { title: 'Not a critical', severity: 'low' });
+
+      // The page is one row; the total is the set the page was cut from. The sidebar badge reads
+      // exactly this, so it must not be the number of rows returned.
+      const page = await get<{ items: unknown[]; nextCursor: null; total: number }>(
+        `/findings?severity=critical&status=open&project=${A}&limit=1`,
+      );
+      expect(page.items).toHaveLength(1);
+      expect(page.total).toBe(2);
+      expect(page.nextCursor).toBeNull();
+
+      const both = await get<{ items: unknown[]; total: number }>(
+        '/findings?severity=critical&status=open&limit=1',
+      );
+      expect(both.items).toHaveLength(1);
+      // Other tests' projects may share the database, so the floor is ours.
+      expect(both.total).toBeGreaterThanOrEqual(3);
+
+      // Unfiltered by severity, the same project still counts its whole open set.
+      const open = await get<{ total: number }>(`/findings?project=${B}&limit=1`);
+      expect(open.total).toBe(2);
+    });
   });
 
   describe('recurrence (T-6.7, FRM-REQ-121, FRM-REQ-122)', () => {
