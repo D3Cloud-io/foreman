@@ -53,7 +53,10 @@ describe.skipIf(url === undefined || !PG)('backup and drill with blobs (T-12.5)'
 
   async function run(kind: 'backup' | 'restore-drill') {
     const registry = buildRegistry({ config: config() as never });
-    await db.job.deleteMany({ where: { kind } });
+    // Both kinds, not just this one: a drill that failed on purpose is re-queued for retry, and
+    // drainOne takes the oldest queued job of any kind, so a leftover would run in this one's place
+    // and leave this job's stages unrun.
+    await db.job.deleteMany({ where: { kind: { in: ['backup', 'restore-drill'] } } });
     await enqueue(db, registry, kind, {});
     const outcome = await drainOne({ db, logger, registry, workerId: 'test' });
     const job = await db.job.findFirstOrThrow({ where: { kind }, include: { stages: true } });
