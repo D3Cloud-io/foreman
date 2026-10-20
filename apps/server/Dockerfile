@@ -41,12 +41,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && pg_dump --version | grep -q " ${POSTGRES_MAJOR}\." \
     && pg_restore --version | grep -q " ${POSTGRES_MAJOR}\."
-ENV NODE_ENV=production PORT=3200 CONSOLE_DIST=/app/public BACKUP_DIR=/backups
+ENV NODE_ENV=production PORT=3200 CONSOLE_DIST=/app/public BACKUP_DIR=/backups FOREMAN_BLOB_DIR=/blobs
 WORKDIR /app
-# Code stays root-owned so the service user cannot modify it; only /backups is writable.
+# Code stays root-owned so the service user cannot modify it; only /backups and /blobs are writable. A named
+# volume mounted where the image has no directory is created root-owned, and every upload would
+# then fail (FRM-REQ-190).
 COPY --from=build /out ./
 COPY --from=build /repo/apps/web/dist ./public
-RUN mkdir -p /backups && chown node:node /backups
+RUN mkdir -p /backups /blobs && chown node:node /backups /blobs
 USER node
 EXPOSE 3200
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=6 \

@@ -29,9 +29,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-client-${POSTGRES_MAJOR} \
     && rm -rf /var/lib/apt/lists/* \
     && pg_dump --version | grep -q " ${POSTGRES_MAJOR}\."
-ENV NODE_ENV=production BACKUP_DIR=/backups
+ENV NODE_ENV=production BACKUP_DIR=/backups FOREMAN_BLOB_DIR=/blobs
 WORKDIR /app
 COPY --from=build /out ./
-RUN mkdir -p /backups && chown node:node /backups
+RUN mkdir -p /backups /blobs && chown node:node /backups /blobs
 USER node
 CMD ["node", "dist/index.js"]
