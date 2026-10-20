@@ -23,8 +23,16 @@ import { Conflict, ConflictWith, Invalid, NotFound } from './errors.js';
  * always exactly 0..n-1, renumbered in the same transaction as every create, move, delete and undo
  * (`settleProjects`, `settleGroups`). A position is therefore an index, which is what lets an undo
  * put a project back "where it was" after others have come and gone. The migration backfilled the
- * existing projects in code order; a row written around this code (a seed) is healed by the next
- * settle, which orders by position, then code.
+ * existing projects in code order, and the two writers that insert a project row directly — the
+ * importer's upsert and the example seed — settle it with `settleInserted`. A row written past
+ * all of this (a test fixture) is healed by the next settle of its group, which orders by
+ * position, then code.
+ *
+ * **Every write that reads or changes membership or order takes `lockGroups` before its first
+ * read** — create, update, move, reorder, delete, soft delete and undo alike — and a write that
+ * snapshots a project row also locks that row, because a lifecycle rollup takes it without the
+ * group lock. Under READ COMMITTED a row read before the lock is a row another writer may have
+ * replaced, and recording it as `before` is what broke the audit chain.
  *
  * Every write here takes one transaction-scoped advisory lock first. A name's uniqueness among
  * live groups, a slug's, and "the next position in this group" are all read-then-write, and a
@@ -169,6 +177,24 @@ export async function settleProjects(
     cause: options.cause,
     before,
     after,
+  });
+}
+
+/**
+ * For the two writers that insert a project row directly rather than through `createProject` —
+ * the importer's upsert and the example seed — in a transaction of their own: the new project
+ * goes to the end of its group's order (the ungrouped, for both) and the order is made dense.
+ */
+export async function settleInserted(
+  db: Db,
+  actor: Actor,
+  projectId: string,
+  cause: string,
+): Promise<void> {
+  await db.$transaction(async (tx) => {
+    await lockGroups(tx);
+    const row = await tx.project.findUniqueOrThrow({ where: { id: projectId }, select: { groupId: true } });
+    await settleProjects(tx, actor, row.groupId, { cause, place: { ids: [projectId] } });
   });
 }
 
@@ -649,6 +675,9 @@ export async function moveProjects(
     const group = await target(tx, ref);
     const groupId = group?.id ?? null;
 
+    // The rows too, in code order so two movers can never wait on each other: a lifecycle rollup
+    // takes a project's row without the group lock, and `before` must be what it left.
+    await tx.$queryRaw`SELECT id FROM project WHERE code = ANY(${[...codes].sort()}::text[]) AND deleted_at IS NULL ORDER BY code FOR UPDATE`;
     const moving = await tx.project.findMany({ where: { code: { in: [...codes] }, deletedAt: null } });
     const unknown = codes.filter((code) => !moving.some((p) => p.code === code));
     if (unknown.length > 0) {
@@ -812,7 +841,8 @@ export async function undoReorder(db: Db, actor: Actor, event: AuditEventRow) {
 
 /**
  * What a generic undo of a group, a project or a guideline must check that the row alone cannot
- * show: the groups around it. Called inside the undo's transaction, before it writes.
+ * show: the groups around it. Called inside the undo's transaction, which took the group lock
+ * before reading anything, before it writes.
  *
  * - A group's creation undone soft-deletes it, so it is refused while it holds projects or a
  *   guideline names it — the same rule as a delete (FRM-REQ-227).
@@ -834,8 +864,8 @@ export async function guardUndo(
     after: Record<string, unknown> | null;
   },
 ): Promise<void> {
+  // The caller holds the group lock, taken before it read `current`.
   const { type, action, current, data, before, after } = input;
-  if (type === 'group' || type === 'project' || type === 'guideline') await lockGroups(tx);
 
   if (type === 'group') {
     const id = String(current['id']);

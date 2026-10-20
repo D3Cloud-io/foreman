@@ -108,6 +108,13 @@ function model(tx: TransactionClient, type: UndoableType) {
   }
 }
 
+/**
+ * The kinds whose writes read or change group membership and order: a write to one of them takes
+ * the group lock **before its first read**, so what it reads is what every other such write left.
+ * Under READ COMMITTED a row read before the lock is a row a move may already have replaced.
+ */
+const GROUPED: ReadonlySet<string> = new Set(['project', 'group', 'guideline']);
+
 /** Fields never written back by an undo: identity, and the timestamps the database owns. */
 const NOT_RESTORED = new Set(['id', 'createdAt', 'updatedAt', 'humanId', 'code', 'seq']);
 
@@ -122,16 +129,20 @@ export async function softDelete(
   humanId: string,
 ): Promise<{ id: string }> {
   return db.$transaction(async (tx) => {
+    // The lock before the read: the row this records as `before`, and the group it leaves, must be
+    // the ones no move has replaced (FRM-REQ-226).
+    if (GROUPED.has(type)) await lockGroups(tx);
     const table = model(tx, type);
+    if (type === 'project') {
+      await tx.$queryRaw`SELECT id FROM project WHERE code = ${humanId} AND deleted_at IS NULL FOR UPDATE`;
+    }
     const before = (await (table as { findFirst: (args: unknown) => Promise<unknown> }).findFirst({
-      where: { humanId, deletedAt: null },
+      // A project is named by its code; everything else here by its human ID.
+      where: type === 'project' ? { code: humanId, deletedAt: null } : { humanId, deletedAt: null },
     })) as Record<string, unknown> | null;
     if (before === null) throw new NotFound(humanId);
 
     const id = String(before['id']);
-    // A project leaving its group's order: the lock first, so the renumbering below is not racing
-    // a move (FRM-REQ-226).
-    if (type === 'project') await lockGroups(tx);
     await (table as { update: (args: unknown) => Promise<unknown> }).update({
       where: { id },
       data: { deletedAt: new Date() },
@@ -212,7 +223,24 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
   const type = event.entityType;
 
   return db.$transaction(async (tx) => {
+    // The lock before any read, so `current` — what the drift check compares, what `finishUndo`
+    // settles from, and the reversal's `before` — is what every other group write left.
+    if (GROUPED.has(type)) await lockGroups(tx);
+
+    // Claimed before anything is read or written: of two undos of the same change, exactly one
+    // gets past this line, and the other is refused rather than reversing it a second time.
+    const claimed = await tx.auditEvent.updateMany({
+      where: { id: event.id, undoneAt: null },
+      data: { undoneAt: new Date() },
+    });
+    if (claimed.count === 0) throw new Conflict('that change has already been undone');
+
     const table = model(tx, type);
+    // The row too: a lifecycle rollup locks a project's row without the group lock, and a
+    // `current` read beside one would record — and let this restore — a lifecycle it has replaced.
+    if (type === 'project') {
+      await tx.$queryRaw`SELECT id FROM project WHERE id = ${event.entityId}::uuid FOR UPDATE`;
+    }
     const current = (await (table as { findUnique: (args: unknown) => Promise<unknown> }).findUnique(
       { where: { id: event.entityId } },
     )) as Record<string, unknown> | null;
@@ -285,10 +313,10 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
     // rollup event of its own, never a silent side effect of the reversal.
     await rollupAfter(tx, actor, type, current, restored, event.entityHumanId ?? type);
 
-    // Stamped, so the same change cannot be undone twice.
+    // Claimed above; now it says which event reversed it.
     await tx.auditEvent.update({
       where: { id: event.id },
-      data: { undoneAt: new Date(), undoneByEventId: reversalId },
+      data: { undoneByEventId: reversalId },
     });
 
     return {

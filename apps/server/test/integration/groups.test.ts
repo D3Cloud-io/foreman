@@ -4,6 +4,7 @@ import { createApp } from '../../src/app.js';
 import { setPassword } from '../../src/auth/native.js';
 import { loadConfig, type Config } from '../../src/config.js';
 import { createDb, type Db } from '../../src/db.js';
+import { lockGroups, settleProjects } from '../../src/domain/groups.js';
 
 /**
  * Groups over HTTP (FRM-T-17.1; FRM-ADR-024, FRM-REQ-221 … FRM-REQ-227, FRM-REQ-235).
@@ -614,6 +615,15 @@ describe.skipIf(url === undefined)('groups', () => {
         keyOf({ groupId: final.groupId, groupPosition: final.groupPosition, updatedAt: final.updatedAt.toISOString() }),
       );
     };
+    /** The newest change to a project's own row — not a renumbering recorded beside it. */
+    const latestChange = async (projectId: string) =>
+      (
+        await db.auditEvent.findMany({
+          where: { entityType: 'project', entityId: projectId, action: 'update' },
+          orderBy: { id: 'desc' },
+          take: 5,
+        })
+      ).find((e) => (e.after as { event?: string }).event !== 'reorder')?.id ?? '';
     const snapshot = async (code: string) => {
       const row = await db.project.findUniqueOrThrow({ where: { code } });
       const seen = new Set(
@@ -632,13 +642,17 @@ describe.skipIf(url === undefined)('groups', () => {
       for (let round = 0; round < 25; round++) {
         await ok(await send('PATCH', '/api/projects/GTA', { group: g1.humanId }));
         const { id, seen, start } = await snapshot('GTA');
+        const setUp = await latestChange(id);
 
-        const [patched, moved] = await Promise.all([
+        const [patched, moved, undone] = await Promise.all([
           send('PATCH', '/api/projects/GTA', { group: g1.humanId }),
           send('POST', `/api/groups/${g2.humanId}/projects`, { projects: ['GTA'] }),
+          undo(setUp),
         ]);
         const body = await ok<{ groupId: string | null }>(patched);
         await ok(moved);
+        // The undo either reversed the set-up or was refused because the race had moved on.
+        expect([200, 409], await undone.clone().text()).toContain(undone.status);
         // What the PATCH answered is what it wrote, not what a later move made of it.
         expect(body.groupId).toBe(g1.id);
         await assertChain(id, start, seen);
@@ -653,13 +667,16 @@ describe.skipIf(url === undefined)('groups', () => {
       for (let round = 0; round < 25; round++) {
         await ok(await send('PATCH', '/api/projects/GTA', { group: g1.humanId }));
         const { id, seen, start } = await snapshot('GTA');
+        const setUp = await latestChange(id);
 
-        const [toG1, toG2, toNone, atFront] = await Promise.all([
+        const [toG1, toG2, toNone, atFront, undone] = await Promise.all([
           send('PATCH', '/api/projects/GTA', { group: g1.humanId }),
           send('POST', `/api/groups/${g2.humanId}/projects`, { projects: ['GTA'] }),
           send('PATCH', '/api/projects/GTA', { group: null }),
           send('POST', `/api/groups/${g1.humanId}/projects`, { projects: ['GTA'], position: 0 }),
+          undo(setUp),
         ]);
+        expect([200, 409], await undone.clone().text()).toContain(undone.status);
         expect((await ok<{ groupId: string | null }>(toG1)).groupId).toBe(g1.id);
         expect((await ok<{ groupId: string | null }>(toNone)).groupId).toBeNull();
         await ok(toG2);
@@ -667,6 +684,92 @@ describe.skipIf(url === undefined)('groups', () => {
         await assertChain(id, start, seen);
         await assertDense();
       }
+    });
+  });
+
+  describe('an undo is serialised with every other group write (FRM-REQ-225)', () => {
+    const someone = { actor: 'concurrent writer', actorKind: 'user' as const };
+
+    /**
+     * Hold the group lock in a transaction of our own, start `op` so it parks on the lock, change
+     * things inside the holder, then let go. Whatever `op` read before it parked would be stale.
+     */
+    const whileHeld = async (op: () => Promise<Response>, mutate: (tx: Parameters<Parameters<Db['$transaction']>[0]>[0]) => Promise<void>) => {
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let ready = () => {};
+      const held = new Promise<void>((resolve) => { ready = resolve; });
+      const holder = db.$transaction(
+        async (tx) => {
+          await lockGroups(tx);
+          ready();
+          await gate;
+          await mutate(tx);
+        },
+        { timeout: 30_000 },
+      );
+      await held;
+      const pending = op();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      release();
+      await holder;
+      return pending;
+    };
+    const moveInside = (code: string, from: string | null, to: string | null) =>
+      async (tx: Parameters<Parameters<Db['$transaction']>[0]>[0]) => {
+        const project = await tx.project.findFirstOrThrow({ where: { code } });
+        await tx.project.update({ where: { id: project.id }, data: { groupId: to } });
+        await settleProjects(tx, someone, to, { cause: 'test move', place: { ids: [project.id], index: 0 } });
+        await settleProjects(tx, someone, from, { cause: 'test move' });
+      };
+
+    it("an undone creation settles the group the project is in by then, not the one it was read in", async () => {
+      const one = await create({ name: `${PREFIX}Held one` });
+      const two = await create({ name: `${PREFIX}Held two` });
+      await ok(await send('POST', `/api/groups/${one.humanId}/projects`, { projects: ['GTA', 'GTB', 'GTC'] }));
+      await ok(await send('POST', `/api/groups/${two.humanId}/projects`, { projects: ['GTD'] }));
+      const gtb = await db.project.findUniqueOrThrow({ where: { code: 'GTB' } });
+      const creation = await db.auditEvent.findFirstOrThrow({
+        where: { entityType: 'project', entityId: gtb.id, action: 'create' },
+      });
+
+      const res = await whileHeld(() => undo(creation.id), moveInside('GTB', one.id, two.id));
+      expect([200, 409]).toContain(res.status);
+      await assertDense();
+      if (res.status === 200) {
+        expect((await db.project.findUniqueOrThrow({ where: { code: 'GTB' } })).deletedAt).not.toBeNull();
+        expect(await positionsIn(two.id)).toEqual({ GTD: 0 });
+      }
+    });
+
+    it('an undo of an old move is refused once a later move has replaced it, and the later move stands', async () => {
+      const one = await create({ name: `${PREFIX}Old one` });
+      const two = await create({ name: `${PREFIX}Old two` });
+      const three = await create({ name: `${PREFIX}Old three` });
+      await ok(await send('POST', `/api/groups/${one.humanId}/projects`, { projects: ['GTA', 'GTB'] }));
+      const moved = await ok<Listing>(await send('POST', `/api/groups/${two.humanId}/projects`, { projects: ['GTA'] }));
+
+      const res = await whileHeld(() => undo(moved.auditEventIds?.[0] ?? ''), moveInside('GTA', two.id, three.id));
+      expect(res.status, await res.clone().text()).toBe(409);
+      expect((await db.project.findUniqueOrThrow({ where: { code: 'GTA' } })).groupId).toBe(three.id);
+      const original = await db.auditEvent.findUniqueOrThrow({ where: { id: moved.auditEventIds?.[0] ?? '' } });
+      // Refused, so not claimed: it can still be undone if the state comes back.
+      expect(original.undoneAt).toBeNull();
+    });
+
+    it('of two simultaneous undos of the same move, exactly one succeeds', async () => {
+      const group = await create({ name: `${PREFIX}Twice` });
+      const moved = await ok<Listing>(await send('POST', `/api/groups/${group.humanId}/projects`, { projects: ['GTA'] }));
+      const eventId = moved.auditEventIds?.[0] ?? '';
+      const project = await db.project.findUniqueOrThrow({ where: { code: 'GTA' } });
+
+      const statuses = (await Promise.all([undo(eventId), undo(eventId), undo(eventId)])).map((r) => r.status);
+      expect(statuses.sort()).toEqual([200, 409, 409]);
+      const reversals = await db.auditEvent.count({
+        where: { entityType: 'project', entityId: project.id, action: 'undo' },
+      });
+      expect(reversals).toBe(1);
+      expect((await db.project.findUniqueOrThrow({ where: { code: 'GTA' } })).groupId).toBeNull();
     });
   });
 

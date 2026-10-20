@@ -174,6 +174,8 @@ export async function updateGuideline(
   input: GuidelineUpdate,
 ) {
   return db.$transaction(async (tx) => {
+    // The lock before the read: its groups are what a concurrent scope change or group delete left.
+    await lockGroups(tx);
     const found = await readOne(tx, { humanId });
     if (found === null) throw new NotFound(humanId);
     const before = view(found);

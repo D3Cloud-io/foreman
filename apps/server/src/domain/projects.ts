@@ -88,6 +88,8 @@ export async function updateProject(db: Db, actor: Actor, code: string, input: P
     // the row read here is the real prior state: both the move decision and the event's `before`
     // come from it, never from a read made before some other move committed.
     await lockGroups(tx);
+    // And the row: a lifecycle rollup takes it without the group lock (`rollupProject`).
+    await tx.$queryRaw`SELECT id FROM project WHERE code = ${code} AND deleted_at IS NULL FOR UPDATE`;
     const before = await tx.project.findFirst({ where: { code, deletedAt: null } });
     if (before === null) throw new NotFound(`project ${code}`);
 
