@@ -1,0 +1,196 @@
+/* The scope switcher (FRM-T-17.4, board 17.03): the sidebar's button and Menu, the phone top
+   bar's chip and its bottom sheet, and the "Viewing Dormice · Show all" line a scoped page shows.
+   Tokens only (d3-check-usage); the accent dot is `.fm-accent` from styles.css, and it is never
+   drawn without the group's name beside it. */
+
+/* ─── Sidebar ─────────────────────────────────────────────────────────── */
+
+.fm-scope {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.fm-scope__caption {
+  padding: 0 var(--space-8);
+  font-size: var(--text-11);
+  font-weight: var(--weight-semibold);
+  color: var(--color-fg-muted);
+}
+
+.fm-scope__button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0 var(--space-12);
+  border: var(--border-width) solid var(--color-border-field);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--text-13);
+  font-weight: var(--weight-semibold);
+  text-align: left;
+  cursor: pointer;
+}
+.fm-scope__button:hover {
+  background: var(--color-surface-hover);
+}
+.fm-scope__button:focus-visible,
+.fm-scope-chip:focus-visible,
+.fm-scope-sheet__row:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
+}
+
+.fm-scope__label {
+  flex: 1;
+  min-width: 0;
+}
+
+.fm-scope__count {
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-scope__chevron {
+  color: var(--color-fg-muted);
+}
+
+.fm-scope__menu {
+  min-width: 15rem;
+}
+
+/* One row of the Menu or the sheet: tick, dot, name, count. */
+.fm-scope__item {
+  min-width: 0;
+}
+.fm-scope__tick {
+  display: inline-flex;
+  justify-content: center;
+  width: 0.875rem;
+  flex: none;
+  color: var(--color-accent);
+}
+.fm-scope__dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.875rem;
+  flex: none;
+  color: var(--color-fg-muted);
+}
+.fm-scope__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Phone ───────────────────────────────────────────────────────────── */
+
+.fm-scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  max-width: 11rem;
+  min-height: 2rem;
+  padding: 0 var(--space-12);
+  border: var(--border-width) solid var(--color-border-field);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-raised);
+  color: var(--color-fg);
+  font: inherit;
+  font-size: var(--text-13);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+.fm-scope-chip__name {
+  min-width: 0;
+}
+
+.fm-scope-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fm-scope-sheet__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  min-height: 44px;
+  padding: 0 var(--space-12);
+  border-radius: var(--radius-md);
+  color: var(--color-fg);
+  font-size: var(--text-14);
+  text-decoration: none;
+}
+.fm-scope-sheet__row:hover {
+  background: var(--color-surface-hover);
+}
+.fm-scope-sheet__row--on {
+  background: var(--color-accent-muted);
+  font-weight: var(--weight-semibold);
+}
+
+.fm-scope-sheet__sep {
+  height: var(--border-width);
+  margin: var(--space-6) 0;
+  background: var(--color-border);
+}
+
+/* Targets a thumb can hit (44 × 44 under a coarse pointer). */
+@media (pointer: coarse) {
+  .fm-scope__button,
+  .fm-scope-chip,
+  .fm-scope-sheet__row {
+    min-height: 44px;
+  }
+}
+
+/* ─── "Viewing Dormice · Show all" ────────────────────────────────────── */
+
+.fm-scope-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-6);
+  font-size: var(--text-13);
+  color: var(--color-fg-muted);
+}
+.fm-scope-notice strong {
+  color: var(--color-fg);
+  font-weight: var(--weight-semibold);
+}
+
+/* Home, scoped: what the scope is leaving out, and the way back. */
+.fm-scope-hidden {
+  padding: var(--space-12) var(--space-16);
+  border: var(--border-width) dashed var(--color-border-field);
+  border-radius: var(--radius-md);
+  font-size: var(--text-13);
+  color: var(--color-fg-muted);
+}
+
+/* The switcher on a scoped page, until the shell has a place for it (FRM-T-16.4). */
+.fm-scope-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-12);
+}
+.fm-scope-bar .fm-scope {
+  width: 16rem;
+  max-width: 100%;
+}

@@ -323,8 +323,10 @@ test.describe('groups', () => {
   });
 
   test('Projects says so when no project is ungrouped', async ({ page }) => {
-    // The shared database always holds an ungrouped project, so the answer is narrowed here.
-    await page.route('**/api/portfolio', async (route) => {
+    // The shared database always holds an ungrouped project, so the answer is narrowed here. The
+    // group filter is the scope since FRM-T-17.4, read by the server as `?group=ungrouped`, so the
+    // narrowed read is matched with its query too.
+    await page.route(/\/api\/portfolio(\?.*)?$/, async (route) => {
       const response = await route.fetch();
       const body = (await response.json()) as { ungrouped: { projects: unknown[] } | null };
       if (body.ungrouped !== null) body.ungrouped.projects = [];
@@ -333,6 +335,7 @@ test.describe('groups', () => {
     await page.goto('/projects');
     await page.getByRole('combobox', { name: 'Group' }).click();
     await page.getByRole('option', { name: 'Ungrouped' }).click();
+    await expect(page).toHaveURL(/\/projects\?group=ungrouped$/);
     await expect(page.getByRole('heading', { name: 'No project is ungrouped' })).toBeVisible();
     await expect(page.getByText(/No project has\s+in its code or name/)).toHaveCount(0);
   });

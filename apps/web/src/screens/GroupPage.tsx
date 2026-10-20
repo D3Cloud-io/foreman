@@ -186,6 +186,8 @@ export function GroupPage({ slug }: { slug: string }) {
           <PortfolioStats
             rows={rows}
             projectsDetail={rows.length === 0 ? 'None yet' : rows.map((row) => row.code).join(', ')}
+            // Its criticals and drift open scoped to this group (FRM-T-17.4).
+            scope={detail.slug}
           />
         )}
 

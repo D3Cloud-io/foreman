@@ -839,6 +839,14 @@ export interface Drift {
   items: DriftItem[];
 }
 
+/** `GET /api/drift`: each project's drift, in Home's order, and the sum (FRM-T-17.4). */
+export interface DriftAcross {
+  items: (Drift & { name: string })[];
+  nextCursor: null;
+  total: number;
+  drift: { total: number; counts: Record<DriftItem['category'], number> };
+}
+
 export interface TechRow {
   name: string;
   category: string;
@@ -871,7 +879,11 @@ interface Page<T> {
 }
 
 export const foreman = {
-  portfolio: () => api.get<PortfolioResponse>('/api/portfolio'),
+  /** Narrowed to a scope — a group's slug or `GRP-n`, or `ungrouped` — when one is given (FRM-T-17.4). */
+  portfolio: (group: string | null = null) =>
+    api.get<PortfolioResponse>(
+      group === null ? '/api/portfolio' : `/api/portfolio?${new URLSearchParams({ group }).toString()}`,
+    ),
   project: (code: string) => api.get<ProjectDetail>(`/api/projects/${code}`),
   phases: (code: string) => api.get<Page<PhaseRow>>(`/api/projects/${code}/phases`),
   tasks: (code: string, phaseHumanId?: string) =>
@@ -1012,10 +1024,11 @@ export const foreman = {
     api.patch<unknown>(`/api/projects/${code}`, { group }),
   /** Reverses one audited mutation (409 when the state has moved on since). */
   undo: (auditEventId: string) => api.post<unknown>(`/api/undo/${auditEventId}`),
-  search: (q: string, types: string[], project: string | null) => {
+  search: (q: string, types: string[], project: string | null, group: string | null = null) => {
     const query = new URLSearchParams({ q, limit: '50' });
     if (types.length > 0) query.set('types', types.join(','));
     if (project !== null) query.set('project', project);
+    if (group !== null) query.set('group', group);
     return api.get<Page<SearchHit>>(`/api/search?${query.toString()}`);
   },
   commits: (code: string, attributed: 'none' | 'proposed' | 'confirmed' | 'any' = 'any') =>
@@ -1042,7 +1055,9 @@ export const foreman = {
   /** Where you are signed in: browsers, and D3 Constellation on each device (FRM-T-14.4). */
   sessions: () => api.get<SignedInSession[]>('/auth/sessions'),
   endSession: (id: string) => api.post<undefined>(`/auth/sessions/${encodeURIComponent(id)}/revoke`),
-  findings: (params: { project?: string; severity?: string; status?: string; lens?: string } = {}) => {
+  findings: (
+    params: { project?: string; group?: string; severity?: string; status?: string; lens?: string } = {},
+  ) => {
     const query = new URLSearchParams({ limit: '200' });
     // `exactOptionalPropertyTypes` means an absent key is absent, not undefined — so the only
     // value worth skipping is the empty string the "any" option sends.
@@ -1068,6 +1083,9 @@ export const foreman = {
     api.get<RecurrenceResult>(`/api/findings/${humanId}/recurrences`),
   regressionWatch: () => api.get<Page<RegressionFlag>>('/api/regression-watch'),
   drift: (code: string) => api.get<Drift>(`/api/projects/${code}/drift`),
+  /** Drift across projects, by group order, narrowed to a scope when one is given (FRM-T-17.4). */
+  driftAcross: (group: string | null = null) =>
+    api.get<DriftAcross>(group === null ? '/api/drift' : `/api/drift?${new URLSearchParams({ group }).toString()}`),
   tech: () => api.get<{ items: TechRow[]; disagreements: TechRow[] }>('/api/tech'),
   healthReport: () => api.get<HealthReport>('/api/health-report'),
   brief: (code: string) => api.get<Brief>(`/api/brief/${code}`),

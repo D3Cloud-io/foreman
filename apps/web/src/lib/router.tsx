@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { carryScope, SCOPE_EXPLICIT_ATTR } from './scope';
 
 /**
  * A small router.
@@ -33,14 +34,18 @@ export function useLocation(): Location {
       const anchor = (event.target as HTMLElement | null)?.closest('a');
       if (anchor === null || anchor === undefined) return;
 
-      // Named `to`, not `href`: the state above is also called that, and a shadow here would be
-      // a line that reads correctly and means something else.
-      const to = anchor.getAttribute('href');
-      if (to === null || !to.startsWith('/')) return;
+      // Named `written` and `to`, not `href`: the state above is also called that, and a shadow
+      // here would be a line that reads correctly and means something else.
+      const written = anchor.getAttribute('href');
+      if (written === null || !written.startsWith('/')) return;
       if (anchor.target === '_blank' || anchor.hasAttribute('download')) return;
       // The server owns these, and they are real navigations — `/auth/oidc/start` redirects to the
       // identity provider. Intercepting one turns the D3 Auth button into a link that does nothing.
-      if (SERVER_PATHS.some((prefix) => to === prefix || to.startsWith(`${prefix}/`))) return;
+      if (SERVER_PATHS.some((prefix) => written === prefix || written.startsWith(`${prefix}/`))) return;
+
+      // A link to a scoped page keeps the scope in view unless it names its own (FRM-T-17.4), so
+      // the shell's destinations — Home, Findings, Search — stay in Dormice once you are there.
+      const to = anchor.hasAttribute(SCOPE_EXPLICIT_ATTR) ? written : carryScope(written, window.location.pathname, window.location.search);
 
       event.preventDefault();
       window.history.pushState({}, '', to);
@@ -104,6 +109,7 @@ export interface Route {
     | 'findings'
     | 'finding'
     | 'drift'
+    | 'drift-across'
     | 'screens'
     | 'screen'
     | 'health'
@@ -178,6 +184,8 @@ export function routeFor(path: string): Route {
   }
 
   if (parts[0] === 'search' && parts[1] === undefined) return { screen: 'search' };
+  // Drift across projects, narrowed by `?group=` (FRM-T-17.4); a project's own is under it.
+  if (parts[0] === 'drift' && parts[1] === undefined) return { screen: 'drift-across' };
   // `/system`, not `/health`: the server owns `/health` as its deploy probe and answers it with
   // JSON before the SPA ever sees the request. Two meanings of one path is a screen that renders
   // as a blob of JSON, which is how this was found.

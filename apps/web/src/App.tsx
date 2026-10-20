@@ -19,6 +19,7 @@ import { Adrs } from './screens/Adrs';
 import { AuditIndex } from './screens/AuditIndex';
 import { DocumentEditor } from './screens/DocumentEditor';
 import { Documents } from './screens/Documents';
+import { DriftAcross } from './screens/DriftAcross';
 import { DriftView } from './screens/DriftView';
 import { FindingDetail } from './screens/FindingDetail';
 import { Findings } from './screens/Findings';
@@ -161,10 +162,12 @@ function Screen({ path, search }: { path: string; search: string }) {
   const route = routeFor(path);
 
   switch (route.screen) {
+    // The scoped screens (FRM-T-17.4) are keyed by the query, so following a link into another
+    // scope re-reads it rather than keeping the last one's data.
     case 'dashboard':
-      return <Home />;
+      return <Home key={search} search={search} />;
     case 'projects':
-      return <Projects />;
+      return <Projects key={search} search={search} />;
     case 'project-ideas':
       return <ProjectIdeas />;
     case 'project-idea':
@@ -218,6 +221,8 @@ function Screen({ path, search }: { path: string; search: string }) {
       return <FindingDetail humanId={route.humanId ?? ''} />;
     case 'drift':
       return <DriftView code={route.code ?? ''} />;
+    case 'drift-across':
+      return <DriftAcross key={search} search={search} />;
     case 'screens':
       return <Screens code={route.code ?? ''} />;
     case 'screen':

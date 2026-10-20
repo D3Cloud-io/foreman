@@ -23,7 +23,7 @@ import { SERIES } from '../ui/tone';
  * usual accident when "no results" is written once for every table in an app.
  */
 
-const CATEGORIES: {
+export const CATEGORIES: {
   key: DriftItem['category'];
   label: string;
   blurb: string;

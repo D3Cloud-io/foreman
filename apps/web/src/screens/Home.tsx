@@ -6,13 +6,16 @@ import {
   EmptyState,
   Grid,
   IconButton,
+  Link,
   Page,
   PageHeader,
   Skeleton,
   Stack,
 } from '@d3cloud/ui';
 import { ArrowUpRight, ChevronDown, ChevronRight, UsersRound } from 'lucide-react';
+import { ScopeBar, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
 import { foreman, type PortfolioRow } from '../lib/api';
+import { scopedHref, scopeOf } from '../lib/scope';
 import { useAsync } from '../lib/useAsync';
 import {
   descriptionsOf,
@@ -95,8 +98,19 @@ export function ProjectTile({ row }: { row: PortfolioRow }) {
   );
 }
 
-/** The four figures, for whatever rows are in view. */
-export function PortfolioStats({ rows, projectsDetail }: { rows: readonly PortfolioRow[]; projectsDetail: string }) {
+/**
+ * The four figures, for whatever rows are in view. `scope` is the one in the URL: the figures'
+ * links keep it, so Open criticals in Dormice opens Dormice's findings.
+ */
+export function PortfolioStats({
+  rows,
+  projectsDetail,
+  scope = null,
+}: {
+  rows: readonly PortfolioRow[];
+  projectsDetail: string;
+  scope?: string | null;
+}) {
   const building = rows.filter((row) => row.lifecycle === 'building');
   const criticals = rows.reduce((sum, row) => sum + row.openCriticals, 0);
   const drift = rows.reduce((sum, row) => sum + row.drift.total, 0);
@@ -115,13 +129,14 @@ export function PortfolioStats({ rows, projectsDetail }: { rows: readonly Portfo
         value={criticals}
         tone={criticals === 0 ? 'success' : 'danger'}
         detail={criticals === 0 ? 'Nothing on fire' : 'Across these projects'}
-        href="/findings"
+        href={scopedHref('/findings', scope)}
       />
       <StatCard
         label="Drift"
         value={drift}
         tone={drift === 0 ? 'neutral' : 'warning'}
         detail="Plan and reality apart"
+        href={scopedHref('/drift', scope)}
       />
     </Grid>
   );
@@ -227,8 +242,31 @@ function groupsDetail(n: number, ungrouped: number): string {
   return `${count} · ${String(ungrouped)} ungrouped`;
 }
 
-export function Home() {
-  const portfolio = useAsync(() => foreman.portfolio(), []);
+/**
+ * Scoped, what the scope leaves out — "Hidden by scope: D3 Cloud 11 · Ungrouped 1" — and the way
+ * back to all of it (D-06). Said, because a Home with two projects on it otherwise reads as a
+ * Foreman that tracks two projects.
+ */
+function HiddenByScope({ shown }: { shown: ReadonlySet<string> }) {
+  const { options, hrefFor } = useScopeView();
+  const hidden = options.filter((option) => option.value !== null && option.count > 0 && !shown.has(option.key));
+  if (hidden.length === 0) return null;
+  return (
+    <p className="fm-scope-hidden">
+      Hidden by scope: {hidden.map((option) => `${option.name} ${String(option.count)}`).join(' · ')}.{' '}
+      <Link variant="inline" href={hrefFor(null)} data-fm-scope="">
+        Show all
+      </Link>
+    </p>
+  );
+}
+
+export function Home({ search }: { search: string }) {
+  // The scope is the URL's (FRM-T-17.4): `/?group=dormice` is Home for Dormice, and a link to it
+  // opens there. App keys this screen by the query, so a new scope is a fresh read.
+  const scope = scopeOf(search);
+  const { phrase } = useScopeView();
+  const portfolio = useAsync(() => foreman.portfolio(scope), [scope]);
   const groups = useAsync(() => foreman.groups(), []);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [introDismissed, setIntroDismissed] = useState(readIntroDismissed);
@@ -240,6 +278,16 @@ export function Home() {
       <Page>
         {header('Where everything stands.')}
         <Skeleton lines={8} />
+      </Page>
+    );
+  }
+
+  if (portfolio.state.status === 'error' && portfolio.state.notFound && scope !== null) {
+    return (
+      <Page>
+        {header('Where everything stands.')}
+        <ScopeBar />
+        <UnknownScope scope={scope} />
       </Page>
     );
   }
@@ -268,11 +316,36 @@ export function Home() {
     setCollapsed((current) => ({ ...current, [key]: next }));
   };
 
+  if (scope !== null) {
+    // Scoped (17.02): only that family's section — or the ungrouped — and the figures for it.
+    const sections = portfolioSections(grouped, descriptionsOf(listing));
+    const shown = new Set(sections.map((section) => section.key));
+    return (
+      <Page>
+        {header(`${plural(rows.length, 'project', 'projects')} in ${phrase}, and what needs looking at.`)}
+        <Stack gap="32">
+          <ScopeBar />
+          <PortfolioStats rows={rows} projectsDetail={`In ${phrase}`} scope={scope} />
+          {sections.map((section) => (
+            <GroupSection
+              key={section.key}
+              section={section}
+              collapsed={isCollapsed(section.key)}
+              onToggle={() => { toggle(section.key); }}
+            />
+          ))}
+          <HiddenByScope shown={shown} />
+        </Stack>
+      </Page>
+    );
+  }
+
   if (grouped.groups.length === 0) {
     return (
       <Page>
         {header(`${plural(rows.length, 'project', 'projects')}, and what needs looking at.`)}
         <Stack gap="24">
+          <ScopeBar />
           {!introDismissed && (
             <FirstRun
               onDismiss={() => {
@@ -314,6 +387,7 @@ export function Home() {
         }, and what needs looking at.`,
       )}
       <Stack gap="32">
+        <ScopeBar />
         <PortfolioStats rows={rows} projectsDetail={groupsDetail(n, grouped.ungrouped?.projects.length ?? 0)} />
         {sections.map((section) => (
           <GroupSection

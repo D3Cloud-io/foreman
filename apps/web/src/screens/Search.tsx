@@ -13,7 +13,9 @@ import {
   Skeleton,
   Stack,
 } from '@d3cloud/ui';
+import { ScopeBar, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
 import { foreman, type SearchHit } from '../lib/api';
+import { scopeOf, withScope } from '../lib/scope';
 import { useAsync } from '../lib/useAsync';
 
 /**
@@ -64,32 +66,42 @@ export function Search({ search }: { search: string }) {
   const [draft, setDraft] = useState(initial.get('q') ?? '');
   const [query, setQuery] = useState(initial.get('q') ?? '');
   const [type, setType] = useState(initial.get('type') ?? ANY);
+  // Narrowed to a group when the URL names one (FRM-T-17.4). Keyed by the query, so a new scope
+  // remounts the screen with its search intact.
+  const scope = scopeOf(search);
+  const { phrase } = useScopeView();
 
   // The URL carries the search, so a result set is a link somebody can keep.
   useEffect(() => {
     const next = new URLSearchParams();
     if (query !== '') next.set('q', query);
     if (type !== ANY) next.set('type', type);
-    const url = `/search${next.size === 0 ? '' : `?${next.toString()}`}`;
+    // The scope rides along: rewriting the URL for a new search must not drop it.
+    const url = withScope(`/search${next.size === 0 ? '' : `?${next.toString()}`}`, scope);
     if (url !== window.location.pathname + window.location.search) {
       window.history.replaceState({}, '', url);
     }
-  }, [query, type]);
+  }, [query, type, scope]);
 
   const results = useAsync(
     () =>
       query.trim() === ''
         ? Promise.resolve({ items: [], nextCursor: null, total: 0 })
-        : foreman.search(query.trim(), type === ANY ? [] : [type], null),
-    [query, type],
+        : foreman.search(query.trim(), type === ANY ? [] : [type], null, scope),
+    [query, type, scope],
   );
 
   return (
     <Page>
       <PageHeader
         title="Search"
-        description="Across every project — which is the question the vault could never answer."
+        description={
+          scope === null
+            ? 'Across every project — which is the question the vault could never answer.'
+            : `Across ${phrase} — by kind, an exact ID first.`
+        }
       />
+      <ScopeBar />
 
       <form
         onSubmit={(event) => {
@@ -119,18 +131,20 @@ export function Search({ search }: { search: string }) {
       </form>
 
       {query.trim() === '' ? (
-        <EmptyState kind="empty" heading="Search across the whole portfolio">
+        <EmptyState kind="empty" heading={scope === null ? 'Search across the whole portfolio' : `Search across ${phrase}`}>
           An exact human ID — <code>BND-ADR-004</code> — resolves to that entity first.
         </EmptyState>
       ) : results.state.status === 'loading' ? (
         <Skeleton lines={8} />
+      ) : results.state.status === 'error' && results.state.notFound && scope !== null ? (
+        <UnknownScope scope={scope} />
       ) : results.state.status === 'error' ? (
         <EmptyState kind="error" heading="That search did not run">
           {results.state.message}
         </EmptyState>
       ) : results.state.value.items.length === 0 ? (
         <EmptyState kind="no-results" heading={`Nothing matches “${query}”`}>
-          Try a shorter word, or widen the kind.
+          {scope === null ? 'Try a shorter word, or widen the kind.' : 'Try a shorter word, widen the kind, or show every project.'}
         </EmptyState>
       ) : (
         /* Named: a page holds several lists, and "the first list" is the navigation. */

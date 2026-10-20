@@ -13,7 +13,9 @@ import {
   Stack,
 } from '@d3cloud/ui';
 import { Check, Minus } from 'lucide-react';
+import { ScopeBar, UnknownScope } from '../components/ScopeSwitcher';
 import { foreman, type PortfolioRow } from '../lib/api';
+import { matchScope, scopeOf, scopeOptions, UNGROUPED as UNGROUPED_SCOPE, useScope } from '../lib/scope';
 import { useAsync } from '../lib/useAsync';
 import { descriptionsOf, portfolioSections, sectionSummary } from '../lib/groups';
 import { AccentDot, MoveToGroupDialog, useMoveToast } from '../ui/groups';
@@ -36,8 +38,8 @@ import { ciTone, lifecycleTone } from '../ui/tone';
  * Table has no row groups, and a table per group would repeat its header row once a family.
  */
 
+/** The Select's value for every project. Never sent: an unscoped read names no group. */
 const ALL = 'all';
-const UNGROUPED = 'ungrouped';
 
 function phaseLabel(row: PortfolioRow): string {
   if (row.phase !== null) return `P-${row.phase.number} · ${row.phase.name}`;
@@ -52,11 +54,14 @@ function ciLabel(row: PortfolioRow): string {
   return `CI ${row.ci.conclusion ?? 'pending'}`;
 }
 
-export function Projects() {
-  const portfolio = useAsync(() => foreman.portfolio(), []);
+export function Projects({ search }: { search: string }) {
+  // The group filter is the scope (FRM-T-17.4): `?group=` in the URL, read by the server, so
+  // Projects narrowed to Dormice is the same set as Home and Findings narrowed to it.
+  const scope = scopeOf(search);
+  const { setScope } = useScope();
+  const portfolio = useAsync(() => foreman.portfolio(scope), [scope]);
   const groups = useAsync(() => foreman.groups(), []);
   const [query, setQuery] = useState('');
-  const [groupFilter, setGroupFilter] = useState(ALL);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [moving, setMoving] = useState(false);
 
@@ -76,6 +81,16 @@ export function Projects() {
       {...(ready ? { count: rows.length, countNoun: { one: 'project', other: 'projects' } } : {})}
     />
   );
+
+  if (portfolio.state.status === 'error' && portfolio.state.notFound && scope !== null) {
+    return (
+      <Page>
+        {header}
+        <ScopeBar />
+        <UnknownScope scope={scope} />
+      </Page>
+    );
+  }
 
   if (portfolio.state.status === 'error' || groups.state.status === 'error') {
     const message =
@@ -107,10 +122,8 @@ export function Projects() {
   const needle = query.trim().toLowerCase();
   const matches = (row: PortfolioRow) =>
     needle === '' || row.code.toLowerCase().includes(needle) || row.name.toLowerCase().includes(needle);
+  // The server has already narrowed the sections to the scope.
   const sections = portfolioSections(portfolio.state.value, descriptionsOf(listing))
-    .filter((section) =>
-      groupFilter === ALL ? true : groupFilter === UNGROUPED ? section.group === null : section.group?.humanId === groupFilter,
-    )
     .map((section) => ({ ...section, shown: section.rows.filter(matches) }))
     // With a filter typed, a family with nothing matching is noise; without one it is a family.
     .filter((section) => needle === '' ? section.group !== null || section.rows.length > 0 : section.shown.length > 0);
@@ -129,16 +142,19 @@ export function Projects() {
     });
   };
 
-  const groupOptions = [
-    { value: ALL, label: 'All groups' },
-    ...listing.items.map((group) => ({ value: group.humanId, label: group.name })),
-    { value: UNGROUPED, label: 'Ungrouped' },
-  ];
+  const scopes = scopeOptions(listing);
+  const groupOptions = scopes.map((option) => ({
+    value: option.value ?? ALL,
+    label: option.value === null ? 'All groups' : option.name,
+  }));
+  const groupFilter = matchScope(scope, scopes)?.value ?? ALL;
+  const onlyUngrouped = scope?.toLowerCase() === UNGROUPED_SCOPE;
 
   return (
     <Page>
       {header}
       <Stack gap="16">
+        <ScopeBar />
         <Cluster gap="12" align="center" justify="between">
           <Cluster gap="12" align="center" className="fm-filters">
             <SearchField
@@ -147,7 +163,12 @@ export function Projects() {
               value={query}
               onChange={(event) => { setQuery(event.target.value); }}
             />
-            <Select aria-label="Group" options={groupOptions} value={groupFilter} onValueChange={setGroupFilter} />
+            <Select
+              aria-label="Group"
+              options={groupOptions}
+              value={groupFilter}
+              onValueChange={(next) => { setScope(next === ALL ? null : next); }}
+            />
           </Cluster>
           <span className="fm-muted">
             Grouped in the order set in <Link variant="inline" href="/groups">Settings → Groups</Link>
@@ -173,17 +194,17 @@ export function Projects() {
           </div>
         )}
 
-        {rows.length === 0 ? (
+        {rows.length === 0 && scope === null ? (
           <EmptyState kind="empty" heading="No projects yet">
             Import the vault, or convert a project idea, to start.
           </EmptyState>
-        ) : sections.length === 0 && needle === '' && groupFilter === UNGROUPED ? (
+        ) : sections.length === 0 && needle === '' && onlyUngrouped ? (
           <EmptyState kind="empty" heading="No project is ungrouped">
             Every project is in a group.
           </EmptyState>
         ) : sections.length === 0 ? (
           <EmptyState kind="no-results" heading="Nothing matches">
-            {groupFilter === UNGROUPED
+            {onlyUngrouped
               ? `No ungrouped project has ${query.trim()} in its code or name.`
               : `No project has ${query.trim()} in its code or name.`}
           </EmptyState>
