@@ -406,6 +406,7 @@ describe.skipIf(url === undefined)('delete and undo', () => {
           taskDependency: false,
           adrRelation: false,
           supersededBy: false,
+          status: false,
         };
         await links({ from: task, to: REQ, kind: 'satisfies' });
         expect((await linkEvent(task, 'create')).after).toEqual({
@@ -484,11 +485,12 @@ describe.skipIf(url === undefined)('delete and undo', () => {
     });
 
     /**
-     * Every task→requirement kind shares one `task_requirement` row, and every ADR→ADR kind but
-     * supersedes one `extends` relation. Reversing the second citation of a pair must leave the row
-     * the first still needs: otherwise its reference stays and its coverage silently goes.
+     * Every row beside a reference has one owning kind: only satisfies writes `task_requirement`,
+     * only extends the extends relation, only supersedes the supersedes relation and its mirror.
+     * Two kinds sharing a row left it with no owner — reversing one link took the row the other
+     * still needed, or reversing both left it behind, still counted as coverage.
      */
-    describe('a pair cited two ways keeps the row they share', () => {
+    describe('each row beside a reference has one owning kind', () => {
       const newAdr = async (title: string): Promise<string> => {
         const res = await post(`/projects/${CODE}/adrs`, { title });
         expect(res.status).toBe(201);
@@ -499,57 +501,77 @@ describe.skipIf(url === undefined)('delete and undo', () => {
         expect(res.status).toBe(200);
         return (await res.json()) as { requirements: { covered: number }; uncovered: { humanId: string }[] };
       };
-      const extendsRelation = async (from: string, to: string) => {
+      const coverageRows = async () => {
+        const req = await db.requirement.findFirstOrThrow({ where: { humanId: REQ } });
+        return db.taskRequirement.count({ where: { requirementId: req.id } });
+      };
+      const relation = async (from: string, to: string, kind: 'extends' | 'supersedes' | 'superseded_by') => {
         const [a, b] = await Promise.all([
           db.adr.findFirstOrThrow({ where: { humanId: from } }),
           db.adr.findFirstOrThrow({ where: { humanId: to } }),
         ]);
         const row = await db.adrRelation.findUnique({
-          where: { adrId_relatedAdrId_kind: { adrId: a.id, relatedAdrId: b.id, kind: 'extends' } },
+          where: { adrId_relatedAdrId_kind: { adrId: a.id, relatedAdrId: b.id, kind } },
         });
         return row !== null;
       };
+      const linkEvents = async (humanId: string) =>
+        db.auditEvent.findMany({
+          where: { entityHumanId: humanId, action: 'create', after: { path: ['event'], equals: 'link' } },
+          orderBy: { createdAt: 'asc' },
+        });
 
-      it('satisfies, then relates: undoing the relates keeps the coverage', async () => {
+      it('a relates between a task and a requirement never covers it', async () => {
+        const task = await newTask('Only mentions it');
+        const before = await coverage();
+        await links({ from: task, to: REQ, kind: 'relates' });
+
+        expect(await coverage()).toEqual(before);
+        expect(await coverageRows()).toBe(0);
+        expect(await reference(task, REQ, 'relates')).toBe(true);
+      });
+
+      it('satisfies then relates, undone in write order: coverage ends as it began', async () => {
         const task = await newTask('Covers it');
+        const before = await coverage();
         await links({ from: task, to: REQ, kind: 'satisfies' });
-        const covered = await coverage();
-        expect(covered.uncovered.map((r) => r.humanId)).not.toContain(REQ);
-
         await links({ from: task, to: REQ, kind: 'relates' });
-        const second = await linkEvent(task, 'create');
-        expect((await undoOf(second.id)).status).toBe(200);
+        const [satisfiesEvent, relatesEvent] = await linkEvents(task);
 
-        const state = await satisfies(task);
-        expect(state.linked).toBe(true);
-        expect(state.referenced).toBe(true);
-        expect(await coverage()).toEqual(covered);
+        expect((await undoOf(satisfiesEvent?.id ?? '')).status).toBe(200);
+        expect((await undoOf(relatesEvent?.id ?? '')).status).toBe(200);
+
+        expect(await coverage()).toEqual(before);
+        expect(await coverageRows()).toBe(0);
+        expect(await reference(task, REQ, 'satisfies')).toBe(false);
+        expect(await reference(task, REQ, 'relates')).toBe(false);
       });
 
-      it('relates, then satisfies: undoing the relates keeps the coverage', async () => {
-        const task = await newTask('Cited first');
-        await links({ from: task, to: REQ, kind: 'relates' });
-        const second = await linkEvent(task, 'create');
+      it('satisfies then relates, undone in reverse order: coverage ends as it began', async () => {
+        const task = await newTask('Covers it');
+        const before = await coverage();
         await links({ from: task, to: REQ, kind: 'satisfies' });
         const covered = await coverage();
+        await links({ from: task, to: REQ, kind: 'relates' });
+        const [satisfiesEvent, relatesEvent] = await linkEvents(task);
 
-        expect((await undoOf(second.id)).status).toBe(200);
-
-        // The relates wrote the shared row, and the satisfies still needs it.
-        const state = await satisfies(task);
-        expect(state.linked).toBe(true);
-        expect(state.referenced).toBe(true);
+        expect((await undoOf(relatesEvent?.id ?? '')).status).toBe(200);
+        // The relates owned nothing but its reference, so the satisfies still covers.
         expect(await coverage()).toEqual(covered);
+        expect((await undoOf(satisfiesEvent?.id ?? '')).status).toBe(200);
+
+        expect(await coverage()).toEqual(before);
+        expect(await coverageRows()).toBe(0);
       });
 
-      it('unlinking the relates keeps the coverage too, in either order', async () => {
+      it('unlinking a relates leaves a satisfies covering, in either order', async () => {
         const first = await newTask('Satisfies first');
         await links({ from: first, to: REQ, kind: 'satisfies' });
         await links({ from: first, to: REQ, kind: 'relates' });
         await links({ from: first, to: REQ, kind: 'relates', remove: true });
         expect((await satisfies(first)).linked).toBe(true);
 
-        const second = await newTask('Cites first');
+        const second = await newTask('Relates first');
         await links({ from: second, to: REQ, kind: 'relates' });
         await links({ from: second, to: REQ, kind: 'satisfies' });
         await links({ from: second, to: REQ, kind: 'relates', remove: true });
@@ -573,44 +595,116 @@ describe.skipIf(url === undefined)('delete and undo', () => {
         expect(state.linked).toBe(true);
       });
 
-      it('violates, then extends: undoing the violates keeps the ADR relation', async () => {
-        const older = await newAdr('Postgres for everything');
-        const newer = await newAdr('Postgres for the queue as well');
-        await links({ from: newer, to: older, kind: 'violates' });
-        const second = await linkEvent(newer, 'create');
-        await links({ from: newer, to: older, kind: 'extends' });
-
-        expect((await undoOf(second.id)).status).toBe(200);
-        expect(await extendsRelation(newer, older)).toBe(true);
-      });
-
-      it('extends, then violates: undoing the violates keeps the ADR relation', async () => {
-        const older = await newAdr('Postgres for everything');
-        const newer = await newAdr('Postgres for the queue as well');
-        await links({ from: newer, to: older, kind: 'extends' });
-        await links({ from: newer, to: older, kind: 'violates' });
-        const second = await linkEvent(newer, 'create');
-
-        expect((await undoOf(second.id)).status).toBe(200);
-        expect(await extendsRelation(newer, older)).toBe(true);
-
-        // And undoing the extends, the last link between them, takes the relation with it.
-        const ext = await db.auditEvent.findFirstOrThrow({
-          where: { entityHumanId: newer, action: 'create', undoneAt: null },
-          orderBy: { createdAt: 'desc' },
+      it('unlinking a satisfies over a row the task was created with keeps that row', async () => {
+        const req = await db.requirement.findFirstOrThrow({ where: { humanId: REQ } });
+        const res = await post(`/projects/${CODE}/tasks`, {
+          title: 'Created covering it, then cited',
+          requirementIds: [req.id],
         });
-        expect(ext.after).toMatchObject({ kind: 'extends' });
-        expect((await undoOf(ext.id)).status).toBe(200);
-        expect(await extendsRelation(newer, older)).toBe(false);
+        const task = ((await res.json()) as { humanId: string }).humanId;
+        await links({ from: task, to: REQ, kind: 'satisfies' });
+        await links({ from: task, to: REQ, kind: 'satisfies', remove: true });
+
+        const state = await satisfies(task);
+        expect(state.referenced).toBe(false);
+        expect(state.linked).toBe(true);
       });
 
-      it('unlinking the violates keeps the ADR relation', async () => {
+      it('undoing an unlink puts back what it removed and nothing it did not', async () => {
+        const req = await db.requirement.findFirstOrThrow({ where: { humanId: REQ } });
+        const res = await post(`/projects/${CODE}/tasks`, {
+          title: 'Created covering it, never cited',
+          requirementIds: [req.id],
+        });
+        const task = ((await res.json()) as { humanId: string }).humanId;
+        expect((await links({ from: task, to: REQ, kind: 'satisfies', remove: true })).status).toBe(200);
+        const event = await linkEvent(task, 'delete');
+        expect(event.after).toMatchObject({ rows: { reference: false, taskRequirement: true } });
+        expect((await satisfies(task)).linked).toBe(false);
+
+        expect((await undoOf(event.id)).status).toBe(200);
+
+        const state = await satisfies(task);
+        expect(state.linked).toBe(true);
+        // No reference was there to remove, so none is invented.
+        expect(state.referenced).toBe(false);
+      });
+
+      it('a violates between ADRs is not an edge in their graph', async () => {
+        const older = await newAdr('Postgres for everything');
+        const newer = await newAdr('A queue in Redis after all');
+        await links({ from: newer, to: older, kind: 'violates' });
+        expect(await relation(newer, older, 'extends')).toBe(false);
+      });
+
+      it('extends then violates, undone in write order: the ADR relation is gone', async () => {
+        const older = await newAdr('Postgres for everything');
+        const newer = await newAdr('Postgres for the queue as well');
+        await links({ from: newer, to: older, kind: 'extends' });
+        await links({ from: newer, to: older, kind: 'violates' });
+        const [extendsEvent, violatesEvent] = await linkEvents(newer);
+
+        expect((await undoOf(extendsEvent?.id ?? '')).status).toBe(200);
+        expect((await undoOf(violatesEvent?.id ?? '')).status).toBe(200);
+        expect(await relation(newer, older, 'extends')).toBe(false);
+      });
+
+      it('extends then violates, undone in reverse order: the relation goes with the extends', async () => {
+        const older = await newAdr('Postgres for everything');
+        const newer = await newAdr('Postgres for the queue as well');
+        await links({ from: newer, to: older, kind: 'extends' });
+        await links({ from: newer, to: older, kind: 'violates' });
+        const [extendsEvent, violatesEvent] = await linkEvents(newer);
+
+        expect((await undoOf(violatesEvent?.id ?? '')).status).toBe(200);
+        expect(await relation(newer, older, 'extends')).toBe(true);
+        expect((await undoOf(extendsEvent?.id ?? '')).status).toBe(200);
+        expect(await relation(newer, older, 'extends')).toBe(false);
+      });
+
+      it('unlinking a violates keeps the extends relation', async () => {
         const older = await newAdr('Postgres for everything');
         const newer = await newAdr('Postgres for the queue as well');
         await links({ from: newer, to: older, kind: 'extends' });
         await links({ from: newer, to: older, kind: 'violates' });
         await links({ from: newer, to: older, kind: 'violates', remove: true });
-        expect(await extendsRelation(newer, older)).toBe(true);
+        expect(await relation(newer, older, 'extends')).toBe(true);
+      });
+
+      it('undoing a supersedes unlink puts the edge back, and the older ADR stays superseded', async () => {
+        const older = await newAdr('Roll our own OIDC client');
+        const newer = await newAdr('Use the published SDK');
+        await links({ from: newer, to: older, kind: 'supersedes' });
+        await links({ from: newer, to: older, kind: 'supersedes', remove: true });
+        const event = await linkEvent(newer, 'delete');
+        expect(event.after).toMatchObject({
+          rows: { reference: true, adrRelation: true, supersededBy: true, status: false },
+          replacedStatus: 'superseded',
+        });
+        expect(await relation(newer, older, 'supersedes')).toBe(false);
+
+        expect((await undoOf(event.id)).status).toBe(200);
+
+        expect(await relation(newer, older, 'supersedes')).toBe(true);
+        expect(await relation(older, newer, 'superseded_by')).toBe(true);
+        expect((await db.adr.findFirstOrThrow({ where: { humanId: older } })).status).toBe('superseded');
+      });
+
+      it('refuses to undo a supersedes unlink once the older ADR has been decided again', async () => {
+        const older = await newAdr('Roll our own OIDC client');
+        const newer = await newAdr('Use the published SDK');
+        await links({ from: newer, to: older, kind: 'supersedes' });
+        await links({ from: newer, to: older, kind: 'supersedes', remove: true });
+        const event = await linkEvent(newer, 'delete');
+        // Not reachable through the API, which never lets a superseded ADR be set to anything,
+        // but an import or a later change of that rule could; the undo must not overwrite it.
+        await db.adr.updateMany({ where: { humanId: older }, data: { status: 'accepted' } });
+
+        const res = await undoOf(event.id);
+        expect(res.status).toBe(409);
+        expect(res.body.error).toContain('accepted');
+        expect(await relation(newer, older, 'supersedes')).toBe(false);
+        expect((await db.adr.findFirstOrThrow({ where: { humanId: older } })).status).toBe('accepted');
       });
     });
 

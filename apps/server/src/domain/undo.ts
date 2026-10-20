@@ -257,6 +257,8 @@ interface LinkEvent {
    * cannot say whether they made the link or repeated one already there.
    */
   readonly rows: LinkRows | undefined;
+  /** For an unlinked supersedes: the replaced ADR's status as the unlink left it. */
+  readonly replacedStatus: string | undefined;
 }
 
 /** The `rows` an event recorded, or undefined when it recorded none or something malformed. */
@@ -278,12 +280,14 @@ function linkEventOf(action: string, after: Record<string, unknown> | null): Lin
   if (typeof to !== 'string' || typeof kind !== 'string') return null;
 
   const rows = rowsOf(after?.['rows']);
+  const status = after?.['replacedStatus'];
+  const replacedStatus = typeof status === 'string' ? status : undefined;
 
   if (action === 'create' && marker === 'link') {
-    return { event: 'link', to, kind: kind as LinkKind, rows };
+    return { event: 'link', to, kind: kind as LinkKind, rows, replacedStatus };
   }
   if (action === 'delete' && marker === 'unlink') {
-    return { event: 'unlink', to, kind: kind as LinkKind, rows };
+    return { event: 'unlink', to, kind: kind as LinkKind, rows, replacedStatus };
   }
   return null;
 }
@@ -291,8 +295,8 @@ function linkEventOf(action: string, after: Record<string, unknown> | null): Lin
 type AuditEventRow = NonNullable<Awaited<ReturnType<Db['auditEvent']['findUnique']>>>;
 
 /**
- * Reverse a link by removing the rows it wrote, and an unlink by linking again — never by touching
- * the entity row.
+ * Reverse a link by removing the rows it wrote, and an unlink by writing back the rows it removed —
+ * exactly those, and never the entity row.
  *
  * The refusal rule is the same one as everywhere else, stated for a link: the link must still be
  * in the state the event left it. A link since removed, or an unlink since put back, has been
@@ -369,13 +373,27 @@ async function undoLink(
       before = { event: 'link', ...marker };
       after = { event: 'unlink', ...marker, rows: removed };
     } else {
-      // Its own rows only: a shared row back in place is another link's, not this one put back.
-      if ((rows.reference && present.reference) || (rows.taskDependency && present.taskDependency)) {
+      // Every row it removed must still be gone; one back means it has been linked again since.
+      if (LINK_ROWS.some((row) => rows[row] && present[row])) {
         throw new Conflict(`that unlink cannot be undone: ${from} is already linked to ${to} again`);
+      }
+      if (recorded.replacedStatus !== undefined) {
+        // Putting a supersedes back says the older ADR was replaced. If its status has been
+        // decided again since, restoring the edge would contradict that later decision.
+        const replaced = await tx.adr.findUniqueOrThrow({
+          where: { id: resolved.toId },
+          select: { status: true },
+        });
+        if (replaced.status !== recorded.replacedStatus) {
+          throw new Conflict(
+            `that unlink cannot be undone: ${to} has been ${replaced.status} since, not ` +
+              `${recorded.replacedStatus} as the unlink left it`,
+          );
+        }
       }
       let written: LinkRows;
       try {
-        written = (await writeLink(tx, resolved)).rows;
+        written = (await writeLink(tx, resolved, rows)).rows;
       } catch (error) {
         // A depends_on edge that was fine when it was removed may close a cycle now that other
         // edges have been added; putting it back would leave tasks the brief can never offer.
