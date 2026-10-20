@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  Badge,
   Button,
   Card,
   Cluster,
@@ -27,8 +28,19 @@ import { EditForm, LIFECYCLES } from './EditForms';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { forgetBrief, SECTIONS } from '../lib/project';
 import { plainText } from '../lib/text';
-import { Donut, Pill, StatCard } from '../ui/viz';
-import { ciTone, SERIES, severityTone } from '../ui/tone';
+import { Donut, StatCard } from '../ui/viz';
+import { SERIES } from '../ui/tone';
+import {
+  breakdown,
+  ciTone,
+  ciWord,
+  CRITICAL_PLUS_HIGH,
+  measurable,
+  readCount,
+  severityTone,
+  taskStatusTone,
+} from '../ui/status';
+import { CATEGORIES } from './DriftView';
 
 /**
  * S-09 — a project's overview.
@@ -48,9 +60,9 @@ import { ciTone, SERIES, severityTone } from '../ui/tone';
 function CiLine({ ci }: { ci: Brief['ci'] }) {
   return (
     <Cluster gap="8" align="center">
-      <Pill tone={ciTone(ci.conclusion, ci.unknown)} dot>
-        {ci.unknown ? 'never reported' : (ci.conclusion ?? 'unknown')}
-      </Pill>
+      <Badge tone={ciTone(ci.conclusion, ci.unknown)} size="sm">
+        {ci.unknown ? 'CI never reported' : ciWord(ci)}
+      </Badge>
       {ci.commitSha !== null && <code className="fm-card__code">{ci.commitSha.slice(0, 7)}</code>}
     </Cluster>
   );
@@ -110,6 +122,24 @@ export function ProjectOverview({ code }: { code: string }) {
   const group: ProjectGroupRef | null = project.state.status === 'ready' ? project.state.value.group : null;
   const listing = groups.state.status === 'ready' ? groups.state.value : null;
 
+  // What the plan lets each signal measure (FRM-REQ-241). While the project row loads there is no
+  // answer, so the tiles wait rather than show a zero as clean; if it fails they fall back to the
+  // brief's own figures, which are the same ones the MCP serves.
+  const counts =
+    project.state.status === 'loading'
+      ? ('loading' as const)
+      : project.state.status === 'ready'
+        ? project.state.value.counts
+        : null;
+  const can =
+    counts === 'loading' || counts === null
+      ? { hasPlan: true, drift: true, coverage: true, blocked: true }
+      : measurable(counts);
+  const holes = brief.drift.counts['coverage-hole'];
+  const coverageSignal = readCount(holes, { measured: can.coverage });
+  const driftSignal = readCount(brief.drift.total, { measured: can.drift });
+  const blockedSignal = readCount(brief.blocked.length, { measured: can.blocked });
+
   return (
     <Page>
       <ProjectHeader
@@ -168,41 +198,82 @@ export function ProjectOverview({ code }: { code: string }) {
       />
 
       <Stack gap="24">
-        <Grid minItemWidth="sm">
-          <StatCard
-            label="Coverage holes"
-            value={brief.drift.counts['coverage-hole']}
-            tone={brief.drift.counts['coverage-hole'] === 0 ? 'success' : 'warning'}
-            detail={
-              brief.drift.counts['coverage-hole'] === 0
-                ? 'Every Must has a task, every task a reason'
-                : 'Musts with no task, or tasks citing nothing'
-            }
-            {...(brief.drift.counts['coverage-hole'] === 0
-              ? {}
-              : { href: `/projects/${code}/drift` })}
-          />
-          <StatCard
-            label="Open criticals"
-            value={brief.openCriticals.length}
-            tone={brief.openCriticals.length === 0 ? 'success' : 'danger'}
-            detail={brief.openCriticals.length === 0 ? 'Nothing on fire' : 'Needs a decision'}
-            href={`/projects/${code}/audits`}
-          />
-          <StatCard
-            label="Drift"
-            value={brief.drift.total}
-            tone={brief.drift.total === 0 ? 'success' : 'warning'}
-            detail="Plan against reality"
-            href={`/projects/${code}/drift`}
-          />
-          <StatCard
-            label="Blocked"
-            value={brief.blocked.length}
-            tone={brief.blocked.length === 0 ? 'neutral' : 'warning'}
-            detail={brief.blocked.length === 0 ? 'Nothing waiting' : 'Cannot start'}
-          />
-        </Grid>
+        {counts === 'loading' ? (
+          <Skeleton lines={3} />
+        ) : (
+          <Grid minItemWidth="sm">
+            <StatCard
+              label="Coverage holes"
+              value={coverageSignal.state === 'not-measurable' ? '—' : holes}
+              signal={coverageSignal}
+              detail={
+                coverageSignal.state === 'not-measurable'
+                  ? 'No requirements or tasks recorded, so there is nothing to cover'
+                  : holes === 0
+                    ? '0 coverage holes · every Must has a task, every task a reason'
+                    : 'Musts with no task, or tasks citing nothing'
+              }
+              {...(holes === 0 ? {} : { href: `/projects/${code}/drift`, action: 'Open the coverage holes' })}
+            />
+            <StatCard
+              label={CRITICAL_PLUS_HIGH}
+              value={brief.openCriticals.length}
+              signal={readCount(brief.openCriticals.length, { measured: true, severity: 'danger' })}
+              detail={breakdown(
+                [
+                  { n: brief.openCriticals.filter((f) => f.severity === 'critical').length, one: 'critical' },
+                  { n: brief.openCriticals.filter((f) => f.severity === 'high').length, one: 'high' },
+                ],
+                'No open critical or high findings',
+              )}
+              href={`/projects/${code}/audits`}
+              action="Open the audits"
+            />
+            <StatCard
+              label="Drift"
+              value={driftSignal.state === 'not-measurable' ? '—' : brief.drift.total}
+              signal={driftSignal}
+              detail={
+                driftSignal.state === 'not-measurable'
+                  ? 'No phases, tasks or requirements to compare with what shipped'
+                  : brief.drift.total === 0
+                    ? '0 drift · all six checks ran and found nothing'
+                    : breakdown(
+                        CATEGORIES.map((category) => ({
+                          n: brief.drift.counts[category.key],
+                          one: category.label.toLowerCase(),
+                        })),
+                        'Plan against reality',
+                      )
+              }
+              href={`/projects/${code}/drift`}
+              action={driftSignal.state === 'not-measurable' ? 'Why: see drift' : 'Open drift'}
+            />
+            <StatCard
+              label="Blocked"
+              value={blockedSignal.state === 'not-measurable' ? '—' : brief.blocked.length}
+              signal={blockedSignal}
+              detail={
+                blockedSignal.state === 'not-measurable'
+                  ? 'No tasks yet'
+                  : brief.blocked.length === 0
+                    ? 'No task is waiting on another'
+                    : `${brief.blocked.map((task) => task.humanId).join(', ')} cannot start`
+              }
+            />
+          </Grid>
+        )}
+
+        {counts !== 'loading' && counts !== null && !can.hasPlan && (
+          <Card padding="md">
+            <Stack gap="4">
+              <strong>{brief.project.name} has no plan in Foreman yet.</strong>
+              <span className="fm-muted">
+                These signals start reporting once it has requirements and phases.
+              </span>
+            </Stack>
+          </Card>
+        )}
 
         <Grid minItemWidth="md">
           <Section title="In flight" surface="card">
@@ -215,6 +286,7 @@ export function ProjectOverview({ code }: { code: string }) {
                 <Cluster gap="20" align="center">
                   <Donut
                     size={104}
+                    legend
                     segments={[
                       { label: 'Done', value: done, color: SERIES.done },
                       { label: 'Cancelled', value: cancelled, color: SERIES.quiet },
@@ -239,11 +311,17 @@ export function ProjectOverview({ code }: { code: string }) {
                     <CiLine ci={brief.ci} />
                   </Stack>
                 </Cluster>
-                {phase.exitDemo !== null && (
+                {phase.exitDemo !== null ? (
                   <div className="fm-callout">
                     <span className="fm-callout__label">Exit demo</span>
                     {phase.exitDemo}
                   </div>
+                ) : (
+                  // Neutral, and a link to where it is counted: the absence is a drift row, not an
+                  // alarm of its own.
+                  <a className="fm-chip fm-chip--link fm-chip--quiet" href={`/projects/${code}/drift`}>
+                    no exit demo
+                  </a>
                 )}
               </Stack>
             )}
@@ -262,7 +340,7 @@ export function ProjectOverview({ code }: { code: string }) {
                   <a key={task.humanId} className="fm-item" href={`/tasks/${task.humanId}`}>
                     <code className="fm-item__id">{task.humanId}</code>
                     <span className="fm-item__title">{plainText(task.title)}</span>
-                    {task.size !== null && <Pill tone="neutral">{task.size}</Pill>}
+                    {task.size !== null && <Badge tone="neutral" size="sm">{task.size}</Badge>}
                   </a>
                 ))}
               </Stack>
@@ -299,9 +377,9 @@ export function ProjectOverview({ code }: { code: string }) {
               {brief.blocked.map((task) => (
                 <a key={task.humanId} className="fm-item fm-item--stacked" href={`/tasks/${task.humanId}`}>
                   <Cluster gap="8" align="center">
-                    <Pill tone="warning" dot>
+                    <Badge tone={taskStatusTone('blocked')} size="sm">
                       blocked
-                    </Pill>
+                    </Badge>
                     <code className="fm-item__id">{task.humanId}</code>
                     <span className="fm-item__title">{plainText(task.title)}</span>
                   </Cluster>
@@ -314,7 +392,7 @@ export function ProjectOverview({ code }: { code: string }) {
 
         {brief.openCriticals.length > 0 && (
           <Section
-            title="Open criticals"
+            title={CRITICAL_PLUS_HIGH}
             surface="card"
             actions={<Link href="/findings">The inbox</Link>}
           >
@@ -323,7 +401,7 @@ export function ProjectOverview({ code }: { code: string }) {
                 <Card key={finding.humanId} padding="sm" href={`/findings/${finding.humanId}`} interactive>
                   <Stack gap="4">
                     <Cluster gap="8" align="center">
-                      <Pill tone={severityTone(finding.severity)}>{finding.severity}</Pill>
+                      <Badge tone={severityTone(finding.severity)} size="sm">{finding.severity}</Badge>
                       <code className="fm-card__code">{finding.humanId}</code>
                     </Cluster>
                     <span className="fm-finding__title">{plainText(finding.title)}</span>

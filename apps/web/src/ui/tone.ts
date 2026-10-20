@@ -1,129 +1,65 @@
 /**
- * One place that decides what colour a status is.
- *
- * Colour is the fastest thing on a screen to read, and it only works if it means the same thing
- * everywhere. These mappings were written down because they were previously made up per screen:
- * `lifecycle === 'building' ? 'attention' : 'neutral'` appeared in three files, so `deployed` and
- * `scrapped` rendered identically — the two states furthest apart in meaning.
+ * Chart series, the legacy tone shim and the date helper. What a *status* is — its tone and its
+ * label — is decided in `status.ts`, the one place (FRM-REQ-241).
  *
  * **Colour is never the only signal.** Every badge carries its word, every chart segment has a
- * legend, and the charts below label their own totals. Someone who cannot separate green from red
- * loses speed here, not information (WCAG 1.4.1).
+ * legend, and the charts label their own totals (WCAG 1.4.1).
  */
 
 /**
- * The console's status tones.
- *
- * `@d3cloud/ui`'s `Badge` offers three — neutral, attention, danger — which is right for a library
- * that must stay legible everywhere and wrong for a screen whose whole job is "is this healthy".
- * There is no green in it, so `deployed` and `scrapped` render identically. `Pill` in `viz.tsx`
- * takes these five and paints from tokens; `Badge` is still correct wherever three is enough.
+ * Status tones live in `status.ts` (FRM-REQ-241). They are re-exported here under their old names so
+ * a screen that has not adopted `status.ts` yet keeps compiling; each now returns a `Badge` tone —
+ * neutral, attention, warning or danger — and none is green.
  */
-export type Tone = 'neutral' | 'success' | 'accent' | 'warning' | 'danger';
+import type { BadgeTone } from './status';
+export {
+  ciTone,
+  findingStatusTone,
+  lifecycleTone,
+  phaseStatusTone,
+  severityTone,
+  taskStatusTone,
+  type BadgeTone,
+} from './status';
+/**
+ * The legacy five-tone vocabulary (neutral, success, accent, warning, danger), kept only so screens
+ * outside FRM-T-18.2 that still say `tone="success"` compile. `toBadgeTone` maps it onto Badge's
+ * tones: success and accent become neutral. New code uses `BadgeTone` from `status.ts`.
+ *
+ * Legacy: use `BadgeTone` from `./status`.
+ */
+export type Tone = 'neutral' | 'success' | 'accent' | 'warning' | 'danger' | 'attention';
 
-/** The chart palette, as CSS custom properties. Tokens only — the usage gate refuses a hex. */
+/** Maps any tone the console has ever named onto the tones `Badge` offers (D-016, D-086). */
+export function toBadgeTone(tone: Tone): BadgeTone {
+  switch (tone) {
+    case 'danger':
+    case 'warning':
+    case 'attention':
+      return tone;
+    default:
+      // success and accent were hue spent on healthy or merely active things; neither needs you.
+      return 'neutral';
+  }
+}
+
+/**
+ * The chart palette, as CSS custom properties. Tokens only — the usage gate refuses a hex.
+ *
+ * Series are **data, not status**: they are kept distinct so a segment can be told from its
+ * neighbour, and every segment is also named in text (legend, caption, aria-label), so colour is
+ * never how you know. None uses the success token — done work is neutral ink, not a celebration —
+ * and `quiet` (cancelled) is not the track colour, which a cancelled segment used to disappear into.
+ */
 export const SERIES = {
-  done: 'var(--color-success)',
+  done: 'var(--color-fg-muted)',
   active: 'var(--color-accent)',
   waiting: 'var(--color-fg-faint)',
   blocked: 'var(--color-danger)',
   warning: 'var(--color-warning)',
   info: 'var(--color-info)',
-  quiet: 'var(--color-border)',
+  quiet: 'var(--color-border-field)',
 } as const;
-
-export function lifecycleTone(lifecycle: string): Tone {
-  switch (lifecycle) {
-    case 'deployed':
-      return 'success';
-    case 'building':
-      return 'accent';
-    case 'scaffolded':
-    case 'planned':
-      return 'neutral';
-    case 'parked':
-      return 'warning';
-    case 'scrapped':
-      return 'danger';
-    default:
-      return 'neutral';
-  }
-}
-
-export function phaseStatusTone(status: string): Tone {
-  switch (status) {
-    case 'complete':
-      return 'success';
-    case 'active':
-      return 'accent';
-    case 'parked':
-      return 'warning';
-    default:
-      return 'neutral';
-  }
-}
-
-export function taskStatusTone(status: string): Tone {
-  switch (status) {
-    case 'done':
-      return 'success';
-    case 'in_progress':
-      return 'accent';
-    case 'blocked':
-      return 'danger';
-    case 'cancelled':
-      return 'neutral';
-    default:
-      return 'neutral';
-  }
-}
-
-export function severityTone(severity: string): Tone {
-  switch (severity) {
-    case 'critical':
-    case 'high':
-      return 'danger';
-    case 'medium':
-      return 'warning';
-    default:
-      return 'neutral';
-  }
-}
-
-export function findingStatusTone(status: string): Tone {
-  switch (status) {
-    case 'fixed':
-      return 'success';
-    case 'open':
-      return 'danger';
-    case 'deferred':
-      return 'warning';
-    default:
-      return 'neutral';
-  }
-}
-
-/**
- * CI, where the third answer matters most.
- *
- * `unknown` is not `success`. A project nothing has been ingested for has not passed; it has not
- * been asked. Rendering the two the same is the single most misleading thing this console could do.
- */
-export function ciTone(conclusion: string | null, unknown: boolean): Tone {
-  if (unknown) return 'neutral';
-  switch (conclusion) {
-    case 'success':
-      return 'success';
-    case 'failure':
-    case 'timed_out':
-      return 'danger';
-    case 'cancelled':
-    case 'skipped':
-      return 'neutral';
-    default:
-      return 'warning';
-  }
-}
 
 /** Human-readable age. `null` is an em dash, never "just now". */
 export function relativeDay(iso: string | null): string {

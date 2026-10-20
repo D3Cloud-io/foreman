@@ -165,17 +165,17 @@ test.describe('the group scope', () => {
     await page.goto(`/?group=${dormice.slug}`);
     const main = page.getByRole('main');
     // In the href itself, so a middle-click, a new tab and a copied link open in Dormice too.
-    await expect(main.getByRole('link', { name: /Open criticals/ })).toHaveAttribute('href', `/findings?group=${dormice.slug}`);
+    await expect(main.getByRole('link', { name: /Critical \+ high/ })).toHaveAttribute('href', `/findings?group=${dormice.slug}`);
     await expect(main.getByRole('link', { name: /Drift/ }).first()).toHaveAttribute('href', `/drift?group=${dormice.slug}`);
     await expect(main.getByRole('link', { name: new RegExp(IN_DORMICE[0]) })).toHaveAttribute('href', `/projects/${IN_DORMICE[0]}`);
 
     const opened = page.context().waitForEvent('page');
-    await main.getByRole('link', { name: /Open criticals/ }).click({ modifiers: ['ControlOrMeta'] });
+    await main.getByRole('link', { name: /Critical \+ high/ }).click({ modifiers: ['ControlOrMeta'] });
     const tab = await opened;
     await expect(tab).toHaveURL(new RegExp(`/findings\\?group=${dormice.slug}$`));
     await tab.close();
 
-    await main.getByRole('link', { name: /Open criticals/ }).click();
+    await main.getByRole('link', { name: /Critical \+ high/ }).click();
     await expect(page).toHaveURL(new RegExp(`/findings\\?group=${dormice.slug}$`));
     await expect(page.getByText(findingTitle(IN_DORMICE[0]))).toBeVisible();
     await expect(page.getByText(findingTitle(IN_CLOUD))).toHaveCount(0);

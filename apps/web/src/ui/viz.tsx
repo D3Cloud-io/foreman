@@ -1,7 +1,8 @@
 import type * as React from 'react';
 import type { ReactNode } from 'react';
-import { Card, Stack } from '@d3cloud/ui';
-import type { Tone } from './tone';
+import { Badge, Card, Stack } from '@d3cloud/ui';
+import type { Signal } from './status';
+import { toBadgeTone, type Tone } from './tone';
 
 /**
  * The charts the console needs, and nothing more.
@@ -42,6 +43,7 @@ export function Donut({
   label,
   caption,
   size = 104,
+  legend = false,
 }: {
   segments: readonly Segment[];
   /** The figure in the centre. Usually a percentage or a count. */
@@ -49,6 +51,8 @@ export function Donut({
   /** The small line under it. */
   caption?: ReactNode;
   size?: number;
+  /** Name every segment and its count in text beside the ring — colour is never the only signal. */
+  legend?: boolean;
 }) {
   const total = sum(segments);
   const radius = 42;
@@ -60,7 +64,7 @@ export function Donut({
 
   let offset = 0;
 
-  return (
+  const ring = (
     <div className="fm-donut" style={{ width: size, height: size }}>
       <svg
         viewBox="0 0 100 100"
@@ -106,6 +110,14 @@ export function Donut({
         <span className="fm-donut__label">{label}</span>
         {caption !== undefined && <span className="fm-donut__caption">{caption}</span>}
       </div>
+    </div>
+  );
+
+  if (!legend) return ring;
+  return (
+    <div className="fm-donut-with-legend">
+      {ring}
+      <Legend segments={segments} />
     </div>
   );
 }
@@ -155,18 +167,34 @@ export function SegmentBar({
           ))
         )}
       </div>
-      {showLegend && (
-        <ul className="fm-legend">
-          {segments.map((segment) => (
-            <li key={segment.label} className="fm-legend__item">
-              <span className="fm-legend__swatch" style={{ background: segment.color }} />
-              {segment.label}
-              <span className="fm-legend__value">{segment.value}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      {showLegend && <Legend segments={segments} />}
     </Stack>
+  );
+}
+
+/**
+ * The text that names every segment and its count — one entry per label, so a series passed twice
+ * (Cancelled was listed twice on the old dashboard) is said once, with its counts added.
+ */
+export function Legend({ segments }: { segments: readonly Segment[] }) {
+  const merged = new Map<string, Segment>();
+  for (const segment of segments) {
+    const seen = merged.get(segment.label);
+    merged.set(
+      segment.label,
+      seen === undefined ? segment : { ...seen, value: seen.value + segment.value },
+    );
+  }
+  return (
+    <ul className="fm-legend">
+      {[...merged.values()].map((segment) => (
+        <li key={segment.label} className="fm-legend__item">
+          <span className="fm-legend__swatch" style={{ background: segment.color }} aria-hidden="true" />
+          {segment.label}
+          <span className="fm-legend__value">{segment.value}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -243,17 +271,23 @@ export function BarRow({
 }
 
 /**
- * One number, said loudly.
+ * One number, said loudly, and honestly (FRM-REQ-241).
  *
- * `tone` tints the number alone, never the card: a wall of red-bordered cards is a wall nobody
- * reads, and the figure is what carries the meaning. A `href` makes the whole card the target,
- * because a statistic you cannot click is a statistic you have to go and find.
+ * `signal` is the three-state reading from `status.ts`: its badge carries the word (needs you, clean,
+ * not measurable yet) and decides how the figure is inked — danger or warning only when it needs you,
+ * muted when it is not measurable yet, plain ink when clean. There is no green. `tone` is the older
+ * hand-set tint, kept for screens that have not adopted `signal`; success and accent are plain ink.
+ *
+ * A `href` makes the whole card the target, because a statistic you cannot click is a statistic you
+ * have to go and find; `action` names where it goes ("Open these 3 findings").
  */
 export function StatCard({
   label,
   value,
   detail,
   tone = 'neutral',
+  signal,
+  action,
   href,
   onClick,
   selected = false,
@@ -263,6 +297,9 @@ export function StatCard({
   value: ReactNode;
   detail?: ReactNode;
   tone?: Tone;
+  signal?: Signal;
+  /** The filtered list the card opens, in words. Shown only when the card has an `href`. */
+  action?: string;
   href?: string;
   /** Makes the card a button — a figure that is also the control that filters to it. */
   onClick?: () => void;
@@ -290,25 +327,44 @@ export function StatCard({
           }
         : {};
 
+  const valueTone =
+    signal === undefined
+      ? toBadgeTone(tone)
+      : signal.state === 'not-measurable'
+        ? 'muted'
+        : signal.state === 'needs-you'
+          ? signal.tone
+          : 'neutral';
+
   return (
     <Card padding="md" {...behaviour}>
       <Stack gap="4">
         <span className="fm-stat__label">{label}</span>
-        <span className={`fm-stat__value fm-stat__value--${tone}`}>{value}</span>
+        <span className="fm-stat__row">
+          <span className={`fm-stat__value fm-stat__value--${valueTone}`}>{value}</span>
+          {signal !== undefined && (
+            <Badge tone={signal.tone} size="sm" className="fm-badge">
+              {signal.label}
+            </Badge>
+          )}
+        </span>
         {detail !== undefined && <span className="fm-stat__detail">{detail}</span>}
         {chart !== undefined && <div className="fm-stat__chart">{chart}</div>}
+        {href !== undefined && action !== undefined && (
+          <span className="fm-stat__action">{action} ›</span>
+        )}
       </Stack>
     </Card>
   );
 }
 
 /**
- * A status pill, in the five tones the console actually needs.
+ * A status badge for screens that have not moved to `Badge` and `status.ts` yet.
  *
- * `@d3cloud/ui`'s `Badge` has three — neutral, attention, danger — and no green, so `deployed`
- * and `planned` were rendering the same grey on the one screen whose purpose is telling them
- * apart. This is the same shape in tokens, with success and accent added. `Badge` is still the
- * right choice wherever three tones are enough; this is for status.
+ * It is `@d3cloud/ui`'s `Badge` now (D-016, D-086): neutral, attention, warning or danger, never
+ * green. The legacy `success` and `accent` tones are still accepted so those screens compile, and
+ * both render neutral — a healthy or merely active thing does not need you. New code uses `Badge`
+ * directly with a tone from `status.ts`.
  *
  * The word is always present. The colour is how fast you read it, never how you know what it says.
  */
@@ -319,13 +375,13 @@ export function Pill({
 }: {
   tone?: Tone;
   children: ReactNode;
-  /** A leading dot, for a pill sitting in running text where a full tint would shout. */
+  /** A leading dot, for a badge sitting in running text. */
   dot?: boolean;
 }) {
   return (
-    <span className={`fm-pill fm-pill--${tone}${dot ? ' fm-pill--dot' : ''}`}>
+    <Badge tone={toBadgeTone(tone)} size="sm" className="fm-badge">
       {dot && <span className="fm-pill__dot" aria-hidden="true" />}
       {children}
-    </span>
+    </Badge>
   );
 }
