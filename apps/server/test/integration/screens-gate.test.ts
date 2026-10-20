@@ -104,8 +104,9 @@ describe.skipIf(url === undefined)('screens in the gate and drift', () => {
     expect(res.status, await res.clone().text()).toBe(201);
   }
 
-  async function relate(screen: string, to: string) {
-    const res = await post('/links', { from: screen, to, kind: 'relates' });
+  async function relate(screen: string, to: string, direction: 'screen-first' | 'screen-last' = 'screen-first') {
+    const [from, target] = direction === 'screen-first' ? [screen, to] : [to, screen];
+    const res = await post('/links', { from, to: target, kind: 'relates' });
     expect(res.status, await res.clone().text()).toBe(200);
   }
 
@@ -294,6 +295,32 @@ describe.skipIf(url === undefined)('screens in the gate and drift', () => {
 
     const result = await gate();
     expect(result.failures.find((f) => f.humanId === screen)?.kind).toBe('screen-unreviewed');
+  });
+
+  it('reads a link written task to screen the same as screen to task', async () => {
+    // `foreman_link FRM-T-5 relates FRM-SCR-001` stores the task as the source of the row.
+    const done = await newTask('done');
+    const unreviewed = await newScreen('Linked from the task');
+    const neverCaptured = await newScreen('Task-side, never captured');
+    await relate(unreviewed, done, 'screen-last');
+    await relate(neverCaptured, done, 'screen-last');
+    await capture(unreviewed);
+
+    expect((await gate()).failures.find((f) => f.humanId === unreviewed)?.kind).toBe('screen-unreviewed');
+    expect((await screenDrift()).map((i) => i.humanId)).toEqual([neverCaptured]);
+  });
+
+  it('reads a requirement-to-screen link into the requirement\'s phase', async () => {
+    const created = await post(`/projects/${CODE}/requirements`, {
+      statement: 'The console shall show the board.',
+      phaseId,
+    });
+    const requirement = ((await created.json()) as { humanId: string }).humanId;
+    const screen = await newScreen('Linked from the requirement');
+    await relate(screen, requirement, 'screen-last');
+    await capture(screen);
+
+    expect((await gate()).failures.find((f) => f.humanId === screen)?.kind).toBe('screen-unreviewed');
   });
 
   it('ignores a screen linked to nothing in the phase', async () => {

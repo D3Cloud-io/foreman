@@ -302,23 +302,36 @@ export async function screenStates(
   });
   if (screens.length === 0) return [];
 
-  const links = await db.reference.findMany({
+  // `link()` stores whichever direction it is given, so `foreman_link FRM-T-5 relates FRM-SCR-001`
+  // is a task→screen row. Both directions are one link to a screen; reading only the
+  // screen→X one would silently drop half of them from the gate and from drift.
+  const screenIds = screens.map((s) => s.id);
+  const rows = await db.reference.findMany({
     where: {
-      fromType: 'screen',
-      fromId: { in: screens.map((s) => s.id) },
       kind: 'relates',
-      toType: { in: ['task', 'requirement'] },
+      OR: [
+        { fromType: 'screen', fromId: { in: screenIds }, toType: { in: ['task', 'requirement'] } },
+        { toType: 'screen', toId: { in: screenIds }, fromType: { in: ['task', 'requirement'] } },
+      ],
     },
-    select: { fromId: true, toType: true, toId: true },
+    select: { fromType: true, fromId: true, toType: true, toId: true },
   });
+  const links = rows.map((r) =>
+    r.fromType === 'screen'
+      ? { screenId: r.fromId, otherType: r.toType, otherId: r.toId }
+      : { screenId: r.toId, otherType: r.fromType, otherId: r.fromId },
+  );
   const [tasks, requirements] = await Promise.all([
     db.task.findMany({
-      where: { id: { in: links.filter((l) => l.toType === 'task').map((l) => l.toId) }, deletedAt: null },
+      where: {
+        id: { in: links.filter((l) => l.otherType === 'task').map((l) => l.otherId) },
+        deletedAt: null,
+      },
       select: { id: true, phaseId: true, status: true },
     }),
     db.requirement.findMany({
       where: {
-        id: { in: links.filter((l) => l.toType === 'requirement').map((l) => l.toId) },
+        id: { in: links.filter((l) => l.otherType === 'requirement').map((l) => l.otherId) },
         deletedAt: null,
       },
       select: { id: true, phaseId: true },
@@ -331,14 +344,14 @@ export async function screenStates(
     const phaseIds = new Set<string>();
     const taskStatuses: TaskStatus[] = [];
     for (const l of links) {
-      if (l.fromId !== screen.id) continue;
-      if (l.toType === 'task') {
-        const task = taskById.get(l.toId);
+      if (l.screenId !== screen.id) continue;
+      if (l.otherType === 'task') {
+        const task = taskById.get(l.otherId);
         if (task === undefined) continue;
         taskStatuses.push(task.status);
         if (task.phaseId !== null) phaseIds.add(task.phaseId);
       } else {
-        const phaseId = requirementById.get(l.toId)?.phaseId;
+        const phaseId = requirementById.get(l.otherId)?.phaseId;
         if (phaseId !== null && phaseId !== undefined) phaseIds.add(phaseId);
       }
     }
