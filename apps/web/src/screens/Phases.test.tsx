@@ -30,4 +30,27 @@ describe('a phase card', () => {
     );
     expect(html).toContain('No tasks');
   });
+
+  it('shows the server status word for word, neutral for complete, never green', () => {
+    const complete = renderToStaticMarkup(
+      <PhaseCard counted={{ phase: { ...phase, status: 'complete' }, done: 8, cancelled: 0, total: 8 }} code="BND" />,
+    );
+    expect(complete).toContain('>complete<');
+    expect(complete).toContain('d3-bdg--neutral');
+    expect(complete).not.toContain('success');
+  });
+
+  it('shows a neutral "no exit demo" chip linking to drift, and none when there is one', () => {
+    const without = renderToStaticMarkup(
+      <PhaseCard counted={{ phase: { ...phase, exitDemo: null }, done: 1, cancelled: 0, total: 2 }} code="BND" />,
+    );
+    expect(without).toContain('no exit demo');
+    expect(without).toContain('href="/projects/BND/drift"');
+    expect(without).not.toContain('d3-bdg--warning');
+
+    const withDemo = renderToStaticMarkup(
+      <PhaseCard counted={{ phase, done: 1, cancelled: 0, total: 2 }} code="BND" />,
+    );
+    expect(withDemo).not.toContain('no exit demo');
+  });
 });

@@ -1,5 +1,6 @@
 import {
-  Alert,
+  Badge,
+  Card,
   Cluster,
   EmptyState,
   Grid,
@@ -14,13 +15,14 @@ import { ProjectHeader } from '../components/ProjectHeader';
 import { plainText } from '../lib/text';
 import { SegmentBar, StatCard } from '../ui/viz';
 import { SERIES } from '../ui/tone';
+import { measurable, readCount } from '../ui/status';
 
 /**
  * S-23 — drift: where the plan and reality have come apart (FRM-REQ-126).
  *
- * **Designed as a success state.** An empty drift screen is the thing to aim for, so the empty
- * state here reads as an achievement rather than as a screen that failed to load — which is the
- * usual accident when "no results" is written once for every table in an app.
+ * **Three honest states** (FRM-REQ-241). Drift found needs you; every check run and nothing found is
+ * "0 drift", neutral — a healthy screen is not coloured; and a project with no plan has nothing to
+ * compare, so its six checks did not run and the screen says so rather than reporting "No drift".
  */
 
 export const CATEGORIES: {
@@ -67,6 +69,16 @@ export const CATEGORIES: {
   },
 ];
 
+/** What each check needs before it can run — said when it did not (FRM-REQ-241). */
+const NEEDS: Record<DriftItem['category'], string> = {
+  'coverage-hole': 'Needs requirements or tasks.',
+  'stale-task': 'Needs tasks.',
+  'fired-tripwire': 'Needs risks with a tripwire.',
+  'failed-exit-gate': 'Needs a completed phase.',
+  'orphan-adr': 'Needs accepted decisions.',
+  'screen-drift': 'Needs registered screens.',
+};
+
 /** Where a drifting entity lives, so a row is a link rather than an instruction to go looking. */
 function hrefFor(code: string, item: DriftItem): string {
   switch (item.category) {
@@ -89,8 +101,11 @@ function hrefFor(code: string, item: DriftItem): string {
 
 export function DriftView({ code }: { code: string }) {
   const { state } = useAsync(() => foreman.drift(code), [code]);
+  // What the plan lets the checks measure. If the project row fails the checks are taken as having
+  // run: the drift figures are the engine's own, and a missing row is not evidence of no plan.
+  const project = useAsync(() => foreman.project(code), [code]);
 
-  if (state.status === 'loading') {
+  if (state.status === 'loading' || project.state.status === 'loading') {
     return (
       <Page>
         <Skeleton lines={8} />
@@ -109,6 +124,8 @@ export function DriftView({ code }: { code: string }) {
   }
 
   const drift = state.value;
+  const planned =
+    project.state.status === 'ready' ? measurable(project.state.value.counts).hasPlan : true;
 
   return (
     <Page>
@@ -118,11 +135,50 @@ export function DriftView({ code }: { code: string }) {
         description="Where the plan and what is actually true have come apart."
       />
 
-      {drift.total === 0 ? (
-        <Alert tone="success" title="No drift">
-          Every Must has a task, nothing is stale, no tripwire has fired, every completed phase
-          would still pass its gate, and every accepted decision is cited.
-        </Alert>
+      {drift.total === 0 && !planned ? (
+        <Card padding="md">
+          <Stack gap="12">
+            <Cluster gap="8" align="center">
+              <h2 className="fm-subheading">Not measurable yet</h2>
+              <Badge tone="neutral" size="sm">
+                not measurable yet
+              </Badge>
+            </Cluster>
+            <span className="fm-muted">
+              No phases, tasks or requirements are recorded, so none of the six drift checks can run on
+              this project. Each needs something that is not recorded yet.
+            </span>
+            <ul className="fm-unmeasured__checks">
+              {CATEGORIES.map((category) => (
+                <li key={category.key} className="fm-unmeasured__check">
+                  <span>
+                    <strong>{category.label}</strong>{' '}
+                    <span className="fm-muted">{NEEDS[category.key]}</span>
+                  </span>
+                  <Badge tone="neutral" size="sm">
+                    did not run
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          </Stack>
+        </Card>
+      ) : drift.total === 0 ? (
+        <Card padding="md">
+          <Stack gap="8">
+            <Cluster gap="8" align="center">
+              <h2 className="fm-subheading">0 drift</h2>
+              <Badge tone="neutral" size="sm">
+                clean
+              </Badge>
+            </Cluster>
+            <span className="fm-muted">
+              All six checks ran and found nothing: every Must has a task, nothing is stale, no
+              tripwire has fired, every completed phase would still pass its gate, and every accepted
+              decision is cited.
+            </span>
+          </Stack>
+        </Card>
       ) : (
         <Stack gap="24">
           {/* The five kinds, as five figures. A count of zero is still drawn: "no stale tasks" is
@@ -136,7 +192,7 @@ export function DriftView({ code }: { code: string }) {
                   key={category.key}
                   label={category.label}
                   value={value}
-                  tone={value === 0 ? 'success' : 'warning'}
+                  signal={readCount(value, { measured: planned })}
                   detail={category.blurb}
                 />
               );
