@@ -1,5 +1,6 @@
 import type { GroupAccent, ScopedGuidelineSummary } from '@foreman/shared';
-import type { Db, Prisma } from '../db.js';
+import type { Db } from '../db.js';
+import { READY } from './brief.js';
 import { phaseInFlight } from './wherewestand.js';
 import { driftFor, type DriftCategory } from './drift.js';
 import { listGroups } from './groups.js';
@@ -72,15 +73,6 @@ export function ciStateOf(ci: { conclusion: string | null; unknown: boolean }): 
   if (ci.unknown) return 'never';
   return ci.conclusion === 'failure' || ci.conclusion === 'timed_out' ? 'failing' : 'passing';
 }
-
-/**
- * A `todo` task is ready when nothing it depends on is unfinished — the brief's own `READY`
- * (FRM-REQ-179), written out here because that constant is not exported. `portfolio.test.ts`
- * asserts the two pick the same task, so a change to one that misses the other fails there.
- */
-const READY = {
-  dependsOn: { none: { dependsOn: { deletedAt: null, status: { notIn: ['done', 'cancelled'] } } } },
-} as const satisfies Prisma.TaskWhereInput;
 
 /** The first next task the brief would name for a project in `phaseId`, or null. */
 async function nextTaskFor(

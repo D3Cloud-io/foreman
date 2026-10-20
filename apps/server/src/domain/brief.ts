@@ -34,7 +34,7 @@ const RECENT_COMMITS = 3;
  * `in_progress` is deliberately not held back: someone started it, and the brief saying so is the
  * truth even when they started early.
  */
-const READY = {
+export const READY = {
   dependsOn: { none: { dependsOn: { deletedAt: null, status: { notIn: ['done', 'cancelled'] } } } },
 } as const satisfies Prisma.TaskWhereInput;
 
