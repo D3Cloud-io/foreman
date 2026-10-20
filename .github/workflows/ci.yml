@@ -286,10 +286,15 @@ jobs:
       - id: shipyard-labels
         name: Compute Shipyard labels from the HEAD commit's trailer
         run: bash scripts/shipyard-labels.sh | tee -a "$GITHUB_OUTPUT"
+      # Image names must be lowercase and the owner is not (D3Cloud-io, GL-006), so the base is
+      # computed once here rather than written from github.repository in two places.
+      - id: base
+        name: Lowercase the image base
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}/${{ matrix.app }}" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
-          images: ghcr.io/${{ github.repository }}/${{ matrix.app }}
+          images: ${{ steps.base.outputs.image }}
           tags: |
             type=sha,format=long
             type=raw,value=latest
@@ -310,7 +315,7 @@ jobs:
       - name: Verify the pushed image carries both Shipyard labels
         run: |
           set -euo pipefail
-          image="ghcr.io/${{ github.repository }}/${{ matrix.app }}:sha-${{ github.sha }}"
+          image="${{ steps.base.outputs.image }}:sha-${{ github.sha }}"
           labels="$(docker buildx imagetools inspect "$image" --format '{{json .Image}}' | jq '.config.Labels')"
           echo "$labels" | jq -e --arg v "${{ steps.shipyard-labels.outputs.migration }}" \
             '.["dev.d3cloud.shipyard.migration"] == $v' > /dev/null

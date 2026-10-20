@@ -41,10 +41,16 @@ openssl rand -base64 32   # COOKIE_KEYS
 #      CURRENCY=USD
 ```
 
-The live one is `/DATA/foreman-board` on the Zima, at `board.d3cloud.io`, with its own Postgres
-container, its own volume, its own tunnel and its own secrets — sharing nothing with
-`/DATA/foreman`. Its compose project name is `foreman-board`, so every command needs
-`-p foreman-board`.
+> [!note] No board deployment is live
+> The one board that ran — `/DATA/foreman-board` at `board.d3cloud.io`, which only ever held
+> example data — was retired on 2026-10-07 (FRM-T-015). Its final dump is
+> `/DATA/Backup/foreman-board-final-2026-10-07.dump`; its directory, tunnel and Shipyard manifest
+> are gone. The `foreman` Shipyard group's canary is now `foreman-asksage`, a second **solo**
+> instance. The work innovation board went on as its own product, Overflow (OVF).
+
+A board stood up again would follow the same shape: its own directory, Postgres container, volume,
+tunnel and secrets, sharing nothing with `/DATA/foreman`, and its own compose project name so every
+command needs `-p <name>`.
 
 Migrations run on boot, before the server serves.
 
