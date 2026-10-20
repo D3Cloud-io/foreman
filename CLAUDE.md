@@ -33,7 +33,7 @@ packages/shared        domain types + generated API client + EARS parser — the
                        source of truth for every entity shape
 packages/mcp           @d3cloud/foreman-mcp — publishable stdio shim
 fixtures/vault         real vault files copied in, for golden importer tests
-docs/runbooks          deploy, backup-restore, github-app-setup, import
+docs/runbooks          deploy, backup-restore, github-app-setup, import, reconcile
 ```
 
 ## Commands (once scaffolded per Phase 0)
@@ -51,6 +51,10 @@ pnpm --filter foreman-server run import -- --path "../D3 Cloud Vault" --only "<F
 pnpm --filter foreman-server run reconcile-status -- --write
 # Derives phase status from tasks and project lifecycle from phases over data written before the
 # rollup existed (ADR-018). Reports by default; promotes only, and lists closed phases it held.
+pnpm --filter foreman-server run reconcile-coverage -- --write
+# Removes task_requirement rows a relates/violates link wrote before FRM-T-11.3 (no satisfies backs
+# them), and the extends relations and relates twins old ADR links left. Reports by default; keeps
+# and lists anything the audit trail cannot prove. docs/runbooks/reconcile.md.
 pnpm --filter foreman-server run relint -- --write
 # Re-runs the EARS lint over requirements already stored. The importer did not lint until
 # 2026-09-20, so everything it wrote sat on the column defaults — unparsed, not ok, no note.
