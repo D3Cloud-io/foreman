@@ -1,0 +1,121 @@
+/* The command palette and its shortcut sheet (FRM-T-18.5, board D-05). Tokens only (d3-check-usage).
+   The panel itself is @d3cloud/ui's CommandPalette; this file adds what the console puts around it:
+   the phone's full-screen layout, the top bar's search button, and the sheet's key list. */
+
+/* ─── Phone: the palette fills the screen ─────────────────────────────── */
+
+.fm-palette__hints {
+  display: contents;
+}
+.fm-palette__close {
+  display: none;
+}
+
+@media (max-width: 1023.98px) {
+  .fm-palette {
+    top: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    margin: 0;
+    border-radius: 0;
+  }
+  .fm-palette .d3-cmd__results {
+    flex: 1;
+    min-height: 0;
+  }
+  .fm-palette .d3-cmd__opt {
+    min-height: 44px;
+  }
+  /* A phone has no ⌘ or Escape: the hints give way to a button that closes it. */
+  .fm-palette__hints {
+    display: none;
+  }
+  .fm-palette__close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    margin-left: auto;
+    padding: 0 var(--space-12);
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-accent);
+    font: inherit;
+    font-size: var(--text-14);
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+  }
+  .fm-palette__close:focus-visible {
+    outline: var(--focus-width) solid var(--color-focus);
+    outline-offset: var(--focus-offset);
+  }
+}
+
+/* ─── The top bar's search button (below 1024px) ──────────────────────── */
+
+.fm-topbar-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-left: auto;
+  min-width: 0;
+}
+.fm-topbar-search {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg);
+  cursor: pointer;
+}
+.fm-topbar-search:hover {
+  background: var(--color-surface-hover);
+}
+.fm-topbar-search:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
+}
+
+/* ─── The "?" sheet ───────────────────────────────────────────────────── */
+
+.fm-shortcuts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+}
+.fm-shortcuts__group {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fm-shortcuts__title {
+  margin: 0 0 var(--space-6);
+  color: var(--color-fg-muted);
+  font-size: var(--text-11);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+}
+.fm-shortcuts__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  min-height: 2rem;
+  font-size: var(--text-13);
+}
+.fm-shortcuts__keys {
+  display: inline-flex;
+  gap: var(--space-2);
+  flex: none;
+  min-width: 5rem;
+}

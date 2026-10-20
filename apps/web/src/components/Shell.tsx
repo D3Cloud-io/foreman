@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
   AccountMenu,
   AppShell,
@@ -26,6 +26,7 @@ import {
   MonitorSmartphone,
   Radar,
   ScrollText,
+  Search as SearchIcon,
   ShieldAlert,
   SquareStack,
   Table2,
@@ -44,12 +45,15 @@ import {
   section,
 } from '../lib/project';
 import { navigate, routeFor } from '../lib/router';
-import { isScopedPath, scopedHref, scopeOf, useScope } from '../lib/scope';
+import { useScope } from '../lib/scope';
+import { dialogIsOpen, IS_MAC, isPaletteChord, shortcutFor } from '../lib/shortcuts';
 import { useAsync } from '../lib/useAsync';
+import { CommandPalette } from './CommandPalette';
 import { HealthLine } from './HealthLine';
 import { NavDisclosure } from './NavDisclosure';
 import { NotFound } from './NotFound';
 import { ScopeSwitcher } from './ScopeSwitcher';
+import { ShortcutSheet } from './ShortcutSheet';
 import { needsYou, useShellSignals } from './shellSignals';
 
 /**
@@ -118,47 +122,38 @@ function useProject(path: string): ProjectState {
   return { status: 'known', code: claimed, name: state.value.project.name };
 }
 
-const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent);
-
 /**
- * Whether ⌘K may take the person away from where they are. Not while a dialog is open — an Edit
- * form, a confirmation, the phone's drawer — since navigating would throw away what is in it; and
- * not from a multi-line field or an editable region anywhere, which is where an unsaved draft
- * lives (the idea canvas edits in place, outside any dialog).
+ * The console's keys (FRM-REQ-244): ⌘K (Ctrl K elsewhere) and `/` open the command palette, `?`
+ * opens the shortcut sheet — from anywhere in the console, and the rules for when are
+ * `lib/shortcuts.ts`'s `shortcutFor`. Not while a dialog is open, since navigating would throw away
+ * what is in it; `/` and `?` never from a text field, where they are characters; ⌘K from a
+ * single-line field, but not from a multi-line one or an editable region, which is where an unsaved
+ * draft lives. ⌘K with the palette already open closes it.
+ *
+ * Search keeps its row and its page: the palette's ⌘↵ is that page, for the same query.
  */
-function shortcutMayLeave(target: EventTarget | null): boolean {
-  if (document.querySelector('[role="dialog"], [role="alertdialog"], dialog[open]') !== null) return false;
-  if (!(target instanceof HTMLElement)) return true;
-  return !(target instanceof HTMLTextAreaElement || target.isContentEditable);
-}
-
-/**
- * ⌘K (Ctrl K elsewhere) goes to Search and puts the cursor in it, from anywhere in the console —
- * the shortcut the sidebar's Search row shows. Foreman has no command palette; Search is the screen
- * that finds anything by ID or by words, so the key goes there rather than to a second way of doing
- * the same thing.
- */
-function useSearchShortcut(): void {
+function useShortcuts(paletteOpen: boolean, setPaletteOpen: (open: boolean) => void, openSheet: () => void): void {
+  // Read by the listener, which is bound once.
+  const open = useRef(paletteOpen);
+  open.current = paletteOpen;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== 'k' || event.altKey || event.shiftKey) return;
-      // The platform's own modifier only: on a Mac, Control-K in a text field deletes to the end of
-      // the line, and taking it would break that.
-      if (!(IS_MAC ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return;
-      if (event.defaultPrevented || !shortcutMayLeave(event.target)) return;
+      if (open.current && isPaletteChord(event, IS_MAC) && !event.defaultPrevented) {
+        event.preventDefault();
+        setPaletteOpen(false);
+        return;
+      }
+      const action = shortcutFor(event, { mac: IS_MAC, dialogOpen: dialogIsOpen(document) });
+      if (action === null) return;
       event.preventDefault();
-      // In the scope you are in, as the sidebar's Search row is (FRM-T-17.4).
-      const { pathname, search } = window.location;
-      if (pathname !== '/search') navigate(scopedHref('/search', isScopedPath(pathname) ? scopeOf(search) : null));
-      window.setTimeout(() => {
-        document.querySelector<HTMLInputElement>('main input')?.focus();
-      }, 0);
+      if (action === 'palette') setPaletteOpen(true);
+      else openSheet();
     };
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
     };
-  }, []);
+  }, [setPaletteOpen, openSheet]);
 }
 
 export function Shell({
@@ -181,7 +176,12 @@ export function Shell({
   const project = useProject(path);
   const code = project.status === 'known' ? project.code : null;
   const signals = useShellSignals(path, code);
-  useSearchShortcut();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const openSheet = useCallback(() => {
+    setSheetOpen(true);
+  }, []);
+  useShortcuts(paletteOpen, setPaletteOpen, openSheet);
 
   // countLabel replaces a link's whole accessible name, so it says where the link goes as well.
   const criticals = needsYou(signals.criticals, (n) => `Findings, ${String(n)} open critical`);
@@ -212,7 +212,12 @@ export function Shell({
       brand={
         <>
           <AppShellBrand name="Foreman" href={link('/')} mark={<ForemanMark decorative className="fm-brand-mark" />} />
-          <TopBarScope wide={wide} />
+          <TopBarScope
+            wide={wide}
+            onSearch={() => {
+              setPaletteOpen(true);
+            }}
+          />
         </>
       }
       nav={
@@ -297,6 +302,9 @@ export function Shell({
           </TabBar>
         </>
       )}
+      {/* Dialogs, portalled to the body: here only so they live and die with the shell. */}
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} nav={nav} />
+      <ShortcutSheet open={sheetOpen} onOpenChange={setSheetOpen} />
     </AppShell>
   );
 }
@@ -315,16 +323,22 @@ function ScopeSlot(): ReactNode {
 }
 
 /**
- * The phone's top bar, beside the brand: the scope chip, opening its bottom sheet (FRM-T-17.4).
- * The brand is drawn in the top bar and again at the head of the drawer; the drawer already has
- * the sidebar's switcher, so the chip stands in the top bar only.
+ * The phone's top bar, beside the brand: the scope chip, opening its bottom sheet (FRM-T-17.4), and
+ * a search button opening the command palette full-screen (FRM-T-18.5) — a 44px target, since a
+ * phone has no ⌘K. The brand is drawn in the top bar and again at the head of the drawer; the drawer
+ * already has the sidebar's switcher, so both stand in the top bar only.
  */
-function TopBarScope({ wide }: { wide: boolean }): ReactNode {
+function TopBarScope({ wide, onSearch }: { wide: boolean; onSearch: () => void }): ReactNode {
   const { drawer } = useAppShell();
   if (wide || drawer) return null;
   return (
-    <div className="fm-scope-topbar">
-      <ScopeSwitcher presentation="sheet" />
+    <div className="fm-topbar-tools">
+      <div className="fm-scope-topbar">
+        <ScopeSwitcher presentation="sheet" />
+      </div>
+      <button type="button" className="fm-topbar-search" aria-label="Search" aria-haspopup="dialog" onClick={onSearch}>
+        <SearchIcon aria-hidden="true" />
+      </button>
     </div>
   );
 }
