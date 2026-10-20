@@ -19,7 +19,10 @@ import { marked, type Token, type Tokens } from 'marked';
  */
 
 /** The schemes a link in a title or cell may use; anything else renders as its text. */
-const SAFE_HREF = /^(https?:|mailto:|\/(?!\/)|#)/i;
+const SAFE_HREF = /^(https?:|mailto:|\/(?![/\\])|#)/i;
+/** Control characters and backslashes: browsers drop or rewrite them, so `/\evil.com` and `/<tab>/evil.com` become `//evil.com`. */
+// eslint-disable-next-line no-control-regex
+const UNSAFE_CHARS = /[\u0000-\u001f\u007f\\]/;
 
 function render(tokens: readonly Token[], keyPrefix: string): ReactNode[] {
   return tokens.map((token, index) => {
@@ -38,7 +41,7 @@ function render(tokens: readonly Token[], keyPrefix: string): ReactNode[] {
       case 'link': {
         const link = token as Tokens.Link;
         const inner = render(link.tokens, key);
-        if (!SAFE_HREF.test(link.href)) return <Fragment key={key}>{inner}</Fragment>;
+        if (!SAFE_HREF.test(link.href) || UNSAFE_CHARS.test(link.href)) return <Fragment key={key}>{inner}</Fragment>;
         const external = /^https?:/i.test(link.href);
         return (
           <a

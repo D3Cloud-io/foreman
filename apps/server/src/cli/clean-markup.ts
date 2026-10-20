@@ -2,6 +2,8 @@ import type { EntityType } from '../generated/prisma/enums.js';
 import { loadConfig } from '../config.js';
 import { createDb, type Db } from '../db.js';
 import { record, type TransactionClient } from '../domain/audit.js';
+import { updateDocument, updateSection } from '../domain/documents.js';
+import { syncCitations } from '../domain/references.js';
 import { planRow, type FieldChange, type FieldSpec } from './clean-markup-rules.js';
 
 /**
@@ -36,6 +38,15 @@ import { planRow, type FieldChange, type FieldSpec } from './clean-markup-rules.
  *   - *markdown bodies* — glossary definitions, section bodies, task bodies, ADR sections. They are
  *     rendered as Markdown, so `**x**` and backticks are meaning and stay. Only a complete wiki link
  *     (which no renderer understands) is rewritten, and never inside a code span or fence.
+ *
+ * **Not guessed at**: a risk cell the importer split at an escaped pipe (a trailing backslash, a tail
+ * that starts mid-parenthesis, an unclosed `[[`) is listed under "needs a person" with its ID and
+ * field, and left exactly as it is.
+ *
+ * **Documents keep their history**: a section or document title is rewritten through the domain's
+ * own `updateSection` / `updateDocument`, so the document's version moves, a revision is written
+ * (note `clean-markup`), citations are re-read and the audit event is the API's own. Risk, term and
+ * ADR edits re-sync citations as their API writes do.
  *
  * A glossary term whose cleaned name already exists in the same scope is not renamed: the pair is
  * listed as kept, for a person to merge. A field that would become empty is left as it is.
@@ -77,18 +88,51 @@ interface Target {
   readonly hasHumanId: boolean;
   /** Narrows to one project; null when the kind belongs to no project, so `--project` skips it. */
   readonly inProject: ((code: string) => Record<string, unknown>) | null;
+  /** Columns read besides the fields, human ID and id. */
+  readonly extraSelect?: readonly string[];
+  /** The prose `cites` references are read from, for the kinds whose API write re-syncs them. */
+  readonly citations?: (row: Record<string, unknown>) => string;
+  /**
+   * The kind's own write path, when it has one that keeps more than a row and an event: a document
+   * and its sections carry a version and a revision history. Used instead of the generic update.
+   */
+  readonly viaDomain?: (row: Row, data: Record<string, unknown>) => Promise<void>;
 }
 
 const plain = (...names: string[]): FieldSpec[] => names.map((name) => ({ name, kind: 'plain' }));
+const cells = (...names: string[]): FieldSpec[] => names.map((name) => ({ name, kind: 'plain', cell: true }));
 const markdown = (...names: string[]): FieldSpec[] => names.map((name) => ({ name, kind: 'markdown' }));
 const byProject = (code: string) => ({ project: { code } });
 
+/** Joined as the ADR write path joins them, so the citations match what an API edit would leave. */
+const adrProse = (row: Record<string, unknown>): string =>
+  ['decisionAbstract', 'contextMd', 'decisionMd', 'consequencesMd', 'rejectedMd']
+    .map((name) => row[name])
+    .filter((part): part is string => typeof part === 'string')
+    .join('\n\n');
+
 const TARGETS: readonly Target[] = [
-  { type: 'task', label: 'task', delegate: (d) => d.task, fields: [...plain('title'), ...markdown('body')], hasHumanId: true, inProject: byProject },
-  { type: 'adr', label: 'adr', delegate: (d) => d.adr, fields: [...plain('title'), ...markdown('contextMd', 'decisionMd', 'consequencesMd', 'rejectedMd')], hasHumanId: true, inProject: byProject },
-  { type: 'requirement', label: 'requirement', delegate: (d) => d.requirement, fields: plain('statement'), hasHumanId: true, inProject: byProject },
-  { type: 'phase', label: 'phase', delegate: (d) => d.phase, fields: plain('name'), hasHumanId: true, inProject: byProject },
-  { type: 'risk', label: 'risk', delegate: (d) => d.risk, fields: plain('title', 'mitigation', 'tripwire'), hasHumanId: true, inProject: byProject },
+  { type: 'task', label: 'task', delegate: (d) => d.task, fields: [...plain('title', 'doneWhen'), ...markdown('body')], hasHumanId: true, inProject: byProject },
+  {
+    type: 'adr',
+    label: 'adr',
+    delegate: (d) => d.adr,
+    fields: [...plain('title'), ...markdown('decisionAbstract', 'contextMd', 'decisionMd', 'consequencesMd', 'rejectedMd')],
+    hasHumanId: true,
+    inProject: byProject,
+    citations: adrProse,
+  },
+  { type: 'requirement', label: 'requirement', delegate: (d) => d.requirement, fields: plain('statement', 'acceptanceTest'), hasHumanId: true, inProject: byProject },
+  { type: 'phase', label: 'phase', delegate: (d) => d.phase, fields: plain('name', 'objective', 'exitDemo'), hasHumanId: true, inProject: byProject },
+  {
+    type: 'risk',
+    label: 'risk',
+    delegate: (d) => d.risk,
+    fields: [...plain('title'), ...cells('mitigation', 'tripwire')],
+    hasHumanId: true,
+    inProject: byProject,
+    citations: (row) => `${str(row['mitigation'])}\n${str(row['tripwire'])}`,
+  },
   { type: 'idea', label: 'idea', delegate: (d) => d.idea, fields: plain('title'), hasHumanId: true, inProject: byProject },
   { type: 'finding', label: 'finding', delegate: (d) => d.finding, fields: plain('title'), hasHumanId: true, inProject: byProject },
   {
@@ -98,8 +142,21 @@ const TARGETS: readonly Target[] = [
     fields: [...plain('term'), { name: 'aliases', kind: 'plain-list' }, ...markdown('definition')],
     hasHumanId: false,
     inProject: byProject,
+    extraSelect: ['projectId'],
+    citations: (row) => str(row['definition']),
   },
-  { type: 'document', label: 'document', delegate: (d) => d.document, fields: plain('title'), hasHumanId: false, inProject: byProject },
+  {
+    type: 'document',
+    label: 'document',
+    delegate: (d) => d.document,
+    fields: plain('title'),
+    hasHumanId: false,
+    inProject: byProject,
+    // The API's own update: the title change writes a revision, as an edit from the console does.
+    viaDomain: async (row, data) => {
+      await updateDocument(db, ACTOR, row.id, { title: str(data['title']) });
+    },
+  },
   {
     type: 'document_section',
     label: 'section',
@@ -107,6 +164,16 @@ const TARGETS: readonly Target[] = [
     fields: [...plain('heading'), ...markdown('bodyMd')],
     hasHumanId: false,
     inProject: (code) => ({ document: { project: { code } } }),
+    extraSelect: ['documentId', 'key'],
+    // The API's own section write: it moves the document's version, writes the revision with its
+    // note, re-reads citations and records the audit event - none of which a bare update does.
+    viaDomain: async (row, data) => {
+      await updateSection(db, ACTOR, str(row['documentId']), str(row['key']), {
+        bodyMd: str(data['bodyMd'] ?? row['bodyMd']),
+        ...(typeof data['heading'] === 'string' ? { heading: data['heading'] } : {}),
+        note: 'clean-markup',
+      });
+    },
   },
 ];
 
@@ -134,6 +201,7 @@ try {
   let keptRows = 0;
   let substitutionCount = 0;
   const byRule = new Map<string, number>();
+  const needsPerson: { id: string; field: string; reason: string; text: string }[] = [];
 
   process.stdout.write(`clean-markup${only === undefined ? '' : ` --project ${only}`}${write ? ' --write' : ''}\n`);
 
@@ -142,7 +210,7 @@ try {
     const select: Record<string, boolean> = { id: true };
     if (target.hasHumanId) select['humanId'] = true;
     for (const field of target.fields) select[field.name] = true;
-    if (target.type === 'term') select['projectId'] = true;
+    for (const extra of target.extraSelect ?? []) select[extra] = true;
     const rows = await target.delegate(db).findMany({
       where: { deletedAt: null, ...(only === undefined || target.inProject === null ? {} : target.inProject(only)) },
       select,
@@ -159,8 +227,8 @@ try {
 
     const planned: Planned[] = [];
     for (const row of rows) {
-      const changes = planRow(row, target.fields);
-      if (changes === null) continue;
+      const { changes, review } = planRow(row, target.fields);
+      if (changes.length === 0 && review.length === 0) continue;
       const name = target.hasHumanId ? String(row.humanId) : String(row[target.fields[0]?.name ?? 'id']);
       let kept: string | undefined;
       const renamed = changes.find((change) => target.type === 'term' && change.field === 'term');
@@ -173,7 +241,8 @@ try {
           claimed.delete(`${scope}\u0000${String(renamed.before)}`);
         }
       }
-      planned.push({ row, changes, name, ...(kept === undefined ? {} : { kept }) });
+      for (const note of review) needsPerson.push({ id: target.hasHumanId ? name : `${target.label} ${clip(name, 40)}`, ...note });
+      if (changes.length > 0) planned.push({ row, changes, name, ...(kept === undefined ? {} : { kept }) });
     }
     if (planned.length === 0) continue;
 
@@ -199,8 +268,13 @@ try {
 
       const data = Object.fromEntries(changes.map((change) => [change.field, change.after]));
       const before = Object.fromEntries(changes.map((change) => [change.field, change.before]));
+      if (target.viaDomain !== undefined) {
+        await target.viaDomain(row, data);
+        continue;
+      }
       await db.$transaction(async (tx) => {
-        await target.delegate(tx).update({ where: { id: row.id }, data });
+        const updated = (await target.delegate(tx).update({ where: { id: row.id }, data })) as Record<string, unknown>;
+        if (target.citations !== undefined) await syncCitations(tx, target.type, row.id, target.citations(updated));
         // Every mutation writes an audit event, the CLI's included (FRM-REQ-136). `before` carries
         // only the fields this changed, which is all an undo needs to put back.
         await record(tx, {
@@ -217,11 +291,18 @@ try {
     }
   }
 
+  if (needsPerson.length > 0) {
+    process.stdout.write(`\nneeds a person: ${String(needsPerson.length)} cell(s), left unchanged\n`);
+    for (const note of needsPerson) {
+      process.stdout.write(`  ${note.id}  ${note.field}: ${note.reason}\n    ${clip(note.text, 120)}\n`);
+    }
+  }
+
   const rules = [...byRule.entries()].map(([rule, count]) => `${rule} ${String(count)}`).join(', ');
   process.stdout.write(
     `\n${String(changedRows)} row(s) ${write ? 'cleaned' : 'would be cleaned'}, ${String(substitutionCount)} substitution(s)` +
       (rules === '' ? '' : ` (${rules})`) +
-      `${keptRows === 0 ? '' : `; ${String(keptRows)} kept for a person to resolve`}.\n` +
+      `${keptRows + needsPerson.length === 0 ? '' : `; ${String(keptRows + needsPerson.length)} left for a person`}.\n` +
       (changedRows === 0
         ? 'Nothing to do.\n'
         : write
