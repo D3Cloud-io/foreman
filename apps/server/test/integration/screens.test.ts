@@ -321,6 +321,31 @@ describe.skipIf(url === undefined)('screens', () => {
     expect(Buffer.from(await image.arrayBuffer()).equals(PROPOSAL_ONE)).toBe(true);
   });
 
+  it('records a new proposal when the same image and version arrive from a different node', async () => {
+    const sha256 = await upload(PROPOSAL_TWO);
+    const before = (await detail(first)).current.proposals.find(
+      (p) => p.viewport === 'desktop' && p.theme === 'dark',
+    );
+    const res = await post(`${screens}/${first}/proposals`, {
+      blobSha256: sha256,
+      viewport: 'desktop',
+      theme: 'dark',
+      ...FIGMA,
+      figmaNodeId: '999:1',
+      figmaFileVersion: '101',
+    });
+    expect(res.status, await res.clone().text()).toBe(201);
+    const created = (await res.json()) as Version;
+    expect(created.figmaNodeId).toBe('999:1');
+
+    const screen = await detail(first);
+    const desktopDark = screen.current.proposals.filter(
+      (p) => p.viewport === 'desktop' && p.theme === 'dark',
+    );
+    expect(desktopDark.map((p) => p.id)).toEqual([created.id]);
+    expect(screen.proposals.find((p) => p.id === before?.id)?.status).toBe('superseded');
+  });
+
   it('supersedes only within one viewport and theme', async () => {
     const sha256 = await upload(PROPOSAL_MOBILE);
     const res = await post(`${screens}/${first}/proposals`, {

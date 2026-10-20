@@ -425,7 +425,11 @@ export async function addProposal(
     if (
       current !== null &&
       current.blobSha256 === input.blobSha256 &&
-      current.figmaFileVersion === input.figmaFileVersion
+      current.figmaFileVersion === input.figmaFileVersion &&
+      // Provenance is the point of a proposal (FRM-REQ-192): the same image at the same version
+      // from a different frame or file is a different claim, and answering 200 would drop it.
+      current.figmaFileKey === input.figmaFileKey &&
+      current.figmaNodeId === input.figmaNodeId
     ) {
       return { value: versionOf(current), created: false };
     }
