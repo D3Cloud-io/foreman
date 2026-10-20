@@ -270,7 +270,7 @@ describe.skipIf(url === undefined)('audit event ids and history', () => {
       });
       expect(made.auditEventIds).toHaveLength(1);
       const changed = await send('PATCH', `/projects/${CODE}/requirements/${CODE}-REQ-001`, {
-        priority: 'must',
+        priority: 'M',
       });
       expect(changed.auditEventIds).toHaveLength(1);
       const deleted = idsOf(await remove(`/projects/${CODE}/requirements/${CODE}-REQ-001`));
@@ -286,8 +286,8 @@ describe.skipIf(url === undefined)('audit event ids and history', () => {
 
     it('limits the list', async () => {
       await send('POST', `/projects/${CODE}/requirements`, { statement: 'Foreman shall keep a history.' });
-      await send('PATCH', `/projects/${CODE}/requirements/${CODE}-REQ-001`, { priority: 'must' });
-      await send('PATCH', `/projects/${CODE}/requirements/${CODE}-REQ-001`, { priority: 'should' });
+      await send('PATCH', `/projects/${CODE}/requirements/${CODE}-REQ-001`, { priority: 'M' });
+      await send('PATCH', `/projects/${CODE}/requirements/${CODE}-REQ-001`, { priority: 'S' });
       expect(await history(`${CODE}-REQ-001`, 2)).toHaveLength(2);
       expect((await api(`/audit-events?entity=${CODE}-REQ-001&limit=0`)).status).toBe(400);
     });

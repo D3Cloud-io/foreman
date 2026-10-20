@@ -489,15 +489,15 @@ function refuseHeld(humanId: string, held: { projects: string[]; guidelines: str
  * Soft-delete an empty group (FRM-REQ-227). One that still holds projects is refused, naming
  * them; so is one a guideline is scoped to, because a guideline may never name a deleted group.
  */
-export async function deleteGroup(db: Db, actor: Actor, ref: string): Promise<void> {
-  await db.$transaction(async (tx) => {
+export async function deleteGroup(db: Db, actor: Actor, ref: string): Promise<string[]> {
+  return db.$transaction(async (tx) => {
     await lockGroups(tx);
     const found = await requireGroup(tx, ref);
     refuseHeld(found.humanId, await holdings(tx, found.id), 'deleted');
 
     const before = await tx.projectGroup.findUniqueOrThrow({ where: { id: found.id } });
     await tx.projectGroup.update({ where: { id: found.id }, data: { deletedAt: new Date() } });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'delete',
       entityType: 'group',
@@ -507,7 +507,9 @@ export async function deleteGroup(db: Db, actor: Actor, ref: string): Promise<vo
       after: { deleted: true },
     });
     // The groups below it close the gap, so positions stay 0..n-1.
-    await settleGroups(tx, actor, { cause: `${found.humanId} deleted` });
+    const shift = await settleGroups(tx, actor, { cause: `${found.humanId} deleted` });
+    // The delete's own event first, then the renumbering it caused (FRM-T-18.3).
+    return [event, ...(shift === null ? [] : [shift])];
   });
 }
 

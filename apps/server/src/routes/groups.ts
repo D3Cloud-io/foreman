@@ -19,6 +19,7 @@ import {
   updateGroup,
 } from '../domain/groups.js';
 import { actorOf, handler, param, parseBody } from './helpers.js';
+import { noContentWithEvents } from './undo.js';
 
 /**
  * Groups (FRM-ADR-024, FRM-REQ-221 … FRM-REQ-227). No project in the path, because a group has
@@ -93,8 +94,7 @@ export function groupRoutes(db: Db): Router {
     '/:id',
     canWrite,
     handler(async (req, res) => {
-      await deleteGroup(db, actorOf(req), param(req, 'id'));
-      res.status(204).end();
+      noContentWithEvents(res, await deleteGroup(db, actorOf(req), param(req, 'id')));
     }),
   );
 
