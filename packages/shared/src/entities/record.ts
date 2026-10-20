@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { checkGuidelineScope, GuidelineScopeFields } from './groups.js';
 import {
   AdrStatus,
   DocumentKind,
@@ -554,7 +555,7 @@ export type TermUpdate = z.infer<typeof TermUpdate>;
  * out. `decision` is the line a brief carries, so it is short by construction — the reasoning and
  * the detail live in the fields a session reads only when it needs them.
  */
-export const GuidelineCreate = z.object({
+const GuidelineFields = z.object({
   title: z.string().trim().min(1).max(200),
   /** A grouping on the page — "Design", "Security", "Process". Free text, so no migration adds one. */
   area: z.string().trim().min(1).max(40),
@@ -562,11 +563,19 @@ export const GuidelineCreate = z.object({
   rationale: z.string().max(20_000).optional(),
   guidance: z.string().max(20_000).optional(),
 });
+
+/**
+ * `appliesTo` and `groups` say where it applies (FRM-REQ-235, FRM-ADR-024): `'all'`, the default,
+ * or `'groups'` with the `GRP-` IDs of at least one live group.
+ */
+export const GuidelineCreate = GuidelineFields.extend(GuidelineScopeFields).superRefine(
+  checkGuidelineScope,
+);
 export type GuidelineCreate = z.infer<typeof GuidelineCreate>;
 
-export const GuidelineUpdate = GuidelineCreate.partial().extend({
-  status: GuidelineStatus.optional(),
-});
+export const GuidelineUpdate = GuidelineFields.partial()
+  .extend({ status: GuidelineStatus.optional(), ...GuidelineScopeFields })
+  .superRefine(checkGuidelineScope);
 export type GuidelineUpdate = z.infer<typeof GuidelineUpdate>;
 
 /** What a brief and the portfolio carry: enough to act on, and short enough to always include. */

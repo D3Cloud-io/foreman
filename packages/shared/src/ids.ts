@@ -45,6 +45,10 @@ export const ProjectCode = z
   // `GL` likewise: it prefixes guidelines, the ecosystem's standing decisions (FRM-REQ-186).
   .refine((code) => code !== GUIDELINE_PREFIX, {
     message: '`GL` is reserved: it prefixes guidelines, which belong to no project',
+  })
+  // `GRP` likewise: it prefixes groups, the families projects belong to (FRM-ADR-024).
+  .refine((code) => code !== GROUP_PREFIX, {
+    message: '`GRP` is reserved: it prefixes groups, which belong to no project',
   });
 export type ProjectCode = z.infer<typeof ProjectCode>;
 
@@ -90,6 +94,21 @@ export function formatGuidelineId(seq: number): string {
 }
 
 /**
+ * A **group** — a family of projects, D3 Cloud or Dormice (FRM-ADR-024, FRM-REQ-221) — is the
+ * third record no project owns, so it takes the same codeless shape: `GRP-001`.
+ */
+export const GROUP_PREFIX = 'GRP';
+
+export const GROUP_ID_RE = /^GRP-(\d+)$/;
+
+export const GroupId = z.string().regex(GROUP_ID_RE, 'expected GRP-<SEQ>, e.g. GRP-001');
+export type GroupId = z.infer<typeof GroupId>;
+
+export function formatGroupId(seq: number): string {
+  return `${GROUP_PREFIX}-${String(seq).padStart(3, '0')}`;
+}
+
+/**
  * Either kind of ID, for the places that take whatever a person typed — `/api/entities/:id`,
  * search, and the MCP verbs that address an entity by name.
  *
@@ -106,7 +125,10 @@ export function parseAnyId(
   if (m?.[1] !== undefined) return { code: null, type: PROJECT_IDEA_PREFIX, seq: m[1] };
 
   const g = GUIDELINE_ID_RE.exec(value.trim());
-  return g?.[1] === undefined ? null : { code: null, type: GUIDELINE_PREFIX, seq: g[1] };
+  if (g?.[1] !== undefined) return { code: null, type: GUIDELINE_PREFIX, seq: g[1] };
+
+  const grp = GROUP_ID_RE.exec(value.trim());
+  return grp?.[1] === undefined ? null : { code: null, type: GROUP_PREFIX, seq: grp[1] };
 }
 
 /**
@@ -118,7 +140,7 @@ export function parseAnyId(
  */
 export const AnyId = z
   .string()
-  .refine((value) => parseAnyId(value) !== null, 'expected <CODE>-<TYPE>-<SEQ>, PI-<SEQ> or GL-<SEQ>');
+  .refine((value) => parseAnyId(value) !== null, 'expected <CODE>-<TYPE>-<SEQ>, PI-<SEQ>, GL-<SEQ> or GRP-<SEQ>');
 export type AnyId = z.infer<typeof AnyId>;
 
 /**

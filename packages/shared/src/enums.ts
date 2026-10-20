@@ -85,6 +85,30 @@ export const IDEA_NEEDS_REASON: readonly IdeaStatus[] = ['parked', 'rejected'];
 export const GuidelineStatus = z.enum(['active', 'retired']);
 export type GuidelineStatus = z.infer<typeof GuidelineStatus>;
 
+/**
+ * Where a guideline applies (FRM-REQ-235): to every project — the default, and what every card
+ * written before groups existed does — or only to the projects in a chosen set of groups.
+ */
+export const GuidelineScope = z.enum(['all', 'groups']);
+export type GuidelineScope = z.infer<typeof GuidelineScope>;
+
+/**
+ * A group's accent (FRM-REQ-222): one of the design system's product accents by name, never a
+ * raw colour (d3-check-usage). `neutral` is the one that belongs to no product.
+ */
+export const GroupAccent = z.enum([
+  'foreman',
+  'shipyard',
+  'auth',
+  'bindery',
+  'ui',
+  'clearwhen',
+  'qr',
+  'floorspec',
+  'neutral',
+]);
+export type GroupAccent = z.infer<typeof GroupAccent>;
+
 export const ProjectIdeaStatus = z.enum([
   'new',
   'considering',
@@ -261,6 +285,8 @@ export const EntityType = z.enum([
   'screen_verdict',
   'screen_component',
   'build',
+  // A family of projects (FRM-ADR-024). Appended, so no stored value moves.
+  'group',
 ]);
 export type EntityType = z.infer<typeof EntityType>;
 

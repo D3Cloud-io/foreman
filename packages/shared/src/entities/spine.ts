@@ -9,6 +9,7 @@ import {
 } from '../enums.js';
 import { HumanId, ProjectCode } from '../ids.js';
 import { Instant, Timestamps, Uuid } from './common.js';
+import { GroupRef } from './groups.js';
 
 /**
  * The core spine: project, phase, requirement, task.
@@ -31,6 +32,10 @@ export const Project = z
     lifecycle: ProjectLifecycle,
     pitch: z.string().max(2000).nullable(),
     vaultPath: z.string().max(1000).nullable(),
+    /** The group it belongs to, or null for none (FRM-REQ-223). */
+    groupId: Uuid.nullable(),
+    /** Its place within its group, or among the ungrouped; ties are broken by code. */
+    groupPosition: z.number().int(),
   })
   .extend(Timestamps.shape);
 export type Project = z.infer<typeof Project>;
@@ -47,6 +52,11 @@ export const ProjectCreate = z.object({
   lifecycle: ProjectLifecycle.optional(),
   pitch: z.string().max(2000).optional(),
   vaultPath: z.string().max(1000).optional(),
+  /**
+   * The group the project belongs to — `GRP-001` or a slug — or null for none (FRM-REQ-223). It
+   * joins the end of that group's order; `POST /api/groups/:id/projects` places it anywhere.
+   */
+  group: GroupRef.nullable().optional(),
 });
 export type ProjectCreate = z.infer<typeof ProjectCreate>;
 
