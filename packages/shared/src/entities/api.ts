@@ -50,6 +50,8 @@ export const SearchInput = z.object({
   q: z.string().min(1).max(200).describe('What to look for'),
   types: z.array(SearchableType).optional().describe('Narrow to these kinds'),
   project: ProjectCode.optional().describe('Narrow to one project'),
+  // Narrow to one group, as `foreman_portfolio` does (FRM-ADR-024). Undescribed for the budget.
+  group: GroupArg.optional(),
   limit: z.number().int().min(1).max(100).default(30),
 });
 export type SearchInput = z.infer<typeof SearchInput>;

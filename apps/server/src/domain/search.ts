@@ -1,6 +1,7 @@
 import { SEARCHABLE_TYPES } from '@foreman/shared';
 import type { Db } from '../db.js';
 import type { EntityType } from '../generated/prisma/enums.js';
+import { codeFilter } from './scope.js';
 
 /**
  * Typed cross-entity search (FRM-REQ-085).
@@ -34,6 +35,12 @@ export interface SearchHit {
 export interface SearchOptions {
   readonly types?: readonly SearchableType[];
   readonly projectCode?: string;
+  /**
+   * The projects a scope admits (FRM-T-17.4), from `resolveScope`. Absent searches every project;
+   * present, a hit from any other project — or from none, like an unconverted project idea — is
+   * left out, the exact-ID answer included: a scoped search answers inside its scope or not at all.
+   */
+  readonly projectCodes?: readonly string[];
   readonly limit?: number;
 }
 
@@ -50,15 +57,33 @@ function snippet(text: string | null, query: string, width = 160): string | null
 }
 
 export async function search(db: Db, query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
+  return (await searchScoped(db, query, options)).hits;
+}
+
+/**
+ * A search, and — when a scope left it out — the exact-ID answer from outside the scope
+ * (FRM-T-17.4). A pasted `SC4SWI-CR-001` that exists in another group is not "nothing matches":
+ * the caller can say where it is and offer it, rather than leave somebody searching for a record
+ * the scope is hiding.
+ */
+export async function searchScoped(
+  db: Db,
+  query: string,
+  options: SearchOptions = {},
+): Promise<{ hits: SearchHit[]; outside: SearchHit | null }> {
   const q = query.trim();
-  if (q.length === 0) return [];
+  if (q.length === 0) return { hits: [], outside: null };
 
   const limit = Math.min(options.limit ?? DEFAULT_LIMIT, 100);
   const types = options.types ?? SEARCHABLE;
   const wants = (type: SearchableType) => types.includes(type);
   const contains = { contains: q, mode: 'insensitive' as const };
-  const project =
-    options.projectCode === undefined ? {} : { project: { code: options.projectCode } };
+  const narrowed = options.projectCode !== undefined || options.projectCodes !== undefined;
+  const codes = codeFilter(options.projectCodes, options.projectCode);
+  const project = narrowed ? { project: codes } : {};
+  const inScope = (hit: SearchHit) =>
+    options.projectCodes === undefined ||
+    (hit.projectCode !== null && options.projectCodes.includes(hit.projectCode));
   const perType = Math.max(3, Math.ceil(limit / Math.max(1, types.length)));
 
   const hits: SearchHit[] = [];
@@ -66,7 +91,8 @@ export async function search(db: Db, query: string, options: SearchOptions = {})
   // An exact human ID is the single most common search — somebody pasted an ID — so it is answered
   // first and never crowded out by a text match further down.
   const exact = await exactByHumanId(db, q);
-  if (exact !== null) hits.push(exact);
+  if (exact !== null && inScope(exact)) hits.push(exact);
+  const outside = exact !== null && !inScope(exact) ? exact : null;
 
   if (wants('requirement')) {
     const rows = await db.requirement.findMany({
@@ -167,9 +193,7 @@ export async function search(db: Db, query: string, options: SearchOptions = {})
       where: {
         deletedAt: null,
         OR: [{ heading: contains }, { bodyMd: contains }],
-        ...(options.projectCode === undefined
-          ? {}
-          : { document: { project: { code: options.projectCode } } }),
+        ...(narrowed ? { document: { project: codes } } : {}),
       },
       take: perType,
       include: {
@@ -190,7 +214,13 @@ export async function search(db: Db, query: string, options: SearchOptions = {})
 
   if (wants('term')) {
     const rows = await db.term.findMany({
-      where: { deletedAt: null, OR: [{ term: contains }, { definition: contains }] },
+      // Narrowed like the rest, except that an ecosystem-wide term (no project) belongs to every
+      // scope. Unnarrowed, a project-narrowed search used to list every project's terms.
+      where: {
+        deletedAt: null,
+        ...(narrowed ? { AND: [{ OR: [{ projectId: null }, { project: codes }] }] } : {}),
+        OR: [{ term: contains }, { definition: contains }],
+      },
       take: perType,
       include: { project: { select: { code: true } } },
     });
@@ -335,14 +365,17 @@ export async function search(db: Db, query: string, options: SearchOptions = {})
 
   // De-duplicate: an exact ID hit will usually also match its own type's text search.
   const seen = new Set<string>();
-  return hits
-    .filter((hit) => {
-      const key = `${hit.type}:${hit.humanId ?? hit.title}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, limit);
+  return {
+    hits: hits
+      .filter((hit) => {
+        const key = `${hit.type}:${hit.humanId ?? hit.title}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, limit),
+    outside,
+  };
 }
 
 /** Resolve an exact human ID across every entity that has one. */

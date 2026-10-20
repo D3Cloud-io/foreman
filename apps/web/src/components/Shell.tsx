@@ -10,6 +10,7 @@ import {
   SideNavItem,
   TabBar,
   ThemeSwitch,
+  useAppShell,
 } from '@d3cloud/ui';
 import {
   BookMarked,
@@ -43,10 +44,12 @@ import {
   section,
 } from '../lib/project';
 import { navigate, routeFor } from '../lib/router';
+import { isScopedPath, scopedHref, scopeOf, useScope } from '../lib/scope';
 import { useAsync } from '../lib/useAsync';
 import { HealthLine } from './HealthLine';
 import { NavDisclosure } from './NavDisclosure';
 import { NotFound } from './NotFound';
+import { ScopeSwitcher } from './ScopeSwitcher';
 import { needsYou, useShellSignals } from './shellSignals';
 
 /**
@@ -144,7 +147,9 @@ function useSearchShortcut(): void {
       if (!(IS_MAC ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return;
       if (event.defaultPrevented || !shortcutMayLeave(event.target)) return;
       event.preventDefault();
-      if (window.location.pathname !== '/search') navigate('/search');
+      // In the scope you are in, as the sidebar's Search row is (FRM-T-17.4).
+      const { pathname, search } = window.location;
+      if (pathname !== '/search') navigate(scopedHref('/search', isScopedPath(pathname) ? scopeOf(search) : null));
       window.setTimeout(() => {
         document.querySelector<HTMLInputElement>('main input')?.focus();
       }, 0);
@@ -170,6 +175,9 @@ export function Shell({
   children: ReactNode;
 }) {
   const wide = useWide();
+  // Every link to a scoped page carries the scope in its href (FRM-T-17.4) — Home, Projects,
+  // Findings, Search, the brand — so a new tab or a copied link keeps it; other links drop it.
+  const { link } = useScope();
   const project = useProject(path);
   const code = project.status === 'known' ? project.code : null;
   const signals = useShellSignals(path, code);
@@ -201,10 +209,15 @@ export function Shell({
   return (
     <AppShell
       storageKey="foreman.nav"
-      brand={<AppShellBrand name="Foreman" href="/" mark={<ForemanMark decorative className="fm-brand-mark" />} />}
+      brand={
+        <>
+          <AppShellBrand name="Foreman" href={link('/')} mark={<ForemanMark decorative className="fm-brand-mark" />} />
+          <TopBarScope wide={wide} />
+        </>
+      }
       nav={
         <>
-          <ScopeSlot path={path} />
+          <ScopeSlot />
           {wide ? (
             <SideNav>
               {/* The console's own rows. Titled for a screen reader, which hears the group's name
@@ -212,9 +225,9 @@ export function Shell({
               <SideNavGroup title="Foreman" hideTitle>
                 {globalItems(nav, code !== null).map((item) =>
                   item.to === SEARCH.to ? (
-                    <SearchRow key={item.to} item={item} path={path} />
+                    <SearchRow key={item.to} item={item} path={path} href={link(item.to)} />
                   ) : (
-                    <NavRow key={item.to} item={item} path={path} {...countFor(item)} />
+                    <NavRow key={item.to} item={item} path={path} href={link(item.to)} {...countFor(item)} />
                   ),
                 )}
                 {libraryRow}
@@ -268,12 +281,13 @@ export function Shell({
           {/* The bar is fixed to the screen's foot; this keeps the page's last line clear of it. */}
           <div className="fm-tabbar-clear" aria-hidden="true" />
           {/* A tab is a plain link: the router's document-level click handler takes it, as it
-              takes every other anchor in the console, so the page does not reload. */}
+              takes every other anchor in the console, so the page does not reload. Its href
+              carries the scope to a scoped page. */}
           <TabBar aria-label="Primary" className="fm-tabbar">
             {tabBarItems(nav, code).map((item) => (
               <TabBar.Item
                 key={item.to}
-                href={item.to}
+                href={link(item.to)}
                 icon={<item.Icon />}
                 label={item.label}
                 current={item.current(path)}
@@ -288,28 +302,50 @@ export function Shell({
 }
 
 /**
- * The head of the sidebar, under the brand: where FRM-T-17.4 mounts the ScopeSwitcher — the group
- * scope ("D3 Cloud ▾") and the project switcher ("BND Bindery ▾") of FRM-DA-001. Empty until then.
- * It is in the drawer too, so a phone gets the same switchers.
+ * The head of the sidebar, under the brand: the group scope ("D3 Cloud ▾", FRM-T-17.4) — and, when
+ * it comes, the project switcher ("BND Bindery ▾") of FRM-DA-001. It is in the drawer too, so a
+ * phone gets the same switcher as well as the top bar's chip.
  */
-function ScopeSlot(_props: { path: string }): ReactNode {
-  return null;
+function ScopeSlot(): ReactNode {
+  return (
+    <div className="fm-scope-slot">
+      <ScopeSwitcher presentation="menu" />
+    </div>
+  );
+}
+
+/**
+ * The phone's top bar, beside the brand: the scope chip, opening its bottom sheet (FRM-T-17.4).
+ * The brand is drawn in the top bar and again at the head of the drawer; the drawer already has
+ * the sidebar's switcher, so the chip stands in the top bar only.
+ */
+function TopBarScope({ wide }: { wide: boolean }): ReactNode {
+  const { drawer } = useAppShell();
+  if (wide || drawer) return null;
+  return (
+    <div className="fm-scope-topbar">
+      <ScopeSwitcher presentation="sheet" />
+    </div>
+  );
 }
 
 function NavRow({
   item,
   path,
+  href,
   count,
   countLabel,
 }: {
   item: NavItem;
   path: string;
+  /** Where it goes, when that is not just `item.to` — a scoped page keeps the scope. */
+  href?: string;
   count?: number;
   countLabel?: string;
 }) {
   return (
     <SideNavItem
-      href={item.to}
+      href={href ?? item.to}
       icon={<item.Icon />}
       label={item.label}
       current={item.current(path)}
@@ -324,11 +360,11 @@ function NavRow({
  * is the link's own generated content (`fm-kbd`), with empty alternative text: the key is announced
  * once, by `aria-keyshortcuts`, rather than read out as part of the link's name.
  */
-function SearchRow({ item, path }: { item: NavItem; path: string }) {
+function SearchRow({ item, path, href }: { item: NavItem; path: string; href: string }) {
   return (
     <SideNavItem asChild icon={<item.Icon />} label={item.label} current={item.current(path)}>
       <a
-        href={item.to}
+        href={href}
         className="fm-kbd"
         data-kbd={IS_MAC ? '⌘K' : 'Ctrl K'}
         aria-keyshortcuts={IS_MAC ? 'Meta+K' : 'Control+K'}

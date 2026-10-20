@@ -11,6 +11,7 @@ import { record, type Actor, type TransactionClient } from './audit.js';
 import { NotFound } from './errors.js';
 import { allocate } from './humanId.js';
 import { findProject } from './projects.js';
+import { codeFilter } from './scope.js';
 import { syncCitations } from './references.js';
 
 /**
@@ -356,6 +357,8 @@ export interface InboxQuery {
   readonly status?: FindingStatus | undefined;
   readonly lens?: string | undefined;
   readonly limit?: number | undefined;
+  /** The projects a scope admits (FRM-T-17.4), from `resolveScope`; absent for every project. */
+  readonly codes?: readonly string[] | undefined;
 }
 
 /**
@@ -372,7 +375,7 @@ export async function inbox(db: Db, query: InboxQuery = {}) {
       status: query.status ?? 'open',
       ...(query.severity === undefined ? {} : { severity: query.severity }),
       ...(query.lens === undefined ? {} : { lenses: { has: query.lens } }),
-      project: { deletedAt: null, ...(query.project === undefined ? {} : { code: query.project }) },
+      project: { deletedAt: null, ...codeFilter(query.codes, query.project) },
     },
     include: {
       project: { select: { code: true, name: true } },

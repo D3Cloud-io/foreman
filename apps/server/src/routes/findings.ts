@@ -21,6 +21,7 @@ import {
   updateFinding,
 } from '../domain/findings.js';
 import { findProject } from '../domain/projects.js';
+import { resolveScope, scopeCodes } from '../domain/scope.js';
 import { recurrencesOf, regressionWatch } from '../domain/recurrence.js';
 import { actorOf, handler, param, parseBody, parseQuery } from './helpers.js';
 
@@ -73,8 +74,11 @@ export function findingRoutes(db: Db): Router {
       const query = parseQuery(FindingsQuery, req, res);
       if (query === null) return;
 
+      // Narrowed to a group's projects when `?group=` names one (FRM-T-17.4); unknown is a 404.
+      const scope = await resolveScope(db, query.group);
       const items = await inbox(db, {
         project: query.project,
+        codes: scopeCodes(scope),
         severity: query.severity,
         status: query.status,
         lens: query.lens,
