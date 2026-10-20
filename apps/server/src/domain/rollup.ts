@@ -86,6 +86,13 @@ export interface RollupOptions {
    * not — and it cannot know which of the two is stale. So it reports the disagreement and holds.
    */
   readonly promoteOnly?: boolean;
+  /**
+   * Where to append the ID of every audit event a rollup writes, in the order written. The moves
+   * themselves are returned as ever (`RolledUp` is part of the response and has no event field);
+   * this is how a caller that must hand the events back — the console's Undo (FRM-REQ-243) —
+   * learns them without the response shape changing.
+   */
+  readonly events?: string[] | undefined;
 }
 
 const CLOSED_PHASE: readonly PhaseStatus[] = ['complete', 'cancelled'];
@@ -155,7 +162,7 @@ export async function rollupPhase(
         ...(target !== 'complete' && phase.completedAt !== null ? { completedAt: null } : {}),
       },
     });
-    await record(tx, {
+    const eventId = await record(tx, {
       ...rollupActor(actor, cause),
       action: 'update',
       entityType: 'phase',
@@ -164,10 +171,11 @@ export async function rollupPhase(
       before: phase,
       after,
     });
+    options.events?.push(eventId);
     moved.push({ humanId: phase.humanId, kind: 'phase', from: phase.status, to: target });
   }
 
-  return [...moved, ...(await rollupProject(tx, actor, phase.projectId, cause))];
+  return [...moved, ...(await rollupProject(tx, actor, phase.projectId, cause, options))];
 }
 
 /** Re-derive a project's lifecycle from its phases. Call after any phase status change. */
@@ -176,6 +184,7 @@ export async function rollupProject(
   actor: Actor,
   projectId: string,
   cause: string,
+  options: Pick<RollupOptions, 'events'> = {},
 ): Promise<RolledUp[]> {
   await tx.$queryRaw`SELECT id FROM project WHERE id = ${projectId}::uuid FOR UPDATE`;
   const project = await tx.project.findFirst({ where: { id: projectId, deletedAt: null } });
@@ -192,7 +201,7 @@ export async function rollupProject(
   if (target === null || target === project.lifecycle) return [];
 
   const after = await tx.project.update({ where: { id: project.id }, data: { lifecycle: target } });
-  await record(tx, {
+  const eventId = await record(tx, {
     ...rollupActor(actor, cause),
     action: 'update',
     entityType: 'project',
@@ -201,6 +210,7 @@ export async function rollupProject(
     before: project,
     after,
   });
+  options.events?.push(eventId);
   return [{ humanId: project.code, kind: 'project', from: project.lifecycle, to: target }];
 }
 
@@ -213,6 +223,7 @@ export async function rollupTaskPhases(
   actor: Actor,
   before: { readonly status: string; readonly phaseId: string | null } | null,
   after: { readonly humanId: string; readonly status: string; readonly phaseId: string | null },
+  options: Pick<RollupOptions, 'events'> = {},
 ): Promise<RolledUp[]> {
   if (before !== null && before.status === after.status && before.phaseId === after.phaseId) {
     return [];
@@ -222,7 +233,7 @@ export async function rollupTaskPhases(
   if (after.phaseId !== null) phases.add(after.phaseId);
 
   const moved: RolledUp[] = [];
-  for (const phaseId of phases) moved.push(...(await rollupPhase(tx, actor, phaseId, after.humanId)));
+  for (const phaseId of phases) moved.push(...(await rollupPhase(tx, actor, phaseId, after.humanId, options)));
   return moved;
 }
 
@@ -240,6 +251,7 @@ export async function rollupAfter(
   before: Row,
   after: Row,
   cause: string,
+  options: Pick<RollupOptions, 'events'> = {},
 ): Promise<RolledUp[]> {
   if (type === 'task') {
     // A deleted task is out of the count whatever its status says, so it rolls up as if it had
@@ -253,10 +265,11 @@ export async function rollupAfter(
       actor,
       { status: String(before['status']), phaseId: phaseOf(before) },
       { humanId: cause, status: String(after['status']), phaseId: phaseOf(after) },
+      options,
     );
   }
   if (type === 'phase') {
-    return rollupProject(tx, actor, String(after['projectId']), cause);
+    return rollupProject(tx, actor, String(after['projectId']), cause, options);
   }
   return [];
 }

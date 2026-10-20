@@ -24,6 +24,7 @@ import { findProject } from '../domain/projects.js';
 import { resolveScope, scopeCodes } from '../domain/scope.js';
 import { recurrencesOf, regressionWatch } from '../domain/recurrence.js';
 import { actorOf, handler, param, parseBody, parseQuery } from './helpers.js';
+import { auditEventsHandler } from './undo.js';
 
 /**
  * Findings over HTTP, and the one route that is deliberately cross-project.
@@ -37,6 +38,9 @@ export function findingRoutes(db: Db): Router {
   router.use(requireAuth);
   // Read-only: every write goes through a project, because a finding belongs to one.
   router.use(requireScope(db, 'read'));
+
+  // One record's history and what of it can be undone (FRM-T-18.3). Behind `read`, above.
+  router.get('/audit-events', auditEventsHandler(db));
 
   // ─── The cross-project inbox (T-6.6) ─────────────────────────────────────
 

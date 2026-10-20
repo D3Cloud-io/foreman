@@ -4,6 +4,7 @@ import { requireUser, SCOPES } from '../auth/middleware.js';
 import type { Db } from '../db.js';
 import { issueToken, listTokens, revokeToken } from '../domain/tokens.js';
 import { actorOf, handler, param, parseBody } from './helpers.js';
+import { noContentWithEvents } from './undo.js';
 
 /**
  * Scoped API tokens, over HTTP.
@@ -48,8 +49,7 @@ export function tokenRoutes(db: Db): Router {
   router.delete(
     '/:id',
     handler(async (req, res) => {
-      await revokeToken(db, actorOf(req), param(req, 'id'));
-      res.status(204).end();
+      noContentWithEvents(res, (await revokeToken(db, actorOf(req), param(req, 'id'))).auditEventIds);
     }),
   );
 

@@ -256,6 +256,8 @@ export interface ConfirmResult {
   readonly commitSha: string;
   readonly taskHumanId: string;
   readonly confirmed: boolean;
+  /** The audit event the decision wrote (FRM-REQ-243). */
+  readonly auditEventIds: string[];
 }
 
 /**
@@ -312,7 +314,7 @@ export async function confirmAttribution(
       },
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'commit',
@@ -322,7 +324,7 @@ export async function confirmAttribution(
       after: row,
     });
 
-    return { commitSha: commit.sha, taskHumanId: task.humanId, confirmed: true };
+    return { commitSha: commit.sha, taskHumanId: task.humanId, confirmed: true, auditEventIds: [event] };
   });
 }
 
@@ -357,7 +359,7 @@ export async function rejectAttribution(
       data: { confirmed: false, rejectedAt: new Date(), confirmedAt: null, confirmedBy: null },
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'commit',
@@ -367,6 +369,6 @@ export async function rejectAttribution(
       after: row,
     });
 
-    return { commitSha: commit.sha, taskHumanId: task.humanId, confirmed: false };
+    return { commitSha: commit.sha, taskHumanId: task.humanId, confirmed: false, auditEventIds: [event] };
   });
 }

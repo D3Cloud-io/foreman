@@ -1,6 +1,7 @@
 import type { Db } from '../db.js';
 import type { EntityType } from '../generated/prisma/enums.js';
-import { record, scrub, type Actor, type TransactionClient } from './audit.js';
+import type { AuditEventEntry, AuditEventsResponse } from '@foreman/shared';
+import { eventIds, record, scrub, summarize, type Actor, type TransactionClient } from './audit.js';
 import { Conflict, Invalid, NotFound } from './errors.js';
 import {
   derivedFields,
@@ -127,7 +128,7 @@ export async function softDelete(
   actor: Actor,
   type: UndoableType,
   humanId: string,
-): Promise<{ id: string }> {
+): Promise<{ id: string; auditEventIds: string[] }> {
   return db.$transaction(async (tx) => {
     // The lock before the read: the row this records as `before`, and the group it leaves, must be
     // the ones no move has replaced (FRM-REQ-226).
@@ -148,7 +149,7 @@ export async function softDelete(
       data: { deletedAt: new Date() },
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'delete',
       entityType: type,
@@ -157,13 +158,18 @@ export async function softDelete(
       before,
       after: { deleted: true },
     });
+    let shifted: string | null = null;
     if (type === 'project') {
       const groupId = typeof before['groupId'] === 'string' ? before['groupId'] : null;
-      await settleProjects(tx, actor, groupId, { cause: `${humanId} deleted` });
+      shifted = await settleProjects(tx, actor, groupId, { cause: `${humanId} deleted` });
     }
     // A deleted task stops counting toward its phase; a deleted phase toward its project.
-    await rollupAfter(tx, actor, type, before, { ...before, deletedAt: new Date() }, humanId);
-    return { id };
+    const events: string[] = [];
+    await rollupAfter(tx, actor, type, before, { ...before, deletedAt: new Date() }, humanId, {
+      events,
+    });
+    // The record's own event first, then what moved because it went (FRM-REQ-243).
+    return { id, auditEventIds: eventIds(event, shifted, ...events) };
   });
 }
 
@@ -173,7 +179,23 @@ export interface UndoResult {
   readonly entityType: string;
   readonly entityHumanId: string | null;
   readonly reversalEventId: string;
+  /** The reversal, then any rollup it caused: every event this undo wrote, in order. */
+  readonly auditEventIds: string[];
 }
+
+/**
+ * Thrown at the end of a dry run, inside the transaction, so everything the undo wrote is rolled
+ * back. Reaching it means every check passed.
+ */
+class DryRunPassed extends Error {
+  constructor() {
+    super('dry run: every check passed');
+    this.name = 'DryRunPassed';
+  }
+}
+
+/** Who a dry run says it is. Nothing is written, so it is never recorded. */
+const DRY_RUN_ACTOR: Actor = { actor: 'dry-run', actorKind: 'system' };
 
 /**
  * Reverse one mutation.
@@ -188,7 +210,39 @@ export interface UndoResult {
 export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<UndoResult> {
   const event = await db.auditEvent.findUnique({ where: { id: auditEventId } });
   if (event === null) throw new NotFound(`audit event ${auditEventId}`);
+  return undoEvent(db, actor, event, false);
+}
 
+/**
+ * Whether one event could be undone right now, and if not, why — by running the undo itself with
+ * every write rolled back (FRM-T-18.3). It is the same code path, not a copy of its checks, so
+ * what it says and what `POST /api/undo/:id` does cannot drift apart.
+ *
+ * Only a refusal is an answer. Anything else going wrong is a fault, and is thrown.
+ */
+export async function checkUndo(
+  db: Db,
+  event: AuditEventRow,
+): Promise<{ undoable: true } | { undoable: false; reason: string }> {
+  try {
+    await undoEvent(db, DRY_RUN_ACTOR, event, true);
+  } catch (error) {
+    if (error instanceof DryRunPassed) return { undoable: true };
+    if (error instanceof Conflict || error instanceof NotFound) {
+      return { undoable: false, reason: error.message };
+    }
+    throw error;
+  }
+  // `undoEvent` always ends in `DryRunPassed` or a refusal when dry; this is unreachable.
+  throw new Error('a dry run finished without a verdict');
+}
+
+async function undoEvent(
+  db: Db,
+  actor: Actor,
+  event: AuditEventRow,
+  dryRun: boolean,
+): Promise<UndoResult> {
   if (event.undoneAt !== null) {
     throw new Conflict('that change has already been undone');
   }
@@ -212,10 +266,28 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
   }
 
   const linkEvent = linkEventOf(event.action, after);
-  if (linkEvent !== null) return undoLink(db, actor, event, linkEvent);
+  if (linkEvent !== null) return undoLink(db, actor, event, linkEvent, dryRun);
 
   // A reorder changed several rows' positions at once, and is reversed as one (FRM-REQ-226).
-  if (event.action === 'update' && isReorderEvent(after)) return undoReorder(db, actor, event);
+  if (event.action === 'update' && isReorderEvent(after)) {
+    if (!dryRun) {
+      const reversed = await undoReorder(db, actor, event);
+      return { ...reversed, auditEventIds: [reversed.reversalEventId] };
+    }
+    // Its transaction lives in groups.ts, which takes only `$transaction` from the client: handed
+    // one that rolls back after the callback, it runs every one of its own checks and writes
+    // nothing.
+    const rollsBack = {
+      $transaction: (run: (tx: TransactionClient) => Promise<unknown>) =>
+        db.$transaction(async (tx) => {
+          await run(tx);
+          throw new DryRunPassed();
+        }),
+    } as unknown as Db;
+    return undoReorder(rollsBack, actor, event).then(() => {
+      throw new Error('a dry run of a reorder finished without a verdict');
+    });
+  }
 
   if (!isUndoable(event.entityType)) {
     throw new Conflict(`${event.entityType} changes cannot be undone`);
@@ -281,6 +353,8 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
 
     // What the row alone cannot show: the groups around a group, a project or a guideline.
     await guardUndo(tx, { type, action: event.action, current, data, before, after });
+    // Every check that can refuse has run; what follows only writes.
+    if (dryRun) throw new DryRunPassed();
 
     await (table as { update: (args: unknown) => Promise<unknown> }).update({
       where: { id: event.entityId },
@@ -311,7 +385,8 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
 
     // The status beneath changed back, so what it adds up to is worked out again — itself a
     // rollup event of its own, never a silent side effect of the reversal.
-    await rollupAfter(tx, actor, type, current, restored, event.entityHumanId ?? type);
+    const events: string[] = [];
+    await rollupAfter(tx, actor, type, current, restored, event.entityHumanId ?? type, { events });
 
     // Claimed above; now it says which event reversed it.
     await tx.auditEvent.update({
@@ -325,6 +400,7 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
       entityType: type,
       entityHumanId: event.entityHumanId,
       reversalEventId: reversalId,
+      auditEventIds: [reversalId, ...events],
     };
   });
 }
@@ -374,7 +450,7 @@ function linkEventOf(action: string, after: Record<string, unknown> | null): Lin
   return null;
 }
 
-type AuditEventRow = NonNullable<Awaited<ReturnType<Db['auditEvent']['findUnique']>>>;
+export type AuditEventRow = NonNullable<Awaited<ReturnType<Db['auditEvent']['findUnique']>>>;
 
 /**
  * Reverse a link by removing the rows it wrote, and an unlink by writing back the rows it removed —
@@ -389,6 +465,7 @@ async function undoLink(
   actor: Actor,
   event: AuditEventRow,
   recorded: LinkEvent,
+  dryRun: boolean,
 ): Promise<UndoResult> {
   const from = event.entityHumanId;
   if (from === null) throw new Conflict('that link recorded no source to reverse it from');
@@ -488,6 +565,9 @@ async function undoLink(
       after = { event: 'link', ...marker, rows: written };
     }
 
+    // Written back (or removed) above, with every refusal behind it.
+    if (dryRun) throw new DryRunPassed();
+
     // One event, the reversal: not an undo plus a fresh link event that could itself be undone.
     const reversalId = await record(tx, {
       ...actor,
@@ -511,6 +591,7 @@ async function undoLink(
       entityType: resolved.fromType,
       entityHumanId: from,
       reversalEventId: reversalId,
+      auditEventIds: [reversalId],
     };
   });
 }
@@ -561,4 +642,44 @@ function restorable(
     data[key] = value;
   }
   return data;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * One record's history, newest first, each event saying whether it could be undone right now and
+ * if not why (FRM-REQ-243).
+ *
+ * The record is named the way the audit trail names it: by human ID (`FRM-T-18.3`, `PI-007`,
+ * `GL-004`, `GRP-001`), by project code, or — for a document, which has no human ID — by its UUID.
+ * A deleted record still has a history; that is where its undo is.
+ *
+ * `undoable` is not recomputed from a copy of the rules: `checkUndo` runs the undo itself and rolls
+ * it back. It costs a transaction per event, so the list is capped.
+ */
+export async function auditHistory(
+  db: Db,
+  entity: string,
+  limit: number,
+): Promise<AuditEventsResponse> {
+  const events = await db.auditEvent.findMany({
+    where: UUID.test(entity) ? { entityId: entity.toLowerCase() } : { entityHumanId: entity },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: limit,
+  });
+
+  const items: AuditEventEntry[] = [];
+  for (const event of events) {
+    const verdict = await checkUndo(db, event);
+    items.push({
+      id: event.id,
+      at: event.createdAt.toISOString(),
+      actor: { kind: event.actorKind, label: event.actor },
+      action: event.action,
+      summary: summarize({ ...event, entityType: event.entityType }),
+      undoable: verdict.undoable,
+      ...(verdict.undoable ? {} : { reason: verdict.reason }),
+    });
+  }
+  return { entity, items };
 }

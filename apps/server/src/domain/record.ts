@@ -62,7 +62,7 @@ export async function createAdr(db: Db, actor: Actor, code: string, input: AdrCr
     });
 
     await syncCitations(tx, 'adr', adr.id, adrProse(adr));
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'adr',
@@ -70,7 +70,7 @@ export async function createAdr(db: Db, actor: Actor, code: string, input: AdrCr
       entityHumanId: humanId,
       after: adr,
     });
-    return adr;
+    return { ...adr, auditEventIds: [event] };
   });
 }
 
@@ -119,7 +119,7 @@ export async function updateAdr(db: Db, actor: Actor, humanId: string, input: Ad
     });
 
     await syncCitations(tx, 'adr', adr.id, adrProse(adr));
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'adr',
@@ -128,7 +128,7 @@ export async function updateAdr(db: Db, actor: Actor, humanId: string, input: Ad
       before,
       after: adr,
     });
-    return adr;
+    return { ...adr, auditEventIds: [event] };
   });
 }
 
@@ -230,7 +230,7 @@ export async function createDecision(db: Db, actor: Actor, code: string, input: 
     });
 
     await syncCitations(tx, 'decision', decision.id, input.rationale ?? '');
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'decision',
@@ -238,7 +238,7 @@ export async function createDecision(db: Db, actor: Actor, code: string, input: 
       entityHumanId: humanId,
       after: decision,
     });
-    return decision;
+    return { ...decision, auditEventIds: [event] };
   });
 }
 
@@ -263,7 +263,7 @@ export async function updateDecision(
     });
 
     await syncCitations(tx, 'decision', decision.id, decision.rationale ?? '');
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'decision',
@@ -272,7 +272,7 @@ export async function updateDecision(
       before,
       after: decision,
     });
-    return decision;
+    return { ...decision, auditEventIds: [event] };
   });
 }
 
@@ -297,7 +297,7 @@ export async function createRisk(db: Db, actor: Actor, code: string, input: Risk
     });
 
     await syncCitations(tx, 'risk', risk.id, `${input.mitigation ?? ''}\n${input.tripwire}`);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'risk',
@@ -305,7 +305,7 @@ export async function createRisk(db: Db, actor: Actor, code: string, input: Risk
       entityHumanId: humanId,
       after: risk,
     });
-    return risk;
+    return { ...risk, auditEventIds: [event] };
   });
 }
 
@@ -332,7 +332,7 @@ export async function updateRisk(db: Db, actor: Actor, humanId: string, input: R
       },
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'risk',
@@ -341,7 +341,7 @@ export async function updateRisk(db: Db, actor: Actor, humanId: string, input: R
       before,
       after: risk,
     });
-    return risk;
+    return { ...risk, auditEventIds: [event] };
   });
 }
 
@@ -372,7 +372,7 @@ export async function createTerm(db: Db, actor: Actor, code: string, input: Term
     });
 
     await syncCitations(tx, 'term', term.id, input.definition);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'term',
@@ -380,7 +380,7 @@ export async function createTerm(db: Db, actor: Actor, code: string, input: Term
       entityHumanId: term.term,
       after: term,
     });
-    return term;
+    return { ...term, auditEventIds: [event] };
   });
 }
 
@@ -406,7 +406,7 @@ export async function updateTerm(db: Db, actor: Actor, id: string, input: TermUp
     });
 
     await syncCitations(tx, 'term', term.id, term.definition);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'term',
@@ -415,7 +415,7 @@ export async function updateTerm(db: Db, actor: Actor, id: string, input: TermUp
       before,
       after: term,
     });
-    return term;
+    return { ...term, auditEventIds: [event] };
   });
 }
 

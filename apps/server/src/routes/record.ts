@@ -54,6 +54,7 @@ import {
 } from '../domain/resources.js';
 import { assertFresh, setEtag } from './concurrency.js';
 import { actorOf, decodeCursor, encodeCursor, handler, param, parseBody, parseQuery } from './helpers.js';
+import { noContentWithEvents } from './undo.js';
 
 /**
  * The record over HTTP: documents and sections, ADRs, decisions, risks and glossary terms.
@@ -481,8 +482,8 @@ export function recordRoutes(db: Db): Router {
     '/:code/ideas/:humanId',
     canWrite,
     handler(async (req, res) => {
-      await softDelete(db, actorOf(req), 'idea', param(req, 'humanId'));
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'idea', param(req, 'humanId'));
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 

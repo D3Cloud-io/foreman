@@ -49,7 +49,7 @@ export async function createAudit(db: Db, actor: Actor, code: string, input: Aud
       },
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'audit',
@@ -57,7 +57,7 @@ export async function createAudit(db: Db, actor: Actor, code: string, input: Aud
       entityHumanId: humanId,
       after: audit,
     });
-    return audit;
+    return { ...audit, auditEventIds: [event] };
   });
 }
 
@@ -77,7 +77,7 @@ export async function updateAudit(db: Db, actor: Actor, humanId: string, input: 
         ...(input.vaultPath === undefined ? {} : { vaultPath: input.vaultPath }),
       },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'audit',
@@ -86,7 +86,7 @@ export async function updateAudit(db: Db, actor: Actor, humanId: string, input: 
       before,
       after: audit,
     });
-    return audit;
+    return { ...audit, auditEventIds: [event] };
   });
 }
 
@@ -188,7 +188,7 @@ export async function createFinding(db: Db, actor: Actor, code: string, input: F
       `${input.observedMd ?? ''}\n${input.recommendationMd ?? ''}`,
     );
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'finding',
@@ -196,7 +196,7 @@ export async function createFinding(db: Db, actor: Actor, code: string, input: F
       entityHumanId: humanId,
       after: finding,
     });
-    return finding;
+    return { ...finding, auditEventIds: [event] };
   });
 }
 
@@ -237,7 +237,7 @@ export async function updateFinding(db: Db, actor: Actor, humanId: string, input
       );
     }
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'finding',
@@ -246,7 +246,7 @@ export async function updateFinding(db: Db, actor: Actor, humanId: string, input
       before,
       after: finding,
     });
-    return finding;
+    return { ...finding, auditEventIds: [event] };
   });
 }
 

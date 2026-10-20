@@ -180,7 +180,7 @@ export function realityRoutes(db: Db, registry?: JobRegistry): Router {
         return;
       }
 
-      const repo = await db.$transaction(async (tx) => {
+      const { created: repo, event: repoEvent } = await db.$transaction(async (tx) => {
         const created = await tx.repo.upsert({
           where: { fullName: body.fullName },
           create: {
@@ -190,7 +190,7 @@ export function realityRoutes(db: Db, registry?: JobRegistry): Router {
           },
           update: { projectId: project.id, deletedAt: null },
         });
-        await record(tx, {
+        const event = await record(tx, {
           ...actorOf(req),
           action: 'create',
           entityType: 'repo',
@@ -198,7 +198,7 @@ export function realityRoutes(db: Db, registry?: JobRegistry): Router {
           entityHumanId: created.fullName,
           after: repoJson(created),
         });
-        return created;
+        return { created, event };
       });
 
       if (registry !== undefined) {
@@ -210,7 +210,7 @@ export function realityRoutes(db: Db, registry?: JobRegistry): Router {
         });
       }
 
-      res.status(201).json(repoJson(repo));
+      res.status(201).json({ ...repoJson(repo), auditEventIds: [repoEvent] });
     }),
   );
 
@@ -288,7 +288,7 @@ export function realityRoutes(db: Db, registry?: JobRegistry): Router {
         ),
       ];
 
-      const { deployment, tasks } = await db.$transaction(async (tx) => {
+      const { deployment, tasks, event } = await db.$transaction(async (tx) => {
         const created = await tx.deployment.create({
           data: {
             projectId: project.id,
@@ -300,7 +300,7 @@ export function realityRoutes(db: Db, registry?: JobRegistry): Router {
             ...(body.note === undefined ? {} : { note: body.note }),
           },
         });
-        await record(tx, {
+        const event = await record(tx, {
           ...actorOf(req),
           action: 'create',
           entityType: 'deployment',
@@ -326,10 +326,10 @@ export function realityRoutes(db: Db, registry?: JobRegistry): Router {
           }
         }
 
-        return { deployment: created, tasks: linkedTasks };
+        return { deployment: created, tasks: linkedTasks, event };
       });
 
-      res.status(201).json({ ...deployment, tasks });
+      res.status(201).json({ ...deployment, tasks, auditEventIds: [event] });
     }),
   );
 

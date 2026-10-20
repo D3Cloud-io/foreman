@@ -319,7 +319,7 @@ export async function createScreen(
   actor: Actor,
   code: string,
   input: ScreenCreate,
-): Promise<ScreenDetail> {
+): Promise<ScreenDetail & { auditEventIds: string[] }> {
   const project = await findProject(db, code);
   const created = await db.$transaction(async (tx) => {
     const { humanId, seq } = await allocate(tx, project, 'screen');
@@ -334,7 +334,7 @@ export async function createScreen(
         figmaNodeId: input.figmaNodeId ?? null,
       },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'screen',
@@ -342,9 +342,9 @@ export async function createScreen(
       entityHumanId: humanId,
       after: bare(row),
     });
-    return row;
+    return { row, event };
   });
-  return getScreen(db, code, created.humanId);
+  return { ...(await getScreen(db, code, created.row.humanId)), auditEventIds: [created.event] };
 }
 
 export async function updateScreen(
@@ -353,9 +353,9 @@ export async function updateScreen(
   code: string,
   humanId: string,
   input: ScreenUpdate,
-): Promise<ScreenDetail> {
+): Promise<ScreenDetail & { auditEventIds: string[] }> {
   const { screen: before } = await screenIn(db, code, humanId);
-  await db.$transaction(async (tx) => {
+  const event = await db.$transaction(async (tx) => {
     const after = await tx.screen.update({
       where: { id: before.id },
       data: {
@@ -365,7 +365,7 @@ export async function updateScreen(
         ...(input.figmaNodeId === undefined ? {} : { figmaNodeId: input.figmaNodeId }),
       },
     });
-    await record(tx, {
+    return record(tx, {
       ...actor,
       action: 'update',
       entityType: 'screen',
@@ -375,7 +375,7 @@ export async function updateScreen(
       after: bare(after),
     });
   });
-  return getScreen(db, code, humanId);
+  return { ...(await getScreen(db, code, humanId)), auditEventIds: [event] };
 }
 
 /**
