@@ -164,6 +164,28 @@ describe('the tools call the API they claim to', () => {
     expect(get).toHaveBeenCalledWith('/api/projects/BND/phases/BND-P-3/gate');
   });
 
+  it('foreman_get fetches a screen\'s images, and nothing for any other kind (FRM-REQ-198)', async () => {
+    const tool = READ_TOOLS.find((t) => t.name === 'foreman_get');
+    const get = vi.fn().mockResolvedValue({
+      images: [{ kind: 'proposal', data: 'iVBORw0K', mimeType: 'image/png' }],
+    });
+
+    const images = await tool?.images?.(clientWith(get), { id: 'BND-SCR-001' }, {
+      type: 'screen',
+      humanId: 'BND-SCR-001',
+    });
+    expect(get).toHaveBeenCalledWith('/api/projects/BND/screens/BND-SCR-001/images');
+    expect(images).toEqual([{ data: 'iVBORw0K', mimeType: 'image/png' }]);
+
+    get.mockClear();
+    const none = await tool?.images?.(clientWith(get), { id: 'BND-REQ-001' }, {
+      type: 'requirement',
+      humanId: 'BND-REQ-001',
+    });
+    expect(none).toEqual([]);
+    expect(get).not.toHaveBeenCalled();
+  });
+
   it('refuses input that does not match the shared schema', async () => {
     const tool = READ_TOOLS.find((t) => t.name === 'foreman_get');
     // Not project-prefixed, so it is not a human ID (ADR-008).
@@ -378,7 +400,8 @@ describe('the gate in front of the write tools (T-2.9, FRM-REQ-090, FRM-REQ-091)
     // creating one over MCP would make a titled shell nothing could fill. Better not offered
     // than offered broken — and this is the assertion that keeps that decision deliberate.
     // An idea qualifies on exactly that test: its whole body is a title and a paragraph, and
-    // `foreman_update` writes both. So does a project idea, whose pitch is the same shape.
+    // `foreman_update` writes both. So does a project idea, whose pitch is the same shape. A
+    // screen is a name and a route; its images arrive through the API (FRM-REQ-189).
     expect(CreatableKind.options).toEqual([
       'project',
       'requirement',
@@ -386,7 +409,24 @@ describe('the gate in front of the write tools (T-2.9, FRM-REQ-090, FRM-REQ-091)
       'phase',
       'idea',
       'project_idea',
+      'screen',
     ]);
+  });
+
+  it('creates a screen inside its project, from a name and a route', async () => {
+    const post = vi.fn().mockResolvedValue({});
+    const create = WRITE_TOOLS.find((t) => t.name === 'foreman_create');
+    await create?.run({ post } as never, {
+      project: 'BND',
+      kind: 'screen',
+      text: 'Document viewer',
+      route: '/documents/:id',
+    });
+    expect(post).toHaveBeenCalledWith(
+      '/api/projects/BND/screens',
+      { name: 'Document viewer', route: '/documents/:id' },
+      {},
+    );
   });
 
   it('records the fixing commit as a SHA, so a fix is not lost waiting on ingest', async () => {

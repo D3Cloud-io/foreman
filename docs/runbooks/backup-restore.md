@@ -16,7 +16,31 @@ where a timer firing "every 24 hours" skips a day on every restart.
 
 Dumps land in `BACKUP_DIR` (`/backups` in the image, a Docker volume) as
 `foreman-<timestamp>.sql.gz`, and anything older than `BACKUP_RETENTION_DAYS` is pruned by the
-second stage of the same job.
+last stage of the same job.
+
+### The blobs (FRM-REQ-202)
+
+Uploaded images and source files are files under `FOREMAN_BLOB_DIR` (`/blobs`, its own Docker
+volume), named by their SHA-256, with a `blob` row in the database. **The dump holds the rows and
+never the bytes**, so a dump alone restores a database whose blobs point at nothing. A backup set is
+therefore a pair, side by side in `BACKUP_DIR`:
+
+```text
+/backups/foreman-2026-10-19T03-00-00.sql.gz     the database
+/backups/foreman-2026-10-19T03-00-00.blobs/     every file from /blobs, same names
+```
+
+The `backup` job has three stages: `dump`, `blobs`, `prune`.
+
+- **`blobs`** runs after the dump and copies the blob directory into the paired `.blobs/` directory.
+  Blobs are immutable, so files already in the previous set are **hardlinked** rather than copied
+  (a nightly set costs only what was uploaded since); where a link is impossible the file is copied.
+  The set is written as `<stamp>.blobs.partial` and renamed when complete, so a copy that dies
+  half-way is never mistaken for a whole one. The store's own `.tmp-*` files are ignored.
+- A missing or empty `FOREMAN_BLOB_DIR` is fine: the set is empty and the stage's output says
+  `"empty": true, "total": 0`. Zero on a deployment that has uploads is the thing to notice.
+- **`prune`** removes a dump's `.blobs/` with the dump, and any `.partial` or unpaired `.blobs/`.
+  Hardlinks mean pruning an old set never damages a newer one.
 
 ## Taking one now
 
@@ -39,6 +63,22 @@ docker compose exec server node dist/cli/run-job.js restore-drill
 
 The job creates a scratch database, restores the newest dump into it, **queries it**, and drops it
 in a `finally` — so a failed drill leaves nothing behind to fill the disk it was protecting.
+
+### What it checks about blobs (FRM-REQ-203)
+
+After the restore, the drill reads **every row of the `blob` table from the scratch database** and
+checks it against the newest dump's paired `.blobs/` directory: the file exists, and the SHA-256 of
+its bytes equals its name. Existence alone would pass a truncated copy, so every file is hashed.
+
+- **It fails** if any row has no file or a file that does not hash to its name, naming the first few
+  shas and the counts (`2 of 40 blobs missing: …`). It also fails if the set holds a file whose
+  name is not a SHA-256, since nothing writes those.
+- **It does not fail** on a well-formed file that no row names (an upload that died between the
+  file and its row leaves one). It reports the number as `unreferenced`.
+- **On success** the stage output carries `blobs` (rows checked) and `verified` (rows that passed);
+  they are equal, or the drill would have failed.
+- A dump taken before blobs were backed up has no paired directory: with zero blob rows it passes,
+  with any it fails as missing, which is the truth.
 
 ## Restoring for real
 
@@ -63,6 +103,21 @@ docker compose exec -e DATABASE_URL=postgresql://foreman:foreman@postgres:5432/f
 ```
 
 Then point `DATABASE_URL` at the restored database and restart the stack.
+
+**The blobs are a separate copy.** Restore the files that pair with the dump you used. With the
+stack stopped, or at least with no uploads in flight:
+
+```bash
+# 5. Copy the paired set back into the blobs volume. Same basename as the dump you restored.
+docker compose exec server sh -c \
+  'cp -n /backups/foreman-<timestamp>.blobs/* /blobs/'
+
+# 6. Check them the way the drill does: every blob row has a file whose hash is its name.
+docker compose exec server node dist/cli/run-job.js restore-drill
+```
+
+`cp -n` never overwrites: a name is the hash of its bytes, so a file already there is already
+right. If the volume is new and the container cannot write it, `/blobs` must be owned by `node`.
 
 ## Performed on 2026-09-18
 

@@ -34,6 +34,8 @@ export const SECTIONS: readonly Section[] = [
   { slug: 'activity', label: 'Activity', group: 'Reality' },
   { slug: 'audits', label: 'Audits', group: 'Reality' },
   { slug: 'drift', label: 'Drift', group: 'Reality' },
+  // What it should look like beside what it does (FRM-REQ-196): the design half of drift.
+  { slug: 'screens', label: 'Screens', group: 'Reality' },
 ];
 
 export function sectionFor(path: string): Section | null {

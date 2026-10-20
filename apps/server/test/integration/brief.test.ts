@@ -375,6 +375,7 @@ describe.skipIf(url === undefined)('the session brief', () => {
       'fired-tripwire': 0,
       'failed-exit-gate': 0,
       'orphan-adr': 1,
+      'screen-drift': 0,
     });
     const sum = Object.values(brief.drift.counts).reduce((a, b) => a + b, 0);
     expect(sum).toBe(brief.drift.total);

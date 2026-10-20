@@ -23,6 +23,8 @@ export const HUMAN_ID_TYPE = {
   idea: 'IDEA',
   audit: 'AUD',
   term: 'TERM',
+  // A screen of a project's UI (FRM-REQ-189): `BND-SCR-001`, from the project's counter.
+  screen: 'SCR',
 } as const;
 
 export type HumanIdType = (typeof HUMAN_ID_TYPE)[keyof typeof HUMAN_ID_TYPE];

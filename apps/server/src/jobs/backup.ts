@@ -1,11 +1,23 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readdir, stat, unlink } from 'node:fs/promises';
-import { createWriteStream } from 'node:fs';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import {
+  copyFile,
+  link,
+  mkdir,
+  readdir,
+  rename,
+  rm,
+  stat,
+  unlink,
+} from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { createGzip } from 'node:zlib';
+import { Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { ALERTS, type Mailer } from '../adapters/mail.js';
 import type { Config } from '../config.js';
+import { isSha256 } from '../domain/blobs.js';
 import type { JobDefinition } from './types.js';
 
 /**
@@ -15,13 +27,21 @@ import type { JobDefinition } from './types.js';
  * mirror behind Foreman, so this file is the entire recovery story — which is why the drill exists
  * and why its absence is a problem the health screen reports out loud.
  *
+ * T-12.5 widened "the database" to "the database and its blobs" (FRM-REQ-202, FRM-REQ-203). Uploaded
+ * images and source files live as files under `FOREMAN_BLOB_DIR`, never in the dump (that is the
+ * point of the blob store), so a dump alone restores rows that name files nobody has. A backup set
+ * is therefore a pair: `foreman-<stamp>.sql.gz` and `foreman-<stamp>.blobs/` beside it.
+ *
  * Bindery's own code review found a restore drill "verified by grepping" rather than by running.
  * That finding is free to inherit: `restore-drill` below actually restores into a scratch database
  * and queries it.
  */
 
 export interface BackupDeps {
-  readonly config: Pick<Config, 'DATABASE_URL' | 'BACKUP_DIR' | 'BACKUP_RETENTION_DAYS'>;
+  readonly config: Pick<Config, 'DATABASE_URL' | 'BACKUP_DIR' | 'BACKUP_RETENTION_DAYS'> &
+    // Optional so a caller that has no blob store — an older test config, a tool that only dumps —
+    // still backs up. Unset means zero blobs; it never means "skip the check on rows that exist".
+    Partial<Pick<Config, 'FOREMAN_BLOB_DIR'>>;
   readonly mailer?: Mailer | undefined;
 }
 
@@ -50,6 +70,178 @@ function run(
     child.on('close', (code) => { resolve({ code: code ?? 1, stderr: stderr.slice(-4000) }); });
   });
 }
+
+/** Collect a child's stdout as text; `run` only keeps stderr, and the drill needs the rows. */
+function collector(): { sink: Writable; text: () => string } {
+  const chunks: Buffer[] = [];
+  const sink = new Writable({
+    write(chunk: Buffer, _encoding, done) {
+      chunks.push(chunk);
+      done();
+    },
+  });
+  return { sink, text: () => Buffer.concat(chunks).toString('utf8') };
+}
+
+/** A dump's paired blob directory: same basename, `.blobs` instead of `.sql.gz`. */
+const DUMP_SUFFIX = '.sql.gz';
+const BLOBS_SUFFIX = '.blobs';
+/** A set being written. Never renamed into place until complete, so it can never pass for a set. */
+const PARTIAL_SUFFIX = '.blobs.partial';
+
+const isDump = (name: string) => name.startsWith('foreman-') && name.endsWith(DUMP_SUFFIX);
+export const blobsDirFor = (dumpPath: string) =>
+  `${dumpPath.slice(0, -DUMP_SUFFIX.length)}${BLOBS_SUFFIX}`;
+
+async function sizeOf(path: string): Promise<number | null> {
+  try {
+    const info = await stat(path);
+    return info.isFile() ? info.size : null;
+  } catch {
+    return null;
+  }
+}
+
+async function listNames(dir: string): Promise<string[]> {
+  try {
+    return await readdir(dir);
+  } catch (error) {
+    // A directory that does not exist holds zero blobs. That is a normal state for a fresh
+    // install, not an error — but any other failure (permissions, I/O) must still be loud.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+export interface CopyBlobsResult {
+  /** Blob files now in the destination. */
+  readonly total: number;
+  /** Bytes copied from the source; hardlinked files cost nothing and are not counted. */
+  readonly copiedBytes: number;
+  readonly copied: number;
+  readonly linked: number;
+  /** Source entries ignored because their name is not a SHA-256 (the store's `.tmp-*` files). */
+  readonly ignored: number;
+}
+
+/**
+ * Copy every blob file from `src` into `dest` (FRM-REQ-202).
+ *
+ * Blobs are content-addressed and immutable — a name is the hash of its bytes — so a file already
+ * in the previous backup set is, by construction, the same file. Those are hardlinked rather than
+ * copied, which makes a nightly set cost only what was uploaded since the last one. When the link
+ * cannot be made (a different filesystem) the file is copied; the result is the same bytes and
+ * only the cost differs. New files are always a real copy, never a link into the live volume, so
+ * a backup set does not share an inode with the thing it protects.
+ *
+ * A file the store is still writing is a `.tmp-*` name, not a hash, so it is ignored: the store
+ * renames it into place only when whole.
+ */
+export async function copyBlobs(
+  src: string,
+  dest: string,
+  previous?: string,
+): Promise<CopyBlobsResult> {
+  await mkdir(dest, { recursive: true });
+
+  let copied = 0;
+  let linked = 0;
+  let copiedBytes = 0;
+  let ignored = 0;
+
+  for (const name of await listNames(src)) {
+    if (!isSha256(name)) {
+      ignored += 1;
+      continue;
+    }
+
+    const from = join(src, name);
+    const size = await sizeOf(from);
+    if (size === null) {
+      ignored += 1;
+      continue;
+    }
+
+    const to = join(dest, name);
+    // A link shares the earlier set's inode, so whatever is wrong with that file becomes wrong in
+    // this set too. Size alone would carry a same-size bit-rotted file forward forever, with every
+    // nightly reporting success; only a file that still hashes to its name is linked (FRM-REQ-202).
+    const earlier = previous === undefined ? undefined : join(previous, name);
+    if (
+      earlier !== undefined &&
+      (await sizeOf(earlier)) === size &&
+      (await hashFile(earlier).catch(() => null)) === name
+    ) {
+      try {
+        await link(earlier, to);
+        linked += 1;
+        continue;
+      } catch {
+        // Cross-device, or a filesystem without hardlinks: fall through to a copy.
+      }
+    }
+
+    await copyFile(from, to);
+    copied += 1;
+    copiedBytes += size;
+  }
+
+  return { total: copied + linked, copied, linked, copiedBytes, ignored };
+}
+
+/** SHA-256 of a file, streamed: a blob may be large and the drill hashes all of them. */
+export async function hashFile(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(path), hash);
+  return hash.digest('hex');
+}
+
+export interface VerifyBlobsResult {
+  /** Rows checked. */
+  readonly blobs: number;
+  /** Rows whose file exists and hashes to its name. */
+  readonly verified: number;
+  readonly missing: readonly string[];
+  readonly mismatched: readonly string[];
+  /** Names in the directory that are not a SHA-256 — nothing wrote these. */
+  readonly malformed: readonly string[];
+  /** Well-formed files that no row names. Reported, never a failure: an upload that crashed
+   * between the file and its row leaves one, and it is harmless. */
+  readonly unreferenced: number;
+}
+
+/**
+ * Check every blob row against the files in `dir` (FRM-REQ-203): the file exists, and the SHA-256
+ * of its bytes equals its name. Existence alone would pass a truncated or bit-rotted copy, and a
+ * restore that "works" on those is the failure this exists to catch before it is the only copy.
+ */
+export async function verifyBlobs(shas: readonly string[], dir: string): Promise<VerifyBlobsResult> {
+  const names = new Set(await listNames(dir));
+  const missing: string[] = [];
+  const mismatched: string[] = [];
+  let verified = 0;
+
+  for (const sha of shas) {
+    const path = join(resolve(dir), sha);
+    // A row whose key is not even a hash can never match a file named by one.
+    if (!isSha256(sha) || !names.has(sha) || (await sizeOf(path)) === null) {
+      missing.push(sha);
+      continue;
+    }
+    if ((await hashFile(path)) === sha) verified += 1;
+    else mismatched.push(sha);
+  }
+
+  const referenced = new Set(shas);
+  const malformed = [...names].filter((name) => !isSha256(name)).sort();
+  const unreferenced = [...names].filter((name) => isSha256(name) && !referenced.has(name)).length;
+
+  return { blobs: shas.length, verified, missing, mismatched, malformed, unreferenced };
+}
+
+/** The first few of a list, for an error message that names culprits without printing thousands. */
+const first = (shas: readonly string[], n = 5) =>
+  `${shas.slice(0, n).join(', ')}${shas.length > n ? `, … (${String(shas.length - n)} more)` : ''}`;
 
 const stamp = (now: Date) => now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
@@ -99,6 +291,50 @@ export function backupJob(deps: BackupDeps): JobDefinition {
         },
       },
       {
+        // FRM-REQ-202. After the dump, never before: a set whose dump failed has nothing to pair
+        // with, and the dump stage already alerted. A separate stage so a failure here can be
+        // replayed without taking the database dump again.
+        name: 'blobs',
+        async run(ctx) {
+          const dir = deps.config.BACKUP_DIR;
+          const dump = (ctx.priorOutput['dump'] as { path?: string } | undefined)?.path;
+          if (dump === undefined) throw new Error('the dump stage left no path to pair blobs with');
+
+          const final = blobsDirFor(dump);
+          const partial = `${final.slice(0, -BLOBS_SUFFIX.length)}${PARTIAL_SUFFIX}`;
+          const source = deps.config.FOREMAN_BLOB_DIR ?? '';
+
+          // The newest earlier set, to hardlink unchanged blobs from. Names sort by timestamp.
+          const earlier = (await readdir(dir))
+            .filter((name) => name.startsWith('foreman-') && name.endsWith(BLOBS_SUFFIX))
+            .map((name) => join(dir, name))
+            .filter((path) => path !== final)
+            .sort()
+            .pop();
+
+          try {
+            // Into a partial directory first and renamed on completion, so a copy that dies half
+            // way is never mistaken for a whole set by the drill or by a person at the shell.
+            await rm(partial, { recursive: true, force: true });
+            // An unset or missing source copies zero files into an empty set: the pair still
+            // exists, so the drill can tell "no blobs" from "a backup that forgot them".
+            const result = await copyBlobs(source, partial, earlier);
+            await rm(final, { recursive: true, force: true });
+            await rename(partial, final);
+
+            // Said out loud rather than skipped: "0 blobs" on a deployment that has uploaded
+            // screenshots is exactly what an operator needs to be able to see.
+            ctx.logger.info({ path: final, ...result }, 'blobs copied');
+            return { path: final, empty: result.total === 0, ...result };
+          } catch (error) {
+            await rm(partial, { recursive: true, force: true }).catch(() => undefined);
+            const detail = `copying blobs failed: ${error instanceof Error ? error.message : String(error)}`;
+            await deps.mailer?.send(ALERTS.backupFailed(detail));
+            throw new Error(detail, { cause: error });
+          }
+        },
+      },
+      {
         name: 'prune',
         async run(ctx) {
           const dir = deps.config.BACKUP_DIR;
@@ -106,12 +342,28 @@ export function backupJob(deps: BackupDeps): JobDefinition {
           const cutoff = Date.now() - keepFor;
 
           const removed: string[] = [];
-          for (const name of await readdir(dir)) {
-            if (!name.startsWith('foreman-') || !name.endsWith('.sql.gz')) continue;
+          const names = await readdir(dir);
+          for (const name of names) {
+            if (!isDump(name)) continue;
             const path = join(dir, name);
             const info = await stat(path);
             if (info.mtime.getTime() >= cutoff) continue;
             await unlink(path);
+            // A blob set outlives its dump by nothing: it is meaningless without it, and left
+            // behind it would be the disk filling up with copies of nothing.
+            await rm(blobsDirFor(path), { recursive: true, force: true });
+            removed.push(name);
+          }
+
+          // A partial set from a copy that died, and a set whose dump is gone (pruned by hand, or
+          // before this stage existed to pair them). Neither can be restored from.
+          const dumps = new Set(names.filter(isDump).map((name) => blobsDirFor(name)));
+          for (const name of names) {
+            const stray =
+              name.endsWith(PARTIAL_SUFFIX) ||
+              (name.startsWith('foreman-') && name.endsWith(BLOBS_SUFFIX) && !dumps.has(name));
+            if (!stray) continue;
+            await rm(join(dir, name), { recursive: true, force: true });
             removed.push(name);
           }
 
@@ -129,6 +381,11 @@ export function backupJob(deps: BackupDeps): JobDefinition {
  * **Performed, not documented.** It restores the newest dump into a scratch database, counts what
  * came back, and drops it. The runbook describes this; the job *is* it, which is the difference
  * between a backup that is known to work and one that is believed to.
+ *
+ * It also checks the blobs (FRM-REQ-203). The rows come from the **restored** database, because
+ * that is the question a real restore asks: of every blob this database says it has, does the
+ * paired directory hold the file, with bytes whose SHA-256 is its name? Checking the live blob
+ * directory instead would prove the volume is healthy and say nothing about the backup.
  */
 export function restoreDrillJob(deps: BackupDeps): JobDefinition {
   return {
@@ -139,7 +396,7 @@ export function restoreDrillJob(deps: BackupDeps): JobDefinition {
         async run(ctx) {
           const dir = deps.config.BACKUP_DIR;
           const dumps = (await readdir(dir))
-            .filter((name) => name.startsWith('foreman-') && name.endsWith('.sql.gz'))
+            .filter(isDump)
             .sort()
             .reverse();
 
@@ -177,8 +434,52 @@ export function restoreDrillJob(deps: BackupDeps): JobDefinition {
               throw new Error(`the restored database would not answer a query: ${counted.stderr}`);
             }
 
-            ctx.logger.info({ dump: newest, scratch }, 'restore drill succeeded');
-            return { dump: newest, scratch, verifiedAt: new Date().toISOString() };
+            // FRM-REQ-203. A blob row is a promise that a file exists; the restored database
+            // makes the promises and the paired directory has to keep them.
+            const listed = collector();
+            const selected = await run(
+              'psql',
+              [target.toString(), '-v', 'ON_ERROR_STOP=1', '-tAc', 'select sha256 from "blob" order by sha256'],
+              { stdout: listed.sink },
+            );
+            if (selected.code !== 0) {
+              throw new Error(`the restored database has no readable blob table: ${selected.stderr}`);
+            }
+            const shas = listed
+              .text()
+              .split('\n')
+              .map((line) => line.trim())
+              .filter((line) => line !== '');
+
+            const blobs = await verifyBlobs(shas, blobsDirFor(join(dir, newest)));
+            const problems: string[] = [];
+            if (blobs.missing.length > 0) {
+              problems.push(`${String(blobs.missing.length)} of ${String(blobs.blobs)} blobs missing: ${first(blobs.missing)}`);
+            }
+            if (blobs.mismatched.length > 0) {
+              problems.push(
+                `${String(blobs.mismatched.length)} of ${String(blobs.blobs)} blobs do not hash to their name: ${first(blobs.mismatched)}`,
+              );
+            }
+            if (blobs.malformed.length > 0) {
+              problems.push(`${String(blobs.malformed.length)} files in the blob set are not named for a SHA-256: ${first(blobs.malformed)}`);
+            }
+            if (problems.length > 0) {
+              throw new Error(`the blobs did not survive the backup (${newest}): ${problems.join('; ')}`);
+            }
+
+            ctx.logger.info(
+              { dump: newest, scratch, blobs: blobs.blobs, verified: blobs.verified, unreferenced: blobs.unreferenced },
+              'restore drill succeeded',
+            );
+            return {
+              dump: newest,
+              scratch,
+              verifiedAt: new Date().toISOString(),
+              blobs: blobs.blobs,
+              verified: blobs.verified,
+              unreferenced: blobs.unreferenced,
+            };
           } finally {
             // Always, even on failure: a drill that leaves scratch databases behind is one that
             // eventually fills the disk it was protecting.

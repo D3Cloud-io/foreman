@@ -34,6 +34,8 @@ const UNDOABLE = [
   'idea',
   'project_idea',
   'guideline',
+  // The screen row only. Its versions, verdicts and components are append-only history.
+  'screen',
 ] as const;
 
 export type UndoableType = (typeof UNDOABLE)[number];
@@ -77,6 +79,8 @@ function model(tx: TransactionClient, type: UndoableType) {
       return tx.projectIdea;
     case 'guideline':
       return tx.guideline;
+    case 'screen':
+      return tx.screen;
   }
 }
 

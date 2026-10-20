@@ -2,7 +2,7 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import type { ForemanClient } from './client.js';
 import { ForemanApiError } from './client.js';
 import { listResources, readResource, RESOURCE_TEMPLATE } from './resources.js';
-import { READ_TOOLS, WRITE_TOOLS } from './tools/index.js';
+import { READ_TOOLS, WRITE_TOOLS, type ToolDefinition } from './tools/index.js';
 
 /**
  * The MCP server the shim exposes over stdio.
@@ -57,7 +57,10 @@ export function createServer({ client, name, version }: ServerOptions): McpServe
         try {
           const result = await tool.run(client, args);
           return {
-            content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+            content: [
+              { type: 'text' as const, text: JSON.stringify(result, null, 2) },
+              ...(await imagesFor(tool, client, args, result)),
+            ],
             // Advertised cache metadata: how long this answer stays good, and what it covers.
             _meta: { 'io.d3cloud.foreman/cache': tool.cache },
           };
@@ -214,3 +217,29 @@ export function createServer({ client, name, version }: ServerOptions): McpServe
 }
 
 export const GUIDELINES_URI = 'foreman://guidelines';
+
+/**
+ * A tool's pictures as MCP `image` content (FRM-REQ-198). A failure to fetch them is said in a
+ * line of text rather than failing the call: the entity was found, and is worth returning without
+ * its pictures.
+ */
+async function imagesFor(
+  tool: ToolDefinition,
+  client: ForemanClient,
+  args: unknown,
+  result: unknown,
+): Promise<({ type: 'image'; data: string; mimeType: string } | { type: 'text'; text: string })[]> {
+  if (tool.images === undefined) return [];
+  try {
+    const images = await tool.images(client, args, result);
+    return images.map((image) => ({ type: 'image' as const, data: image.data, mimeType: image.mimeType }));
+  } catch (error) {
+    const message =
+      error instanceof ForemanApiError
+        ? `${error.message} (${String(error.status)})`
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    return [{ type: 'text' as const, text: `Images unavailable: ${message}` }];
+  }
+}

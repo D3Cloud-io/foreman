@@ -35,6 +35,7 @@ const TABLE: Partial<Record<HumanIdKind, string>> = {
   finding_api: 'finding',
   idea: 'idea',
   audit: 'audit',
+  screen: 'screen',
 };
 
 /**

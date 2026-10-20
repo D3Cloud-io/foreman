@@ -59,6 +59,12 @@ const CATEGORIES: {
     label: 'Orphan ADRs',
     blurb: 'Accepted and uncited, or a chain that loops.',
   },
+  {
+    key: 'screen-drift',
+    color: SERIES.warning,
+    label: 'Screens',
+    blurb: 'Built unlike its proposal and marked to fix, or built and never captured.',
+  },
 ];
 
 /** Where a drifting entity lives, so a row is a link rather than an instruction to go looking. */
@@ -76,6 +82,8 @@ function hrefFor(code: string, item: DriftItem): string {
       return `/projects/${code}/phases/${item.humanId}`;
     case 'orphan-adr':
       return `/projects/${code}/adrs`;
+    case 'screen-drift':
+      return `/projects/${code}/screens/${item.humanId}`;
   }
 }
 

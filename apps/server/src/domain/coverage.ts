@@ -1,4 +1,5 @@
 import type { Db } from '../db.js';
+import type { ScreenVerdictKind, TaskStatus } from '../generated/prisma/enums.js';
 import type { TransactionClient } from './audit.js';
 import { Conflict, NotFound } from './errors.js';
 
@@ -134,7 +135,12 @@ export async function coverageFor(db: Db, code: string): Promise<Coverage> {
 // ─── The exit gate ─────────────────────────────────────────────────────────
 
 export interface GateFailure {
-  readonly kind: 'uncovered-must' | 'unfinished-task' | 'open-critical';
+  readonly kind:
+    | 'uncovered-must'
+    | 'unfinished-task'
+    | 'open-critical'
+    | 'screen-unreviewed'
+    | 'screen-drifted';
   readonly humanId: string;
   readonly detail: string;
 }
@@ -222,7 +228,142 @@ export async function exitGate(
     });
   }
 
+  // 4. Screens linked to the phase whose latest capture nobody has judged, or judged drifted-fix
+  //    (FRM-REQ-200). A screen with no capture at all does not block here: nothing was built to
+  //    judge, and "built but never captured" is the drift engine's to say (FRM-REQ-201).
+  for (const screen of await screenStates(db, phase.project.id)) {
+    if (!screen.phaseIds.has(phase.id) || screen.capture === null) continue;
+    if (screen.capture.verdict === null) {
+      failures.push({
+        kind: 'screen-unreviewed',
+        humanId: screen.humanId,
+        detail: `${screen.name}: its latest capture has not been reviewed`,
+      });
+    } else if (screen.capture.verdict === 'drifted_fix') {
+      failures.push({
+        kind: 'screen-drifted',
+        humanId: screen.humanId,
+        detail: `${screen.name}: its latest capture is marked drifted-fix`,
+      });
+    }
+  }
+
   return { phase: phaseHumanId, passed: failures.length === 0, failures };
+}
+
+export interface ScreenState {
+  readonly humanId: string;
+  readonly name: string;
+  /**
+   * The newest capture across every viewport and theme, and the newest verdict on it — or null for
+   * a screen never captured. Only the latest counts: an old drifted-fix is history once a newer
+   * capture exists, and the newer one starts unreviewed.
+   */
+  readonly capture: { readonly verdict: ScreenVerdictKind | null } | null;
+  /** Phases the screen serves: through a task in the phase, or a requirement assigned to it. */
+  readonly phaseIds: ReadonlySet<string>;
+  /** Statuses of the linked tasks, for "built" (a done task) in the drift engine. */
+  readonly taskStatuses: readonly TaskStatus[];
+}
+
+/**
+ * Every live screen of a project with its latest capture's verdict and what it is linked to — the
+ * one read the exit gate (FRM-REQ-200) and the drift engine (FRM-REQ-201) share, so a screen cannot
+ * block a gate and not show as drift, or the reverse.
+ *
+ * Three queries however many screens there are. Only `relates` links count: a `cites` is a
+ * component gap pointing at a design-system requirement, which says nothing about a phase.
+ */
+export async function screenStates(
+  db: TransactionClient,
+  projectId: string,
+): Promise<ScreenState[]> {
+  const screens = await db.screen.findMany({
+    where: { projectId, deletedAt: null },
+    orderBy: { seq: 'asc' },
+    select: {
+      id: true,
+      humanId: true,
+      name: true,
+      versions: {
+        where: { kind: 'capture' },
+        // The id breaks a tie between two captures in one millisecond: UUIDv7 sorts by creation.
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 1,
+        select: {
+          verdicts: {
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+            take: 1,
+            select: { verdict: true },
+          },
+        },
+      },
+    },
+  });
+  if (screens.length === 0) return [];
+
+  // `link()` stores whichever direction it is given, so `foreman_link FRM-T-5 relates FRM-SCR-001`
+  // is a task→screen row. Both directions are one link to a screen; reading only the
+  // screen→X one would silently drop half of them from the gate and from drift.
+  const screenIds = screens.map((s) => s.id);
+  const rows = await db.reference.findMany({
+    where: {
+      kind: 'relates',
+      OR: [
+        { fromType: 'screen', fromId: { in: screenIds }, toType: { in: ['task', 'requirement'] } },
+        { toType: 'screen', toId: { in: screenIds }, fromType: { in: ['task', 'requirement'] } },
+      ],
+    },
+    select: { fromType: true, fromId: true, toType: true, toId: true },
+  });
+  const links = rows.map((r) =>
+    r.fromType === 'screen'
+      ? { screenId: r.fromId, otherType: r.toType, otherId: r.toId }
+      : { screenId: r.toId, otherType: r.fromType, otherId: r.fromId },
+  );
+  const [tasks, requirements] = await Promise.all([
+    db.task.findMany({
+      where: {
+        id: { in: links.filter((l) => l.otherType === 'task').map((l) => l.otherId) },
+        deletedAt: null,
+      },
+      select: { id: true, phaseId: true, status: true },
+    }),
+    db.requirement.findMany({
+      where: {
+        id: { in: links.filter((l) => l.otherType === 'requirement').map((l) => l.otherId) },
+        deletedAt: null,
+      },
+      select: { id: true, phaseId: true },
+    }),
+  ]);
+  const taskById = new Map(tasks.map((t) => [t.id, t]));
+  const requirementById = new Map(requirements.map((r) => [r.id, r]));
+
+  return screens.map((screen) => {
+    const phaseIds = new Set<string>();
+    const taskStatuses: TaskStatus[] = [];
+    for (const l of links) {
+      if (l.screenId !== screen.id) continue;
+      if (l.otherType === 'task') {
+        const task = taskById.get(l.otherId);
+        if (task === undefined) continue;
+        taskStatuses.push(task.status);
+        if (task.phaseId !== null) phaseIds.add(task.phaseId);
+      } else {
+        const phaseId = requirementById.get(l.otherId)?.phaseId;
+        if (phaseId !== null && phaseId !== undefined) phaseIds.add(phaseId);
+      }
+    }
+    const latest = screen.versions[0];
+    return {
+      humanId: screen.humanId,
+      name: screen.name,
+      capture: latest === undefined ? null : { verdict: latest.verdicts[0]?.verdict ?? null },
+      phaseIds,
+      taskStatuses,
+    };
+  });
 }
 
 /** Thrown when a phase is asked to complete and the gate says no. Carries every reason. */
