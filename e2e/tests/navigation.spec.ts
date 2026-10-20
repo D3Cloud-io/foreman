@@ -25,6 +25,9 @@ test.describe('the sidebar', () => {
     await signIn(page);
 
     const nav = page.getByRole('navigation').first();
+    // The Library folds its rows away (FRM-T-16.4); a closed one's links are hidden, so open it.
+    const library = nav.getByRole('button', { name: 'Library' });
+    if ((await library.getAttribute('aria-expanded')) === 'false') await library.click();
     const hrefs = await nav.getByRole('link').evaluateAll((links) =>
       links.map((l) => l.getAttribute('href')).filter((h): h is string => h !== null && h.startsWith('/')),
     );

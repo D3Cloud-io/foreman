@@ -20,6 +20,7 @@ import {
 import { foreman, type CommitRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
+import { refreshSignals } from '../components/shellSignals';
 
 /**
  * S-24 — what actually happened: commits, their attribution proposals, CI and what is deployed.
@@ -48,7 +49,11 @@ export function Activity({ code }: { code: string }) {
     setBusy(`${sha}:${task}`);
     const call = confirm ? foreman.confirmAttribution : foreman.rejectAttribution;
     void call(code, sha, task)
-      .then(() => { commits.reload(); })
+      .then(() => {
+        commits.reload();
+        // The sidebar's "Activity, N waiting for review" changed with this answer.
+        refreshSignals();
+      })
       .finally(() => { setBusy(null); });
   };
 

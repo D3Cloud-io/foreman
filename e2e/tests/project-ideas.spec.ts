@@ -29,6 +29,9 @@ test.describe('project ideas (S-28)', () => {
     await signIn(page);
 
     // The distinction the whole entity exists for, made visible in the one place that teaches it.
+    // In the Library since FRM-T-16.4: a row reached now and then, folded to keep the sidebar short.
+    const library = page.getByRole('navigation', { name: 'Main' }).getByRole('button', { name: 'Library' });
+    if ((await library.getAttribute('aria-expanded')) === 'false') await library.click();
     await page.getByRole('link', { name: 'Project ideas' }).click();
     await expect(page).toHaveURL(/\/project-ideas$/);
     await expect(page.getByRole('heading', { name: 'Project ideas', level: 1 })).toBeVisible();

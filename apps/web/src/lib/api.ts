@@ -1051,6 +1051,18 @@ export const foreman = {
     }
     return api.get<Page<FindingRow>>(`/api/findings?${query.toString()}`);
   },
+  /**
+   * Open critical findings across every project — the sidebar's needs-you count (FRM-T-16.4).
+   *
+   * Read from the page's `total`, but not with `limit=1`: `/api/findings` answers `total` as the
+   * number of rows it returned after the limit, so a one-row page always says 0 or 1. The API's
+   * ceiling, 200, is past the badge's own (99+), so the count is exact wherever it is shown. A
+   * true count needs the route to count before it limits — a server change, not made here.
+   */
+  openCriticalCount: async () => {
+    const page = await api.get<Page<{ humanId: string }>>('/api/findings?severity=critical&status=open&limit=200');
+    return page.total ?? page.items.length;
+  },
   finding: (humanId: string) => api.get<FindingDetail>(`/api/findings/${humanId}`),
   recurrences: (humanId: string) =>
     api.get<RecurrenceResult>(`/api/findings/${humanId}/recurrences`),

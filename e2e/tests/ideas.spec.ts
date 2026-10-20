@@ -31,6 +31,8 @@ test.describe('ideas (S-27)', () => {
 
     // Every section screen was a dead end before the redesign. This one arrives with the sidebar
     // already knowing where it sits.
+    // Behind the project's Knowledge row since FRM-T-16.4, which keeps the sidebar to 900px.
+    await page.getByRole('button', { name: 'Knowledge' }).click();
     await page.getByRole('link', { name: 'Ideas', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Ideas', level: 1 })).toBeVisible();
   });

@@ -106,7 +106,6 @@ export function FindingDetail({ humanId }: { humanId: string }) {
       <PageHeader
         title={finding.title}
         description={`${finding.humanId} · ${finding.project.code}`}
-        back={<Link href="/findings">Findings</Link>}
         actions={
           <>
             <Badge tone={SEVERITY_TONE[finding.severity] ?? 'neutral'}>{finding.severity}</Badge>

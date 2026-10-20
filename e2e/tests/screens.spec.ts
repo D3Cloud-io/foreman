@@ -116,6 +116,8 @@ test.describe('screens (FRM-T-12.3)', () => {
 
     // Reached from inside the project, not only by URL.
     await page.goto(`/projects/${CODE}`);
+    // Behind the project's Knowledge row since FRM-T-16.4, which keeps the sidebar to 900px.
+    await page.getByRole('button', { name: 'Knowledge' }).click();
     await page.getByRole('link', { name: 'Screens', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Screens', level: 1 })).toBeVisible();
     await page.getByRole('link', { name: humanId, exact: true }).click();

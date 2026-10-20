@@ -364,8 +364,8 @@ function SectionCard({
   };
 
   return (
-    // A Section, which on the recessed sheet is a card with a 16px title (D-085) — the size the
-    // hand-rolled heading this replaced was set to by hand.
+    // A Section, so a region named by its heading, like every other block on this page — not the
+    // hand-rolled heading this replaced.
     <Section
       title={heading}
       actions={
@@ -862,8 +862,7 @@ function Thoughts({
   const items = state.status === 'ready' ? [...state.value.items].reverse() : [];
 
   return (
-    // A Section, so a region named by its heading and, on the recessed sheet, a card with the
-    // 16px title — like every other block on this page.
+    // A Section, so a region named by its heading, like every other block on this page.
     <Section title={board ? 'Discussion' : 'Thoughts'}>
       <Stack gap="8">
         {error !== null && (
