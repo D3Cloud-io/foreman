@@ -427,6 +427,186 @@ describe.skipIf(url === undefined)('audit event ids and history', () => {
     });
   });
 
+  describe('uploads, screens, scores and comments: audited, not undoable, still answered with ids', () => {
+    const png = (label: string) =>
+      Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(label)]);
+    const FIGMA = { figmaFileKey: 'U0kWWofDq6tP5m8OljAQJW', figmaNodeId: '12:34' };
+
+    const upload = async (bytes: Buffer) => {
+      const form = new FormData();
+      form.append('file', new File([bytes], 'screen.png', { type: 'image/png' }));
+      const res = await fetch(`${origin}/api/blobs`, { method: 'POST', headers: { cookie }, body: form });
+      expect(res.status, await res.clone().text()).toBeLessThan(300);
+      return (await res.json()) as { sha256: string; auditEventIds: string[] };
+    };
+    /** The verdict history gives an event, found by the ID the write returned. */
+    const verdictOf = async (eventId: string) => {
+      const event = await eventOf(eventId);
+      const entity = event.entityHumanId ?? event.entityId;
+      return (await history(entity)).find((item) => item.id === eventId);
+    };
+
+    it('answers a blob upload with its event, and lists nothing for a re-upload', async () => {
+      const bytes = png(`audit-events ${String(Date.now())}`);
+      const first = await upload(bytes);
+      expect(first.auditEventIds).toHaveLength(1);
+      expect((await eventOf(first.auditEventIds[0] ?? '')).entityType).toBe('blob');
+      const verdict = await verdictOf(first.auditEventIds[0] ?? '');
+      expect(verdict).toMatchObject({ action: 'create', undoable: false });
+      expect(verdict?.reason).toMatch(/cannot be undone/);
+      // Nothing was written the second time, so there is no event to name.
+      expect((await upload(bytes)).auditEventIds).toEqual([]);
+    });
+
+    it('answers a screen, a proposal, a capture, a verdict and a component with their events', async () => {
+      const screen = await send<{ humanId: string }>('POST', `/projects/${CODE}/screens`, { name: 'Home' });
+      expect(screen.auditEventIds).toHaveLength(1);
+      const screens = `/projects/${CODE}/screens/${screen.humanId}`;
+
+      const blob = await upload(png(`proposal ${String(Date.now())}`));
+      const proposal = await send<{ id: string }>('POST', `${screens}/proposals`, {
+        blobSha256: blob.sha256,
+        viewport: 'desktop',
+        theme: 'dark',
+        ...FIGMA,
+        figmaFileVersion: '1',
+      });
+      expect(proposal.auditEventIds).toHaveLength(1);
+
+      // A newer proposal for the same line: its own event first, then the one that retired the old.
+      const blob2 = await upload(png(`proposal two ${String(Date.now())}`));
+      const second = await send('POST', `${screens}/proposals`, {
+        blobSha256: blob2.sha256,
+        viewport: 'desktop',
+        theme: 'dark',
+        ...FIGMA,
+        figmaFileVersion: '2',
+      });
+      expect(second.auditEventIds).toHaveLength(2);
+      const [made, retired] = await Promise.all(second.auditEventIds.map(eventOf));
+      expect(made?.action).toBe('create');
+      expect(retired?.action).toBe('update');
+      // The same again writes nothing, so names nothing.
+      expect(
+        (
+          await send('POST', `${screens}/proposals`, {
+            blobSha256: blob2.sha256,
+            viewport: 'desktop',
+            theme: 'dark',
+            ...FIGMA,
+            figmaFileVersion: '2',
+          }, 200)
+        ).auditEventIds,
+      ).toEqual([]);
+
+      const shot = await upload(png(`capture ${String(Date.now())}`));
+      const capture = await send<{ id: string }>('POST', `${screens}/captures`, {
+        blobSha256: shot.sha256,
+        viewport: 'desktop',
+        theme: 'dark',
+        commitSha: 'A1B2C3D4E5F60718293A4B5C6D7E8F9012345678',
+      });
+      expect(capture.auditEventIds).toHaveLength(1);
+
+      const verdict = await send('POST', `${screens}/captures/${capture.id}/verdict`, { verdict: 'matches' });
+      expect(verdict.auditEventIds).toHaveLength(1);
+      const judged = await verdictOf(verdict.auditEventIds[0] ?? '');
+      expect(judged).toMatchObject({ undoable: false });
+      expect(judged?.reason).toMatch(/cannot be undone/);
+
+      const component = await send('POST', `${screens}/components`, { name: 'Button', kind: 'uses' });
+      expect(component.auditEventIds).toHaveLength(1);
+    });
+
+    it('answers a score and a comment write with their events', async () => {
+      const idea = await send<{ humanId: string }>('POST', '/project-ideas', { title: 'Scored and discussed' });
+      strays.projectIdeas.push(idea.humanId);
+
+      const scored = await send('PUT', `/project-ideas/${idea.humanId}/scores`, { impact: 4, effort: 2 }, 200);
+      expect(scored.auditEventIds).toHaveLength(1);
+      expect((await eventOf(scored.auditEventIds[0] ?? '')).entityType).toBe('idea_score');
+      expect((await verdictOf(scored.auditEventIds[0] ?? ''))?.undoable).toBe(false);
+
+      const said = await send<{ id: string }>('POST', `/project-ideas/${idea.humanId}/comments`, {
+        body: 'A thought.',
+        internal: false,
+      });
+      expect(said.auditEventIds).toHaveLength(1);
+      const reworded = await send('PATCH', `/project-ideas/${idea.humanId}/comments/${said.id}`, { body: 'A better thought.' });
+      expect(reworded.auditEventIds).toHaveLength(1);
+      const withdrawn = await api(`/project-ideas/${idea.humanId}/comments/${said.id}`, { method: 'DELETE' });
+      expect(withdrawn.status).toBe(200);
+      expect(((await withdrawn.json()) as { auditEventIds: string[] }).auditEventIds).toHaveLength(1);
+    });
+  });
+
+  describe('the cost of a history is bounded', () => {
+    it('checks only the newest ten, and answers the rest as not checked', async () => {
+      await send('POST', `/projects/${CODE}/requirements`, { statement: 'Foreman shall bound its history.' });
+      for (let n = 0; n < 12; n += 1) {
+        await send('PATCH', `/projects/${CODE}/requirements/${CODE}-REQ-001`, { priority: n % 2 === 0 ? 'M' : 'S' });
+      }
+      const items = await history(`${CODE}-REQ-001`, 50);
+      expect(items).toHaveLength(13);
+      expect(items.slice(0, 10).every((item) => typeof item.undoable === 'boolean')).toBe(true);
+      for (const item of items.slice(10)) {
+        expect(item.undoable).toBeNull();
+        expect(item.reason).toBe('not checked — open the event to check');
+      }
+      // The create is the oldest, so it is unchecked; the single-event route settles it.
+      const oldest = items.at(-1);
+      const res = await api(`/audit-events/${oldest?.id ?? ''}/undoable`);
+      expect(res.status, await res.clone().text()).toBe(200);
+      expect(await res.json()).toEqual({ id: oldest?.id, undoable: true });
+    });
+
+    it('answers one event: a refusal with its reason, and a 404 for one that is not there', async () => {
+      await send('POST', `/projects/${CODE}/requirements`, { statement: 'Foreman shall answer for one event.' });
+      const changed = await send('PATCH', `/projects/${CODE}/requirements/${CODE}-REQ-001`, { priority: 'M' });
+      await send('PATCH', `/projects/${CODE}/requirements/${CODE}-REQ-001`, { priority: 'S' });
+      const stale = await api(`/audit-events/${changed.auditEventIds[0] ?? ''}/undoable`);
+      const verdict = (await stale.json()) as { undoable: boolean; reason?: string };
+      expect(verdict.undoable).toBe(false);
+      expect(verdict.reason).toMatch(/changed since/);
+
+      expect((await api('/audit-events/not-a-uuid/undoable')).status).toBe(404);
+      expect((await api('/audit-events/00000000-0000-7000-8000-000000000000/undoable')).status).toBe(404);
+    });
+
+    it('takes no group lock, so a read cannot queue the group writes behind it', async () => {
+      const project = await history(CODE);
+      expect(project.length).toBeGreaterThan(0);
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let locked: () => void = () => undefined;
+      const taken = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      // Somebody mid-way through a group write holds the lock.
+      const holder = db.$transaction(
+        async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('foreman:project_group'))`;
+          locked();
+          await held;
+        },
+        { timeout: 30_000 },
+      );
+      await taken;
+      try {
+        const answered = await Promise.race([
+          history(CODE),
+          new Promise<'blocked'>((resolve) => setTimeout(() => { resolve('blocked'); }, 5_000)),
+        ]);
+        expect(answered).not.toBe('blocked');
+      } finally {
+        release();
+        await holder;
+      }
+    });
+  });
+
   describe('the history endpoint itself', () => {
     it('needs an entity, and a signed-in caller', async () => {
       expect((await api('/audit-events')).status).toBe(400);

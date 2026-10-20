@@ -24,7 +24,7 @@ import { findProject } from '../domain/projects.js';
 import { resolveScope, scopeCodes } from '../domain/scope.js';
 import { recurrencesOf, regressionWatch } from '../domain/recurrence.js';
 import { actorOf, handler, param, parseBody, parseQuery } from './helpers.js';
-import { auditEventsHandler } from './undo.js';
+import { auditEventsHandler, undoabilityHandler } from './undo.js';
 
 /**
  * Findings over HTTP, and the one route that is deliberately cross-project.
@@ -41,6 +41,7 @@ export function findingRoutes(db: Db): Router {
 
   // One record's history and what of it can be undone (FRM-T-18.3). Behind `read`, above.
   router.get('/audit-events', auditEventsHandler(db));
+  router.get('/audit-events/:id/undoable', undoabilityHandler(db));
 
   // ─── The cross-project inbox (T-6.6) ─────────────────────────────────────
 

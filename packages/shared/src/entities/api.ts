@@ -135,11 +135,19 @@ export interface AuditEventEntry {
   readonly action: AuditAction;
   /** One human sentence: what changed. */
   readonly summary: string;
-  /** Whether `POST /api/undo/:id` would succeed right now. */
-  readonly undoable: boolean;
-  /** Why not, when it is not: the refusal the undo itself would give. */
+  /**
+   * Whether `POST /api/undo/:id` would succeed right now. `null` for an event beyond the newest
+   * ten of a response, which is not checked: ask `GET /api/audit-events/:id/undoable`.
+   */
+  readonly undoable: boolean | null;
+  /** Why not, when it is not: the refusal the undo itself would give — or why it was not checked. */
   readonly reason?: string;
 }
+
+/** `GET /api/audit-events/:id/undoable`: one event's verdict. */
+export type AuditEventUndoability =
+  | { readonly id: string; readonly undoable: true }
+  | { readonly id: string; readonly undoable: false; readonly reason: string };
 
 export interface AuditEventsResponse {
   readonly entity: string;

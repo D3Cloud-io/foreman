@@ -16,7 +16,10 @@ import { NotFound } from './errors.js';
 
 export interface IssuedToken {
   readonly id: string;
-  /** The audit event that issued it (FRM-REQ-243). Undoing it revokes the token. */
+  /**
+   * The audit event that issued it (FRM-REQ-243). A token is not undoable — `api_token` is not in
+   * `UNDOABLE` — so its history says why; revoking it is the way back.
+   */
   readonly auditEventIds: string[];
   readonly name: string;
   readonly prefix: string;
