@@ -632,6 +632,38 @@ describe.skipIf(url === undefined)('delete and undo', () => {
         expect(state.referenced).toBe(false);
       });
 
+      it('a screen\'s relates to a requirement is its reference alone, and undoes cleanly', async () => {
+        const res = await post(`/projects/${CODE}/screens`, { name: 'Undo settings', route: '/undo' });
+        expect(res.status, await res.clone().text()).toBe(201);
+        const screen = ((await res.json()) as { humanId: string }).humanId;
+        const before = await coverage();
+        const [screenId, reqId] = await Promise.all([
+          db.screen.findFirstOrThrow({ where: { humanId: screen } }).then((s) => s.id),
+          idOf(REQ),
+        ]);
+        const relatesRow = () =>
+          db.reference.findFirst({ where: { fromId: screenId, toId: reqId, kind: 'relates' } });
+
+        expect((await links({ from: screen, to: REQ, kind: 'relates' })).status).toBe(200);
+        const event = await linkEvent(screen, 'create');
+        expect(event.after).toMatchObject({
+          rows: {
+            reference: true,
+            taskRequirement: false,
+            taskDependency: false,
+            adrRelation: false,
+            supersededBy: false,
+            status: false,
+          },
+        });
+        expect(await relatesRow()).not.toBeNull();
+        expect(await coverage()).toEqual(before);
+
+        expect((await undoOf(event.id)).status).toBe(200);
+        expect(await relatesRow()).toBeNull();
+        expect((await db.screen.findFirstOrThrow({ where: { humanId: screen } })).deletedAt).toBeNull();
+      });
+
       it('a violates between ADRs is not an edge in their graph', async () => {
         const older = await newAdr('Postgres for everything');
         const newer = await newAdr('A queue in Redis after all');
