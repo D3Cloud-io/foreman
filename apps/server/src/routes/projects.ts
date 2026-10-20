@@ -26,6 +26,7 @@ import {
   updateRequirement,
   updateTask,
 } from '../domain/projects.js';
+import { phaseProgress } from '../domain/wherewestand.js';
 import { requireAuth, requireScope } from '../auth/middleware.js';
 import { assertFresh, setEtag } from './concurrency.js';
 import {
@@ -219,8 +220,19 @@ export function projectRoutes(db: Db): Router {
     '/:code/phases',
     handler(async (req, res) => {
       // Ordered by build order, not by number: Bindery built 0–8.5, 9–11, 13–16, with 12 ahead.
-      const phases = await listPhases(db, param(req, 'code'));
-      res.json({ items: phases, nextCursor: null, total: phases.length });
+      const code = param(req, 'code');
+      const project = await findProject(db, code);
+      const [phases, progress] = await Promise.all([
+        listPhases(db, code),
+        phaseProgress(db, project.id),
+      ]);
+      // Each phase carries its task counts, from the whole set (FRM-REQ-242): the same read the
+      // brief's active phase uses. A phase with no tasks is absent from the grouping; zeros.
+      const items = phases.map((phase) => ({
+        ...phase,
+        tasks: progress.get(phase.id) ?? { done: 0, cancelled: 0, total: 0 },
+      }));
+      res.json({ items, nextCursor: null, total: items.length });
     }),
   );
 

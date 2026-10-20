@@ -3,7 +3,7 @@ import type { Db, Prisma } from '../db.js';
 import { driftFor, type DriftCategory } from './drift.js';
 import { NotFound } from './errors.js';
 import { guidelinesForGroup } from './guidelines.js';
-import { phaseInFlight } from './wherewestand.js';
+import { phaseInFlight, phaseProgress } from './wherewestand.js';
 
 /**
  * The session brief (FRM-REQ-082, FRM-REQ-083, FRM-REQ-092) — the most-used path in the system.
@@ -218,18 +218,15 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
       }),
     ]);
 
+  // The same grouped read the Phases list uses, so the overview and Phases cannot disagree.
   const phaseTasks =
     activePhase === null
       ? { done: 0, cancelled: 0, total: 0 }
-      : {
-          done: await db.task.count({
-            where: { phaseId: activePhase.id, status: 'done', deletedAt: null },
-          }),
-          cancelled: await db.task.count({
-            where: { phaseId: activePhase.id, status: 'cancelled', deletedAt: null },
-          }),
-          total: await db.task.count({ where: { phaseId: activePhase.id, deletedAt: null } }),
-        };
+      : ((await phaseProgress(db, project.id, activePhase.id)).get(activePhase.id) ?? {
+          done: 0,
+          cancelled: 0,
+          total: 0,
+        });
 
   return {
     project: {

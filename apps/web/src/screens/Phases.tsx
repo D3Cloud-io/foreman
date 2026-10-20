@@ -1,5 +1,5 @@
 import { Card, Cluster, EmptyState, Grid, Page, Section, Skeleton, Stack } from '@d3cloud/ui';
-import { api, type PhaseRow } from '../lib/api';
+import { foreman, type PhaseRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { percentClosed } from '../lib/completion';
 import { ProjectHeader } from '../components/ProjectHeader';
@@ -18,15 +18,6 @@ import { phaseStatusTone, SERIES } from '../ui/tone';
  * of the project yourself — a `8 / 8` in a cell is a fraction you have to divide. Each phase is a
  * card with a ring now, and the strip at the top is the whole project in one bar.
  */
-
-/**
- * A phase with its task counts, as the server counted them (FRM-REQ-242). The browser counts
- * nothing here: it used to tally one page of `/tasks`, capped at 200, so a project of 212 tasks
- * drew its last phases as empty while the overview said 8 of 12.
- */
-export interface PhaseWithProgress extends PhaseRow {
-  readonly tasks: { readonly done: number; readonly cancelled: number; readonly total: number };
-}
 
 interface Counted {
   readonly phase: PhaseRow;
@@ -76,10 +67,9 @@ export function PhaseCard({ counted, code }: { counted: Counted; code: string })
 }
 
 export function Phases({ code }: { code: string }) {
-  const phases = useAsync(
-    () => api.get<{ items: PhaseWithProgress[] }>(`/api/projects/${code}/phase-progress`),
-    [code],
-  );
+  // Each phase arrives with its task counts, counted by the server over the whole set; this
+  // screen counts nothing (FRM-REQ-242).
+  const phases = useAsync(() => foreman.phases(code), [code]);
 
   const items = phases.state.status === 'ready' ? phases.state.value.items : [];
 

@@ -262,6 +262,20 @@ export interface PhaseRow {
   size: string | null;
 }
 
+/** A phase with its task counts, from the whole set (FRM-REQ-242). */
+export interface PhaseProgressRow extends PhaseRow {
+  tasks: { done: number; cancelled: number; total: number };
+}
+
+/** `GET /api/findings`: `total` counts the matching set, `counts` it by severity (FRM-REQ-242). */
+export interface FindingsPage {
+  items: FindingRow[];
+  nextCursor: string | null;
+  total: number;
+  /** The set ignoring the severity filter, so the chips keep their numbers when one is chosen. */
+  counts: { critical: number; high: number; medium: number; low: number };
+}
+
 export interface TaskRow {
   id: string;
   humanId: string;
@@ -893,7 +907,7 @@ export const foreman = {
       group === null ? '/api/portfolio' : `/api/portfolio?${new URLSearchParams({ group }).toString()}`,
     ),
   project: (code: string) => api.get<ProjectDetail>(`/api/projects/${code}`),
-  phases: (code: string) => api.get<Page<PhaseRow>>(`/api/projects/${code}/phases`),
+  phases: (code: string) => api.get<Page<PhaseProgressRow>>(`/api/projects/${code}/phases`),
   tasks: (code: string, phaseHumanId?: string) =>
     api.get<Page<TaskRow>>(
       `/api/projects/${code}/tasks?limit=200${phaseHumanId === undefined ? '' : `&phase=${phaseHumanId}`}`,
@@ -1072,19 +1086,7 @@ export const foreman = {
     for (const [key, value] of Object.entries(params)) {
       if (value !== '') query.set(key, value);
     }
-    return api.get<Page<FindingRow>>(`/api/findings?${query.toString()}`);
-  },
-  /**
-   * Open critical findings across every project — the sidebar's needs-you count (FRM-T-16.4).
-   *
-   * Read from the page's `total`, but not with `limit=1`: `/api/findings` answers `total` as the
-   * number of rows it returned after the limit, so a one-row page always says 0 or 1. The API's
-   * ceiling, 200, is past the badge's own (99+), so the count is exact wherever it is shown. A
-   * true count needs the route to count before it limits — a server change, not made here.
-   */
-  openCriticalCount: async () => {
-    const page = await api.get<Page<{ humanId: string }>>('/api/findings?severity=critical&status=open&limit=200');
-    return page.total ?? page.items.length;
+    return api.get<FindingsPage>(`/api/findings?${query.toString()}`);
   },
   finding: (humanId: string) => api.get<FindingDetail>(`/api/findings/${humanId}`),
   recurrences: (humanId: string) =>

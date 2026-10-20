@@ -132,7 +132,10 @@ export function Findings({ search }: { search: string }) {
   ];
 
   const items = findings.state.status === 'ready' ? findings.state.value.items : [];
-  const count = (level: string) => items.filter((f) => f.severity === level).length;
+  // From the server's own counts of the whole matching set, never from the page: a page is capped
+  // at 200 (FRM-REQ-242). They ignore the severity filter, so a chip keeps its number when chosen.
+  const ready = findings.state.status === 'ready' ? findings.state.value : null;
+  const count = (level: 'critical' | 'high' | 'medium' | 'low') => ready?.counts[level] ?? 0;
   const criticals = count('critical');
 
   // The counts describe what is on screen, so they follow the lens and status filters and change
@@ -156,7 +159,7 @@ export function Findings({ search }: { search: string }) {
         }
         {...(findings.state.status === 'ready'
           ? {
-              count: findings.state.value.items.length,
+              count: findings.state.value.total,
               countNoun: { one: 'finding', other: 'findings' },
             }
           : {})}

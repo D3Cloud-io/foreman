@@ -165,6 +165,29 @@ describe.skipIf(url === undefined)('a group scope on the cross-project reads', (
     expect(ungrouped).toEqual(['GSU']);
   });
 
+  it('counts the whole scoped set in total and by severity, whatever the page size (FRM-REQ-242)', async () => {
+    interface Counted {
+      items: FindingRow[];
+      total: number;
+      counts: Record<'critical' | 'high' | 'medium' | 'low', number>;
+    }
+    // Dormice holds GSB and GSC, one high finding each: a page of one still totals both.
+    const dormiceOnly = await json<Counted>(await api(`/api/findings?limit=1&group=${dormice.slug}`));
+    expect(dormiceOnly.items).toHaveLength(1);
+    expect(dormiceOnly.total).toBe(2);
+    expect(dormiceOnly.counts).toEqual({ critical: 0, high: 2, medium: 0, low: 0 });
+
+    // The counts ignore the severity filter; the total follows it.
+    const wrongSeverity = await json<Counted>(
+      await api(`/api/findings?limit=1&group=${dormice.slug}&severity=critical`),
+    );
+    expect(wrongSeverity.total).toBe(0);
+    expect(wrongSeverity.counts.high).toBe(2);
+
+    const ungrouped = await json<Counted>(await api('/api/findings?limit=1&group=ungrouped'));
+    expect(ungrouped.total).toBe(1);
+  });
+
   it('keeps a project filter inside the scope: a project outside it matches nothing', async () => {
     expect((await findings(`group=${dormice.slug}&project=GSB`)).map((f) => f.project)).toEqual(['GSB']);
     expect(await findings(`group=${dormice.slug}&project=GSA`)).toEqual([]);

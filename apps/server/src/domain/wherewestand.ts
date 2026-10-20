@@ -66,13 +66,18 @@ export interface PhaseProgress {
  *
  * One grouped count in the database, so a project of any size answers in one read. The browser
  * used to count the tasks of a single page capped at 200 — Bindery has 212, and Phase 9 read as
- * "No tasks" while the overview, which counts here, said 8 of 12. A phase with no tasks has no
- * row in the grouping, so it is absent from the map; read it as zeros.
+ * "No tasks" while the overview said 8 of 12. This is now the one implementation: the brief's
+ * active phase and the Phases list both read it, `only` narrowing it to a single phase. A phase
+ * with no tasks has no row in the grouping, so it is absent from the map; read it as zeros.
  */
-export async function phaseProgress(db: Db, projectId: string): Promise<Map<string, PhaseProgress>> {
+export async function phaseProgress(
+  db: Db,
+  projectId: string,
+  only?: string,
+): Promise<Map<string, PhaseProgress>> {
   const rows = await db.task.groupBy({
     by: ['phaseId', 'status'],
-    where: { projectId, deletedAt: null, phaseId: { not: null } },
+    where: { projectId, deletedAt: null, phaseId: only ?? { not: null } },
     _count: { _all: true },
   });
 
