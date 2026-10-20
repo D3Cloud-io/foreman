@@ -22,8 +22,11 @@ import type { NodeResult, Result } from 'axe-core';
 const EMAIL = process.env['E2E_EMAIL'] ?? 'dev@localhost';
 const PASSWORD = process.env['E2E_PASSWORD'] ?? 'foreman-dev-password-9174';
 
-/** Every screen a person can reach, with the seeded project. */
-const SCREENS: { name: string; path: string }[] = [
+/**
+ * Every screen a person can reach, with the seeded project. A path is a string, or — for a page
+ * whose address the seed does not fix — a function that finds or makes the record and returns it.
+ */
+const SCREENS: { name: string; path: string | ((page: Page) => Promise<string>) }[] = [
   { name: 'dashboard', path: '/' },
   { name: 'projects', path: '/projects' },
   { name: 'project ideas', path: '/project-ideas' },
@@ -37,6 +40,7 @@ const SCREENS: { name: string; path: string }[] = [
   { name: 'scope of work', path: '/projects/EXMP/scope-of-work' },
   { name: 'register', path: '/projects/EXMP/register' },
   { name: 'documents', path: '/projects/EXMP/documents' },
+  { name: 'document', path: documentPath },
   { name: 'decisions', path: '/projects/EXMP/adrs' },
   { name: 'risks', path: '/projects/EXMP/risks' },
   { name: 'glossary', path: '/projects/EXMP/glossary' },
@@ -45,12 +49,66 @@ const SCREENS: { name: string; path: string }[] = [
   { name: 'activity', path: '/projects/EXMP/activity' },
   { name: 'drift', path: '/projects/EXMP/drift' },
   { name: 'screens', path: '/projects/EXMP/screens' },
+  { name: 'screen detail', path: screenPath },
+  { name: 'guidelines', path: '/guidelines' },
   { name: 'findings', path: '/findings' },
   { name: 'finding detail', path: '/findings/EXMP-CR-001' },
   { name: 'search', path: '/search?q=decision' },
   { name: 'health', path: '/system' },
   { name: 'api tokens', path: '/tokens' },
+  { name: 'not found', path: '/no-such-page' },
 ];
+
+/** A document's page is addressed by its row ID, which the seed does not fix: follow the link. */
+async function documentPath(page: Page): Promise<string> {
+  await page.goto('/projects/EXMP/documents');
+  const href = await page.getByRole('link', { name: 'Architecture' }).getAttribute('href');
+  expect(href, 'the seeded Architecture document').toMatch(/^\/projects\/EXMP\/documents\/.+/);
+  return href ?? '';
+}
+
+/** One 8×8 PNG, so the screen's page has a design to show beside nothing built yet. */
+const PROPOSAL_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGPQiDqBFTEMLQkAFKhSgZfuVK8AAAAASUVORK5CYII=';
+const SWEEP_SCREEN = 'Accessibility sweep';
+
+/**
+ * The seed has no screens, so the sweep keeps one of its own — found by name, made once through
+ * the API on the console's own session (as screens.spec.ts does), with a desktop proposal.
+ */
+async function screenPath(page: Page): Promise<string> {
+  const list = await page.request.get('/api/projects/EXMP/screens');
+  expect(list.ok(), await list.text()).toBe(true);
+  const { items } = (await list.json()) as { items: { humanId: string; name: string }[] };
+  const existing = items.find((item) => item.name === SWEEP_SCREEN);
+  if (existing !== undefined) return `/projects/EXMP/screens/${existing.humanId}`;
+
+  const created = await page.request.post('/api/projects/EXMP/screens', {
+    data: { name: SWEEP_SCREEN, route: '/inbox' },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const { humanId } = (await created.json()) as { humanId: string };
+
+  const blob = await page.request.post('/api/blobs', {
+    multipart: {
+      file: { name: 'proposal.png', mimeType: 'image/png', buffer: Buffer.from(PROPOSAL_PNG, 'base64') },
+    },
+  });
+  expect(blob.ok(), await blob.text()).toBe(true);
+  const { sha256 } = (await blob.json()) as { sha256: string };
+  const proposal = await page.request.post(`/api/projects/EXMP/screens/${humanId}/proposals`, {
+    data: {
+      blobSha256: sha256,
+      viewport: 'desktop',
+      theme: 'light',
+      figmaFileKey: 'e2eFigmaFile',
+      figmaNodeId: '12:34',
+      figmaFileVersion: '1',
+    },
+  });
+  expect(proposal.ok(), await proposal.text()).toBe(true);
+  return `/projects/EXMP/screens/${humanId}`;
+}
 
 async function signIn(page: Page): Promise<void> {
   await page.goto('/');
@@ -89,7 +147,7 @@ for (const theme of ['light', 'dark'] as const) {
           await page.setViewportSize({ width: width.width, height: width.height });
           await page.emulateMedia({ colorScheme: theme });
           await signIn(page);
-          await page.goto(screen.path);
+          await page.goto(typeof screen.path === 'string' ? screen.path : await screen.path(page));
           // Let the screen's own fetches land: axe on a skeleton tests the skeleton.
           await page.waitForLoadState('networkidle');
 
@@ -100,6 +158,25 @@ for (const theme of ['light', 'dark'] as const) {
           ).toEqual([]);
         });
       }
+    }
+
+    // Members exists only on a fund board (ADR-016); a solo deployment answers it with not-found,
+    // which the sweep already checks. The suite runs against solo, so this runs only if pointed at
+    // a board.
+    for (const width of WIDTHS) {
+      test(`members at ${width.name} has no violations`, async ({ page }) => {
+        await page.setViewportSize({ width: width.width, height: width.height });
+        await page.emulateMedia({ colorScheme: theme });
+        await signIn(page);
+        const session = await page.request.get('/auth/session');
+        const { mode } = (await session.json()) as { mode?: string };
+        test.skip(mode !== 'board', 'a solo deployment has no Members screen');
+        await page.goto('/members');
+        await page.waitForLoadState('networkidle');
+
+        const violations = await violationsOn(page);
+        expect(violations, `members (${theme}, ${width.name}):\n  ${violations.join('\n  ')}`).toEqual([]);
+      });
     }
 
     // On a phone the sidebar is a drawer, which the sweep above never opens.

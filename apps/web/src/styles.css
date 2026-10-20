@@ -147,7 +147,8 @@
 
    Scoped to running text. A link in a table cell, a nav or a card title is surrounded by
    structure rather than by prose, and underlining every one of those makes a dense screen
-   illegible. */
+   illegible. A SideNav item is an `li > a`, so `li a` stops at a `nav` — said here rather than
+   undone afterwards by selecting the library's class names. */
 .fm-markdown a,
 li a:not(nav a),
 p a,
@@ -155,12 +156,6 @@ dd a {
   text-decoration: underline;
   text-underline-offset: 0.2em;
 }
-
-/* Except navigation, where the link *is* the structure and is found by position, not colour. A
-   SideNav item is an `li > a`, so the rule above would underline every one — and did: the undo
-   that sat here named `.d3-nav` and `.d3-page-header`, which are not the library's class names
-   (and an app must not select on those anyway), so it never matched and the whole sidebar was
-   underlined. `:not(nav a)` says it without reaching into the library. */
 
 /* Mermaid's edge labels, made readable.
 

@@ -862,61 +862,57 @@ function Thoughts({
   const items = state.status === 'ready' ? [...state.value.items].reverse() : [];
 
   return (
-    <Card padding="md">
-      <section aria-label={board ? 'Discussion' : 'Thoughts'}>
-        <Stack gap="16">
-          <h2 className="fm-section__heading">{board ? 'Discussion' : 'Thoughts'}</h2>
-
-          <Stack gap="8">
-            {error !== null && (
-              <Alert tone="danger" title="That did not post" dynamic>
-                {error}
-              </Alert>
-            )}
-            <Textarea
-              aria-label={board ? 'Add to the discussion' : 'Add a thought'}
-              rows={3}
-              value={body}
-              maxLength={4000}
-              placeholder={board ? 'Say something about this submission…' : 'What are you thinking about it today?'}
-              onChange={(e) => { setBody(e.target.value); }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  post();
-                }
-              }}
+    // A Section, so a region named by its heading and, on the recessed sheet, a card with the
+    // 16px title — like every other block on this page.
+    <Section title={board ? 'Discussion' : 'Thoughts'}>
+      <Stack gap="8">
+        {error !== null && (
+          <Alert tone="danger" title="That did not post" dynamic>
+            {error}
+          </Alert>
+        )}
+        <Textarea
+          aria-label={board ? 'Add to the discussion' : 'Add a thought'}
+          rows={3}
+          value={body}
+          maxLength={4000}
+          placeholder={board ? 'Say something about this submission…' : 'What are you thinking about it today?'}
+          onChange={(e) => { setBody(e.target.value); }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              post();
+            }
+          }}
+        />
+        <Cluster gap="8" align="center" justify="between">
+          {board && reviews ? (
+            <Checkbox
+              label="Board only — the submitter will not see this"
+              checked={internal}
+              onCheckedChange={(checked) => { setInternal(checked === true); }}
             />
-            <Cluster gap="8" align="center" justify="between">
-              {board && reviews ? (
-                <Checkbox
-                  label="Board only — the submitter will not see this"
-                  checked={internal}
-                  onCheckedChange={(checked) => { setInternal(checked === true); }}
-                />
-              ) : (
-                <span className="fm-muted">Markdown works. ⌘↵ posts.</span>
-              )}
-              <Button type="button" variant="primary" disabled={busy || body.trim() === ''} onClick={post}>
-                {busy ? 'Posting…' : board ? 'Post' : 'Add thought'}
-              </Button>
-            </Cluster>
-          </Stack>
-
-          {state.status === 'loading' && <Skeleton lines={3} />}
-          {state.status === 'ready' && items.length === 0 && (
-            <p className="fm-section__prompt">
-              {board ? 'Nothing said yet.' : 'Nothing yet. A line a day is how an idea gets thought through.'}
-            </p>
+          ) : (
+            <span className="fm-muted">Markdown works. ⌘↵ posts.</span>
           )}
-          <ol className="fm-thoughts">
-            {items.map((c) => (
-              <Thought key={c.id} humanId={humanId} thought={c} mine={c.user.id === userId} board={board} onChanged={refresh} />
-            ))}
-          </ol>
-        </Stack>
-      </section>
-    </Card>
+          <Button type="button" variant="primary" disabled={busy || body.trim() === ''} onClick={post}>
+            {busy ? 'Posting…' : board ? 'Post' : 'Add thought'}
+          </Button>
+        </Cluster>
+      </Stack>
+
+      {state.status === 'loading' && <Skeleton lines={3} />}
+      {state.status === 'ready' && items.length === 0 && (
+        <p className="fm-section__prompt">
+          {board ? 'Nothing said yet.' : 'Nothing yet. A line a day is how an idea gets thought through.'}
+        </p>
+      )}
+      <ol className="fm-thoughts">
+        {items.map((c) => (
+          <Thought key={c.id} humanId={humanId} thought={c} mine={c.user.id === userId} board={board} onChanged={refresh} />
+        ))}
+      </ol>
+    </Section>
   );
 }
 
