@@ -398,14 +398,22 @@ describe.skipIf(url === undefined)('delete and undo', () => {
     });
 
     describe('a link that changed nothing has nothing to undo', () => {
-      it('records whether a link and an unlink changed anything', async () => {
+      it('records which rows a link and an unlink changed', async () => {
         const task = await newTask('Recorded');
+        const rows = {
+          reference: true,
+          taskRequirement: true,
+          taskDependency: false,
+          adrRelation: false,
+          supersededBy: false,
+        };
         await links({ from: task, to: REQ, kind: 'satisfies' });
         expect((await linkEvent(task, 'create')).after).toEqual({
           event: 'link',
           to: REQ,
           kind: 'satisfies',
           changed: true,
+          rows,
         });
         await links({ from: task, to: REQ, kind: 'satisfies', remove: true });
         expect((await linkEvent(task, 'delete')).after).toEqual({
@@ -413,6 +421,7 @@ describe.skipIf(url === undefined)('delete and undo', () => {
           to: REQ,
           kind: 'satisfies',
           changed: true,
+          rows,
         });
       });
 
@@ -462,7 +471,7 @@ describe.skipIf(url === undefined)('delete and undo', () => {
         const event = await linkEvent(task, 'create');
         await db.auditEvent.update({
           where: { id: event.id },
-          data: { after: { event: 'link', to: REQ, kind: 'satisfies' } },
+          data: { after: { event: 'link', to: REQ, kind: 'satisfies', changed: true } },
         });
 
         const res = await undoOf(event.id);
@@ -471,6 +480,137 @@ describe.skipIf(url === undefined)('delete and undo', () => {
         const state = await satisfies(task);
         expect(state.linked).toBe(true);
         expect(state.task.deletedAt).toBeNull();
+      });
+    });
+
+    /**
+     * Every task→requirement kind shares one `task_requirement` row, and every ADR→ADR kind but
+     * supersedes one `extends` relation. Reversing the second citation of a pair must leave the row
+     * the first still needs: otherwise its reference stays and its coverage silently goes.
+     */
+    describe('a pair cited two ways keeps the row they share', () => {
+      const newAdr = async (title: string): Promise<string> => {
+        const res = await post(`/projects/${CODE}/adrs`, { title });
+        expect(res.status).toBe(201);
+        return ((await res.json()) as { humanId: string }).humanId;
+      };
+      const coverage = async () => {
+        const res = await api(`/projects/${CODE}/coverage`);
+        expect(res.status).toBe(200);
+        return (await res.json()) as { requirements: { covered: number }; uncovered: { humanId: string }[] };
+      };
+      const extendsRelation = async (from: string, to: string) => {
+        const [a, b] = await Promise.all([
+          db.adr.findFirstOrThrow({ where: { humanId: from } }),
+          db.adr.findFirstOrThrow({ where: { humanId: to } }),
+        ]);
+        const row = await db.adrRelation.findUnique({
+          where: { adrId_relatedAdrId_kind: { adrId: a.id, relatedAdrId: b.id, kind: 'extends' } },
+        });
+        return row !== null;
+      };
+
+      it('satisfies, then relates: undoing the relates keeps the coverage', async () => {
+        const task = await newTask('Covers it');
+        await links({ from: task, to: REQ, kind: 'satisfies' });
+        const covered = await coverage();
+        expect(covered.uncovered.map((r) => r.humanId)).not.toContain(REQ);
+
+        await links({ from: task, to: REQ, kind: 'relates' });
+        const second = await linkEvent(task, 'create');
+        expect((await undoOf(second.id)).status).toBe(200);
+
+        const state = await satisfies(task);
+        expect(state.linked).toBe(true);
+        expect(state.referenced).toBe(true);
+        expect(await coverage()).toEqual(covered);
+      });
+
+      it('relates, then satisfies: undoing the relates keeps the coverage', async () => {
+        const task = await newTask('Cited first');
+        await links({ from: task, to: REQ, kind: 'relates' });
+        const second = await linkEvent(task, 'create');
+        await links({ from: task, to: REQ, kind: 'satisfies' });
+        const covered = await coverage();
+
+        expect((await undoOf(second.id)).status).toBe(200);
+
+        // The relates wrote the shared row, and the satisfies still needs it.
+        const state = await satisfies(task);
+        expect(state.linked).toBe(true);
+        expect(state.referenced).toBe(true);
+        expect(await coverage()).toEqual(covered);
+      });
+
+      it('unlinking the relates keeps the coverage too, in either order', async () => {
+        const first = await newTask('Satisfies first');
+        await links({ from: first, to: REQ, kind: 'satisfies' });
+        await links({ from: first, to: REQ, kind: 'relates' });
+        await links({ from: first, to: REQ, kind: 'relates', remove: true });
+        expect((await satisfies(first)).linked).toBe(true);
+
+        const second = await newTask('Cites first');
+        await links({ from: second, to: REQ, kind: 'relates' });
+        await links({ from: second, to: REQ, kind: 'satisfies' });
+        await links({ from: second, to: REQ, kind: 'relates', remove: true });
+        expect((await satisfies(second)).linked).toBe(true);
+      });
+
+      it('undoing a satisfies leaves a coverage row the task was created with', async () => {
+        const req = await db.requirement.findFirstOrThrow({ where: { humanId: REQ } });
+        const res = await post(`/projects/${CODE}/tasks`, {
+          title: 'Created covering it',
+          requirementIds: [req.id],
+        });
+        const task = ((await res.json()) as { humanId: string }).humanId;
+        await links({ from: task, to: REQ, kind: 'satisfies' });
+        const event = await linkEvent(task, 'create');
+        expect(event.after).toMatchObject({ rows: { reference: true, taskRequirement: false } });
+
+        expect((await undoOf(event.id)).status).toBe(200);
+        const state = await satisfies(task);
+        expect(state.referenced).toBe(false);
+        expect(state.linked).toBe(true);
+      });
+
+      it('violates, then extends: undoing the violates keeps the ADR relation', async () => {
+        const older = await newAdr('Postgres for everything');
+        const newer = await newAdr('Postgres for the queue as well');
+        await links({ from: newer, to: older, kind: 'violates' });
+        const second = await linkEvent(newer, 'create');
+        await links({ from: newer, to: older, kind: 'extends' });
+
+        expect((await undoOf(second.id)).status).toBe(200);
+        expect(await extendsRelation(newer, older)).toBe(true);
+      });
+
+      it('extends, then violates: undoing the violates keeps the ADR relation', async () => {
+        const older = await newAdr('Postgres for everything');
+        const newer = await newAdr('Postgres for the queue as well');
+        await links({ from: newer, to: older, kind: 'extends' });
+        await links({ from: newer, to: older, kind: 'violates' });
+        const second = await linkEvent(newer, 'create');
+
+        expect((await undoOf(second.id)).status).toBe(200);
+        expect(await extendsRelation(newer, older)).toBe(true);
+
+        // And undoing the extends, the last link between them, takes the relation with it.
+        const ext = await db.auditEvent.findFirstOrThrow({
+          where: { entityHumanId: newer, action: 'create', undoneAt: null },
+          orderBy: { createdAt: 'desc' },
+        });
+        expect(ext.after).toMatchObject({ kind: 'extends' });
+        expect((await undoOf(ext.id)).status).toBe(200);
+        expect(await extendsRelation(newer, older)).toBe(false);
+      });
+
+      it('unlinking the violates keeps the ADR relation', async () => {
+        const older = await newAdr('Postgres for everything');
+        const newer = await newAdr('Postgres for the queue as well');
+        await links({ from: newer, to: older, kind: 'extends' });
+        await links({ from: newer, to: older, kind: 'violates' });
+        await links({ from: newer, to: older, kind: 'violates', remove: true });
+        expect(await extendsRelation(newer, older)).toBe(true);
       });
     });
 
@@ -609,6 +749,31 @@ describe.skipIf(url === undefined)('delete and undo', () => {
         expect(res.status).toBe(409);
         expect(res.body.error).toContain('already linked');
         expect((await db.auditEvent.findUniqueOrThrow({ where: { id: event.id } })).undoneAt).toBeNull();
+      });
+
+      it('a link whose entity has since been deleted', async () => {
+        const task = await newTask('Cites a goner');
+        const gone = await newRequirement('Foreman shall be deleted in this test.');
+        await links({ from: task, to: gone, kind: 'satisfies' });
+        const event = await linkEvent(task, 'create');
+        expect((await api(`/projects/${CODE}/requirements/${gone}`, { method: 'DELETE' })).status).toBe(204);
+
+        const res = await undoOf(event.id);
+        expect(res.status).toBe(409);
+        expect(res.body.error).toContain("the link's entity is gone");
+        expect((await db.auditEvent.findUniqueOrThrow({ where: { id: event.id } })).undoneAt).toBeNull();
+      });
+
+      it('an unlink whose entity has since been deleted', async () => {
+        const task = await newTask('Unlinked from a goner');
+        await links({ from: task, to: REQ, kind: 'satisfies' });
+        await links({ from: task, to: REQ, kind: 'satisfies', remove: true });
+        const event = await linkEvent(task, 'delete');
+        expect((await api(`/projects/${CODE}/tasks/${task}`, { method: 'DELETE' })).status).toBe(204);
+
+        const res = await undoOf(event.id);
+        expect(res.status).toBe(409);
+        expect(res.body.error).toContain("the link's entity is gone");
       });
     });
   });

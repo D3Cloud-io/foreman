@@ -2,7 +2,17 @@ import type { Db } from '../db.js';
 import type { EntityType } from '../generated/prisma/enums.js';
 import { record, scrub, type Actor, type TransactionClient } from './audit.js';
 import { Conflict, Invalid, NotFound } from './errors.js';
-import { isLinked, removeLink, resolveLink, writeLink, type LinkKind } from './links.js';
+import {
+  anyRow,
+  LINK_ROWS,
+  removeLink,
+  resolveLink,
+  rowsPresent,
+  writeLink,
+  type LinkKind,
+  type LinkRows,
+  type ResolvedLink,
+} from './links.js';
 import { rollupAfter } from './rollup.js';
 
 /**
@@ -242,8 +252,19 @@ interface LinkEvent {
   readonly event: 'link' | 'unlink';
   readonly to: string;
   readonly kind: LinkKind;
-  /** Whether the event actually changed anything. Absent on events written before it was recorded. */
-  readonly changed: boolean | undefined;
+  /**
+   * The rows the event wrote or removed. Absent on events written before they were recorded, which
+   * cannot say whether they made the link or repeated one already there.
+   */
+  readonly rows: LinkRows | undefined;
+}
+
+/** The `rows` an event recorded, or undefined when it recorded none or something malformed. */
+function rowsOf(value: unknown): LinkRows | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const flags = value as Record<string, unknown>;
+  if (!LINK_ROWS.every((row) => typeof flags[row] === 'boolean')) return undefined;
+  return value as LinkRows;
 }
 
 /**
@@ -256,13 +277,13 @@ function linkEventOf(action: string, after: Record<string, unknown> | null): Lin
   const kind = after?.['kind'];
   if (typeof to !== 'string' || typeof kind !== 'string') return null;
 
-  const changed = typeof after?.['changed'] === 'boolean' ? after['changed'] : undefined;
+  const rows = rowsOf(after?.['rows']);
 
   if (action === 'create' && marker === 'link') {
-    return { event: 'link', to, kind: kind as LinkKind, changed };
+    return { event: 'link', to, kind: kind as LinkKind, rows };
   }
   if (action === 'delete' && marker === 'unlink') {
-    return { event: 'unlink', to, kind: kind as LinkKind, changed };
+    return { event: 'unlink', to, kind: kind as LinkKind, rows };
   }
   return null;
 }
@@ -270,7 +291,8 @@ function linkEventOf(action: string, after: Record<string, unknown> | null): Lin
 type AuditEventRow = NonNullable<Awaited<ReturnType<Db['auditEvent']['findUnique']>>>;
 
 /**
- * Reverse a link by unlinking, and an unlink by linking — never by touching the entity row.
+ * Reverse a link by removing the rows it wrote, and an unlink by linking again — never by touching
+ * the entity row.
  *
  * The refusal rule is the same one as everywhere else, stated for a link: the link must still be
  * in the state the event left it. A link since removed, or an unlink since put back, has been
@@ -284,24 +306,24 @@ async function undoLink(
 ): Promise<UndoResult> {
   const from = event.entityHumanId;
   if (from === null) throw new Conflict('that link recorded no source to reverse it from');
-  const { to, kind } = recorded;
+  const { to, kind, rows } = recorded;
 
-  if (recorded.changed === false) {
+  if (rows === undefined) {
+    // Written before link events said which rows they wrote. A repeat of an existing link looks the
+    // same as a new one, and reversing it would remove a link this event never made.
+    throw new Conflict(
+      `that ${recorded.event} was recorded before Foreman noted which rows it changed, so ` +
+        `undoing it could remove or restore a link it never touched; ` +
+        `${recorded.event === 'link' ? 'unlink' : 'link'} ${from} and ${to} instead`,
+    );
+  }
+  if (!anyRow(rows)) {
     throw new Conflict(
       recorded.event === 'link'
         ? `nothing to undo: ${from} was already linked to ${to} when that was recorded, and ` +
           'undoing it would remove the earlier link'
         : `nothing to undo: ${from} was not linked to ${to} when that was recorded, so there is ` +
           'no link to put back',
-    );
-  }
-  if (recorded.changed === undefined) {
-    // Written before link events said whether they changed anything. A repeat of an existing link
-    // looks the same as a new one, and reversing it would remove a link this event never made.
-    throw new Conflict(
-      `that ${recorded.event} was recorded before Foreman noted whether it changed anything, so ` +
-        `undoing it could remove or restore a link it never touched; ` +
-        `${recorded.event === 'link' ? 'unlink' : 'link'} ${from} and ${to} instead`,
     );
   }
   if (recorded.event === 'link' && kind === 'supersedes') {
@@ -313,8 +335,17 @@ async function undoLink(
     );
   }
 
-  // Both ends are looked up first: a link to something since deleted cannot be reversed either way.
-  const resolved = await resolveLink(db, from, to, kind);
+  // Both ends are looked up first. One deleted since is the state having moved on like any other:
+  // a link to it can neither be removed nor put back.
+  let resolved: ResolvedLink;
+  try {
+    resolved = await resolveLink(db, from, to, kind);
+  } catch (error) {
+    if (error instanceof NotFound) {
+      throw new Conflict(`that ${recorded.event} cannot be undone: the link's entity is gone (${error.message})`);
+    }
+    throw error;
+  }
 
   return db.$transaction(async (tx) => {
     // Claimed inside the transaction, so two undos of the same event at once cannot both reverse it.
@@ -324,24 +355,27 @@ async function undoLink(
     });
     if (claimed.count === 0) throw new Conflict('that change has already been undone');
 
-    const linked = await isLinked(tx, resolved);
+    const present = await rowsPresent(tx, resolved);
     const marker = { to, kind };
 
     let before: Record<string, unknown>;
     let after: Record<string, unknown>;
     if (recorded.event === 'link') {
-      if (!linked) {
+      // Every row this link wrote must still be there; one gone means it has been unlinked since.
+      if (LINK_ROWS.some((row) => rows[row] && !present[row])) {
         throw new Conflict(`that link cannot be undone: ${from} is no longer linked to ${to}`);
       }
-      await removeLink(tx, resolved);
+      const removed = await removeLink(tx, resolved, rows);
       before = { event: 'link', ...marker };
-      after = { event: 'unlink', ...marker };
+      after = { event: 'unlink', ...marker, rows: removed };
     } else {
-      if (linked) {
+      // Its own rows only: a shared row back in place is another link's, not this one put back.
+      if ((rows.reference && present.reference) || (rows.taskDependency && present.taskDependency)) {
         throw new Conflict(`that unlink cannot be undone: ${from} is already linked to ${to} again`);
       }
+      let written: LinkRows;
       try {
-        await writeLink(tx, resolved);
+        written = (await writeLink(tx, resolved)).rows;
       } catch (error) {
         // A depends_on edge that was fine when it was removed may close a cycle now that other
         // edges have been added; putting it back would leave tasks the brief can never offer.
@@ -351,7 +385,7 @@ async function undoLink(
         throw error;
       }
       before = { event: 'unlink', ...marker };
-      after = { event: 'link', ...marker };
+      after = { event: 'link', ...marker, rows: written };
     }
 
     // One event, the reversal: not an undo plus a fresh link event that could itself be undone.
