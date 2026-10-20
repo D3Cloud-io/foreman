@@ -280,6 +280,7 @@ enum EntityType {
   screen_verdict
   screen_component
   build
+  group
 }
 
 enum AuditAction {
@@ -331,6 +332,10 @@ model Project {
   vaultPath String?          @map("vault_path")
   /// Next sequence per human-ID type, so IDs are never reused after a delete.
   idCounters Json            @default("{}") @map("id_counters")
+  /// The family it belongs to, or none (FRM-REQ-223). One column, so a project is in at most one.
+  groupId       String?          @map("group_id") @db.Uuid
+  /// Its place within its group, or among the ungrouped (FRM-REQ-226). Ties are broken by code.
+  groupPosition Int              @default(0) @map("group_position")
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -353,8 +358,10 @@ model Project {
   ideas        Idea[]
   screens      Screen[]
   cameFrom     ProjectIdea[]    @relation("ConvertedFrom")
+  group        ProjectGroup?    @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
   @@index([lifecycle])
+  @@index([groupId, groupPosition])
   @@map("project")
 }
 
@@ -735,13 +742,80 @@ model Guideline {
   rationale String?
   guidance  String?
   status    GuidelineStatus @default(active)
+  /// Every project (the default), or only those in `groups` (FRM-REQ-235).
+  appliesTo GuidelineScope  @default(all) @map("applies_to")
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
 
+  groups GuidelineGroup[]
+
   @@index([status])
   @@map("guideline")
+}
+
+enum GuidelineScope {
+  all
+  groups
+}
+
+/// A group's accent: one of the design system's product accents by name, never a raw colour.
+enum GroupAccent {
+  foreman
+  shipyard
+  auth
+  bindery
+  ui
+  clearwhen
+  qr
+  floorspec
+  neutral
+}
+
+/// A **group** — a family of projects, D3 Cloud or Dormice (FRM-ADR-024, FRM-REQ-221 … 227).
+///
+/// It belongs to no project, so its `GRP-001` comes from its own sequence (`project_group_seq`),
+/// like a guideline's. The name is unique among live groups, case-insensitively, and the slug is
+/// taken from it once, at creation, and never changes: it is what a URL carries. Both are checked
+/// in the transaction that writes them, because a soft-deleted group keeps its row.
+model ProjectGroup {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  humanId     String      @unique @map("human_id")
+  seq         Int         @unique
+  name        String
+  slug        String
+  description String?
+  siteUrl     String?     @map("site_url")
+  accent      GroupAccent @default(neutral)
+  position    Int         @default(0)
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  projects   Project[]
+  guidelines GuidelineGroup[]
+
+  @@index([slug])
+  @@index([position])
+  @@map("project_group")
+}
+
+/// The groups a guideline with `applies_to = groups` applies to.
+model GuidelineGroup {
+  guidelineId String @map("guideline_id") @db.Uuid
+  groupId     String @map("group_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  guideline Guideline    @relation(fields: [guidelineId], references: [id], onDelete: Cascade)
+  group     ProjectGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@id([guidelineId, groupId])
+  @@index([groupId])
+  @@map("guideline_group")
 }
 
 model ProjectIdea {

@@ -13,6 +13,7 @@ import {
   type Substitution,
 } from '@foreman/shared';
 import type { Db } from '../db.js';
+import { settleInserted } from '../domain/groups.js';
 import type { ImportStatus } from '../generated/prisma/enums.js';
 import { classify, documentKindFor, type FileKind } from './classify.js';
 import {
@@ -243,6 +244,8 @@ export async function runImport(db: Db, options: ImportOptions): Promise<ImportR
       (path) => classify(path, {}).kind === 'requirements-register',
     );
 
+    const existed =
+      options.dryRun || (await db.project.findUnique({ where: { code }, select: { id: true } })) !== null;
     const project = options.dryRun
       ? null
       : await db.project.upsert({
@@ -250,6 +253,11 @@ export async function runImport(db: Db, options: ImportOptions): Promise<ImportR
           create: { code, name: folder, slug: folder.toLowerCase().replace(/[^a-z0-9]+/g, '-') },
           update: { name: folder },
         });
+    // A project the import created joins the end of the ungrouped, keeping positions 0..n-1
+    // (FRM-REQ-226); one it updated keeps its place.
+    if (project !== null && !existed) {
+      await settleInserted(db, { actor: 'importer', actorKind: 'importer' }, project.id, `${code} imported`);
+    }
 
     for (const path of paths) {
       const raw = await readFile(join(root, path), 'utf8');

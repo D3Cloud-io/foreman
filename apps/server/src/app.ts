@@ -31,6 +31,7 @@ import { webhookRoutes } from './routes/webhooks.js';
 import { buildRegistry, type JobRegistry } from './jobs/index.js';
 import { linkRoutes } from './routes/links.js';
 import { guidelineRoutes } from './routes/guidelines.js';
+import { groupRoutes } from './routes/groups.js';
 import { blobRoutes } from './routes/blobs.js';
 import { screenRoutes } from './routes/screens.js';
 import { projectIdeaRoutes } from './routes/projectIdeas.js';
@@ -141,6 +142,7 @@ export function createApp({ config, db, oidc = null, registry, verifier: given }
   mount(app, '/api/links', linkRoutes(db));
   mount(app, '/api/project-ideas', projectIdeaRoutes(db, config));
   mount(app, '/api/guidelines', guidelineRoutes(db));
+  mount(app, '/api/groups', groupRoutes(db));
   mount(app, '/api/blobs', blobRoutes(db, config));
   mount(app, '/api/board', boardRoutes(db, config));
   mount(app, '/api/projects', coverageRoutes(db));

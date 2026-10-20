@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { extractHumanIds, formatHumanId, parseHumanId, ProjectCode } from '../src/index.js';
+import {
+  extractHumanIds,
+  formatGroupId,
+  formatHumanId,
+  groupSlug,
+  parseAnyId,
+  parseHumanId,
+  ProjectCode,
+} from '../src/index.js';
 
 describe('human IDs (ADR-008)', () => {
   it('parses a project-prefixed requirement ID', () => {
@@ -29,6 +37,22 @@ describe('human IDs (ADR-008)', () => {
   it('accepts ecosystem project codes and rejects a lower-case one', () => {
     expect(ProjectCode.safeParse('AUTH').success).toBe(true);
     expect(ProjectCode.safeParse('bnd').success).toBe(false);
+  });
+
+  it('reserves the codeless prefixes, GRP included, so no project can take one (FRM-ADR-024)', () => {
+    for (const code of ['PI', 'GL', 'GRP']) expect(ProjectCode.safeParse(code).success).toBe(false);
+  });
+
+  it('formats and parses a group ID, which carries no project code', () => {
+    expect(formatGroupId(1)).toBe('GRP-001');
+    expect(parseAnyId('GRP-001')).toEqual({ code: null, type: 'GRP', seq: '001' });
+    expect(parseHumanId('GRP-001')).toBeNull();
+  });
+
+  it("takes a group's slug from its name", () => {
+    expect(groupSlug('D3 Cloud')).toBe('d3-cloud');
+    expect(groupSlug('  Dormice!  ')).toBe('dormice');
+    expect(groupSlug('Kurō')).toBe('kuro');
   });
 });
 

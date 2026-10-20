@@ -4,6 +4,7 @@ import { setPassword } from '../auth/native.js';
 import { loadConfig } from '../config.js';
 import { createDb, type Db } from '../db.js';
 import { record } from '../domain/audit.js';
+import { settleInserted } from '../domain/groups.js';
 
 /**
  * The disposable example project (FRM-REQ-014).
@@ -531,6 +532,10 @@ async function seed(db: Db, config: ReturnType<typeof loadConfig>): Promise<void
       pitch: 'A second project, so the findings inbox and recurrence have more than one.',
     },
   });
+  // Both join the end of the ungrouped, so positions stay 0..n-1 (FRM-REQ-226).
+  const seedActor = { actor: 'seed', actorKind: 'system' as const };
+  await settleInserted(db, seedActor, project.id, `${CODE} seeded`);
+  await settleInserted(db, seedActor, other.id, `${OTHER_CODE} seeded`);
 
   const neighbourAudit = await db.audit.create({
     data: {
