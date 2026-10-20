@@ -6,6 +6,8 @@
  * uses both YAML styles, a `Src` column of round codes, and a scope of work with no task IDs at all.
  */
 
+import { isStorablePhaseNumber } from '../entities/spine.js';
+
 export interface Frontmatter {
   readonly data: Record<string, unknown>;
   /** The document with its frontmatter removed, so offsets into the body are honest. */
@@ -285,11 +287,15 @@ export function parseChecklist(body: string): ChecklistItem[] {
  * `## Phase 8.5 — The Half Phase` → `{ number: '8.5', name: 'The Half Phase' }`.
  *
  * Subtitler writes `## Phase 0: Foundation`, so a colon separates as well as a dash.
+ *
+ * A number the phase column cannot hold (`Phase 10000`, `Phase 1.234`) is not read as a phase:
+ * writing it would overflow `numeric(6,2)` or round away from its human ID (FRM-T-027).
  */
 export function parsePhaseHeading(heading: string): { number: string; name: string } | null {
   const match = /^Phase\s+(\d+(?:\.\d+)?)\s*(?:[—–:-]\s*(.+))?$/i.exec(heading.trim());
   if (match === null) return null;
   const number = match[1] ?? '';
+  if (!isStorablePhaseNumber(Number(number))) return null;
   const name = (match[2] ?? '').trim();
   return { number, name: name.length > 0 ? name : `Phase ${number}` };
 }

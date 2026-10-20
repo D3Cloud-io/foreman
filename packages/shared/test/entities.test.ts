@@ -3,6 +3,8 @@ import {
   FORBIDDEN_ESTIMATE_FIELDS,
   PageQuery,
   Phase,
+  PhaseCreate,
+  PhaseUpdate,
   ProjectCreate,
   ProjectUpdate,
   Task,
@@ -119,5 +121,24 @@ describe('paging (FRM-REQ-092)', () => {
   it('refuses an unbounded request', () => {
     expect(PageQuery.safeParse({ limit: 100_000 }).success).toBe(false);
     expect(PageQuery.safeParse({ limit: 0 }).success).toBe(false);
+  });
+});
+
+describe('phase number (FRM-T-027)', () => {
+  // The column is numeric(6,2): under 10000 either side of zero, two decimal places at most.
+  it('accepts what the column holds', () => {
+    for (const number of [0, 1, 8.5, 8.55, 9999.99, -9999.99]) {
+      expect(PhaseCreate.safeParse({ number, name: 'P' }).success, String(number)).toBe(true);
+    }
+  });
+
+  it('refuses what it would overflow or round, naming the field', () => {
+    for (const number of [10000, 123456, -10000, 1.234, Number.NaN]) {
+      const parsed = PhaseCreate.safeParse({ number, name: 'P' });
+      expect(parsed.success, String(number)).toBe(false);
+      expect(parsed.error?.issues[0]?.path).toEqual(['number']);
+    }
+    expect(PhaseUpdate.safeParse({ number: 123456 }).success).toBe(false);
+    expect(PhaseUpdate.safeParse({}).success).toBe(true);
   });
 });

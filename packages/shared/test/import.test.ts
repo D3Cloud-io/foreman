@@ -219,6 +219,12 @@ describe('phase headings', () => {
     expect(parsePhaseHeading('Phase 0: Foundation')).toEqual({ number: '0', name: 'Foundation' });
     expect(parsePhaseHeading('Phase Dependency Graph')).toBeNull();
   });
+
+  it('does not read a number the phase column cannot hold as a phase (FRM-T-027)', () => {
+    expect(parsePhaseHeading('Phase 9999.99 — The last one')).toEqual({ number: '9999.99', name: 'The last one' });
+    expect(parsePhaseHeading('Phase 10000 — Too far')).toBeNull();
+    expect(parsePhaseHeading('Phase 1.234 — Too fine')).toBeNull();
+  });
 });
 
 describe('MoSCoW feature scopes, as requirements', () => {

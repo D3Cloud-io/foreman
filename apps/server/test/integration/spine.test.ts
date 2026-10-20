@@ -660,6 +660,34 @@ describe.skipIf(url === undefined)('the spine', () => {
       expect(Number(phase.number)).toBe(3);
     });
 
+    it('refuses a number the column cannot hold, naming the field, not "internal error" (FRM-T-027)', async () => {
+      await makeProject();
+      type Refusal = { error: string; fields: { path: string; message: string }[] };
+
+      // numeric(6,2): 123456 overflowed in Postgres and came back as a 500.
+      const created = await post('/projects/SPN/phases', { number: 123456, name: 'Too far' });
+      expect(created.status).toBe(400);
+      const body = (await created.json()) as Refusal;
+      expect(body.error).not.toContain('internal');
+      expect(body.fields.map((f) => f.path)).toEqual(['number']);
+      expect(body.fields[0]?.message).toContain('10000');
+
+      // A third decimal would round away from the human ID, so it is refused the same way.
+      const fine = await post('/projects/SPN/phases', { number: 1.234, name: 'Too fine' });
+      expect(fine.status).toBe(400);
+      expect(((await fine.json()) as Refusal).fields.map((f) => f.path)).toEqual(['number']);
+      expect(await db.phase.count({ where: { project: { code: 'SPN' } } })).toBe(0);
+
+      // PATCH answers the same, before it ever reaches the renumbering rule.
+      await post('/projects/SPN/phases', { number: 3, name: 'Three' });
+      const patched = await patch('/projects/SPN/phases/SPN-P-3', { number: 123456 });
+      expect(patched.status).toBe(400);
+      expect(((await patched.json()) as Refusal).fields.map((f) => f.path)).toEqual(['number']);
+
+      // The edge of what it holds is still a phase.
+      expect((await post('/projects/SPN/phases', { number: 9999.99, name: 'The last' })).status).toBe(201);
+    });
+
     it('accepts the number it already has, so a full-form save is not a conflict', async () => {
       await makeProject();
       await post('/projects/SPN/phases', { number: 3, name: 'Three' });
