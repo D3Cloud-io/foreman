@@ -362,8 +362,8 @@ describe.skipIf(url === undefined)('the record', () => {
     it('finds a cycle rather than rendering one silently', async () => {
       const a = await makeAdr('A');
       const b = await makeAdr('B');
-      await post('/links', { from: a.humanId, to: b.humanId, kind: 'relates' });
-      await post('/links', { from: b.humanId, to: a.humanId, kind: 'relates' });
+      await post('/links', { from: a.humanId, to: b.humanId, kind: 'extends' });
+      await post('/links', { from: b.humanId, to: a.humanId, kind: 'extends' });
 
       const graph = await get<{ cycle: string[] | null }>(`/projects/${CODE}/adrs-graph`);
       expect(graph.cycle).not.toBeNull();

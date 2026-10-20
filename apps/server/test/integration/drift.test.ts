@@ -251,8 +251,8 @@ describe.skipIf(url === undefined)('drift', () => {
       const first = (await a.json()) as { humanId: string };
       const second = (await b.json()) as { humanId: string };
 
-      await post('/links', { from: first.humanId, to: second.humanId, kind: 'relates' });
-      await post('/links', { from: second.humanId, to: first.humanId, kind: 'relates' });
+      await post('/links', { from: first.humanId, to: second.humanId, kind: 'extends' });
+      await post('/links', { from: second.humanId, to: first.humanId, kind: 'extends' });
 
       const drift = await get<DriftBody>(`/projects/${CODE}/drift`);
       const cycle = drift.items.find((i) => i.detail.includes('circle'));

@@ -223,6 +223,7 @@ export const ReferenceKind = z.enum([
   'relates',
   'supersedes',
   'depends_on',
+  'extends',
 ]);
 export type ReferenceKind = z.infer<typeof ReferenceKind>;
 
