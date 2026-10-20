@@ -1,12 +1,12 @@
 import type { Db } from '../db.js';
 import { adrGraph } from './record.js';
-import { exitGate } from './coverage.js';
+import { exitGate, screenStates } from './coverage.js';
 import { findProject } from './projects.js';
 
 /**
  * Drift: the difference between what the plan says and what is true (T-7.1).
  *
- * **One query layer over five categories, not five features.** They are rendered three ways — the
+ * **One query layer over six categories, not five features.** They are rendered three ways — the
  * drift view, a portfolio badge and a line in the brief — and if each surface computed its own,
  * the badge would eventually disagree with the screen it links to. Disagreement between two of
  * Foreman's own numbers is the fastest way to stop being believed.
@@ -18,6 +18,7 @@ import { findProject } from './projects.js';
  * | Fired tripwire | A risk whose named condition has been met |
  * | Failed exit gate | A phase marked complete that would not pass its gate today |
  * | Orphan ADR | Accepted but uncited, or a broken/circular supersedes chain |
+ * | Screen drift | A screen judged drifted-fix, or built (a done task) and never captured |
  */
 
 export type DriftCategory =
@@ -25,7 +26,8 @@ export type DriftCategory =
   | 'stale-task'
   | 'fired-tripwire'
   | 'failed-exit-gate'
-  | 'orphan-adr';
+  | 'orphan-adr'
+  | 'screen-drift';
 
 export interface DriftItem {
   readonly category: DriftCategory;
@@ -210,12 +212,36 @@ export async function driftFor(db: Db, code: string): Promise<Drift> {
     });
   }
 
+  // ─── 6. Screen drift (FRM-REQ-201) ───────────────────────────────────────
+  //
+  // The two ways a screen and its design disagree without anyone having said so: a reviewer ruled
+  // the latest capture wrong and the fix has not landed, or the work is marked done and nobody
+  // ever took a picture of it. A `drifted_accepted` is a decision, not drift.
+  for (const screen of await screenStates(db, project.id)) {
+    if (screen.capture?.verdict === 'drifted_fix') {
+      items.push({
+        category: 'screen-drift',
+        humanId: screen.humanId,
+        title: screen.name,
+        detail: 'Drifted from its proposal; the fix is pending.',
+      });
+    } else if (screen.capture === null && screen.taskStatuses.includes('done')) {
+      items.push({
+        category: 'screen-drift',
+        humanId: screen.humanId,
+        title: screen.name,
+        detail: 'Built, but never captured — nothing shows it matches its proposal.',
+      });
+    }
+  }
+
   const counts: Record<DriftCategory, number> = {
     'coverage-hole': 0,
     'stale-task': 0,
     'fired-tripwire': 0,
     'failed-exit-gate': 0,
     'orphan-adr': 0,
+    'screen-drift': 0,
   };
   for (const item of items) counts[item.category] += 1;
 
