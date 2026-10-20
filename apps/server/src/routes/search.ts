@@ -5,6 +5,7 @@ import { requireAuth, requireScope } from '../auth/middleware.js';
 import type { Db } from '../db.js';
 import { getByHumanId } from '../domain/entities.js';
 import { groupedPortfolio } from '../domain/portfolio.js';
+import { resolveScope, scopeCodes } from '../domain/scope.js';
 import { resourceCatalogue } from '../domain/resources.js';
 import { SEARCHABLE, search } from '../domain/search.js';
 import { handler, param, parseQuery } from './helpers.js';
@@ -21,6 +22,8 @@ const SearchQuery = z.object({
   /** Comma-separated, so a client can narrow without a repeated parameter. */
   types: z.string().optional(),
   project: z.string().optional(),
+  /** A group to narrow to — `GRP-n`, slug or `ungrouped` (FRM-T-17.4). */
+  group: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 
@@ -56,9 +59,11 @@ export function searchRoutes(db: Db): Router {
           (SEARCHABLE as readonly string[]).includes(t),
         );
 
+      const codes = scopeCodes(await resolveScope(db, query.group));
       const hits = await search(db, query.q, {
         ...(requested !== undefined && requested.length > 0 ? { types: requested } : {}),
         ...(query.project === undefined ? {} : { projectCode: query.project }),
+        ...(codes === undefined ? {} : { projectCodes: codes }),
         limit: query.limit,
       });
       res.json({ items: hits, nextCursor: null, total: hits.length });

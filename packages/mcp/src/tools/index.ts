@@ -109,6 +109,7 @@ export const READ_TOOLS: readonly ToolDefinition[] = [
         q: args.q,
         types: args.types,
         project: args.project,
+        group: args.group,
         limit: args.limit,
       });
     },
@@ -154,6 +155,7 @@ export const READ_TOOLS: readonly ToolDefinition[] = [
       const args = FindingsInput.parse(input);
       return client.get('/api/findings', {
         project: args.project,
+        group: args.group,
         severity: args.severity,
         status: args.status,
         lens: args.lens,

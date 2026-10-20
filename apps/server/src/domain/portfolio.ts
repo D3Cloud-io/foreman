@@ -2,8 +2,8 @@ import type { GroupAccent, ScopedGuidelineSummary } from '@foreman/shared';
 import type { Db } from '../db.js';
 import { phaseInFlight } from './wherewestand.js';
 import { driftFor, type DriftCategory } from './drift.js';
-import { NotFound } from './errors.js';
-import { findGroup, listGroups } from './groups.js';
+import { listGroups } from './groups.js';
+import { resolveScope, scopeCodes } from './scope.js';
 import { scopedGuidelineSummaries } from './guidelines.js';
 
 /**
@@ -180,29 +180,21 @@ export interface Portfolio {
   readonly guidelines: readonly ScopedGuidelineSummary[];
 }
 
-const UNGROUPED = 'ungrouped';
-
 export async function groupedPortfolio(db: Db, groupRef?: string): Promise<Portfolio> {
-  const ref = groupRef?.trim();
-  const narrowed = ref === undefined || ref.length === 0 ? undefined : ref;
-  const onlyUngrouped = narrowed?.toLowerCase() === UNGROUPED;
-  const only = narrowed === undefined || onlyUngrouped ? null : await findGroup(db, narrowed);
-  if (narrowed !== undefined && !onlyUngrouped && only === null) {
-    throw new NotFound(`group ${narrowed}`);
-  }
+  // The same resolution findings, search and drift take (FRM-T-17.4): one meaning of a scope.
+  const scope = await resolveScope(db, groupRef);
+  const only = scope.kind === 'group' ? scope.group : null;
+  const onlyUngrouped = scope.kind === 'ungrouped';
 
   const listing = await listGroups(db);
   const sections = listing.items.filter((group) => only === null || group.id === only.id);
-  const wanted =
-    narrowed === undefined
-      ? undefined
-      : (onlyUngrouped ? listing.ungrouped.projects : (sections[0]?.projects ?? [])).map((p) => p.code);
+  const wanted = scopeCodes(scope)?.slice();
 
   const [rows, guidelines] = await Promise.all([
     portfolio(db, wanted),
     scopedGuidelineSummaries(
       db,
-      narrowed === undefined ? undefined : { groupId: only === null ? null : only.id },
+      scope.kind === 'all' ? undefined : { groupId: only === null ? null : only.id },
     ),
   ]);
   const byCode = new Map(rows.map((row) => [row.code, row]));

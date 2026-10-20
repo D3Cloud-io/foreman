@@ -164,6 +164,20 @@ describe('the tools call the API they claim to', () => {
     });
   });
 
+  it('foreman_search and foreman_findings narrow to a group, as the portfolio does (FRM-T-17.4)', async () => {
+    const get = vi.fn().mockResolvedValue({ items: [] });
+    const search = READ_TOOLS.find((t) => t.name === 'foreman_search');
+    await search?.run(clientWith(get), { q: 'tunnel', group: 'dormice' });
+    expect(get).toHaveBeenLastCalledWith('/api/search', expect.objectContaining({ q: 'tunnel', group: 'dormice' }));
+
+    const findings = READ_TOOLS.find((t) => t.name === 'foreman_findings');
+    await findings?.run(clientWith(get), { group: 'GRP-002', severity: 'critical' });
+    expect(get).toHaveBeenLastCalledWith(
+      '/api/findings',
+      expect.objectContaining({ group: 'GRP-002', severity: 'critical' }),
+    );
+  });
+
   it('foreman_coverage asks the project for its holes', async () => {
     const get = vi.fn().mockResolvedValue({ uncoveredMusts: [] });
     const tool = READ_TOOLS.find((t) => t.name === 'foreman_coverage');

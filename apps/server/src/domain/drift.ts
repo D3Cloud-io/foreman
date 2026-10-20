@@ -1,7 +1,9 @@
 import type { Db } from '../db.js';
 import { adrGraph } from './record.js';
 import { exitGate, screenStates, type GateFailure } from './coverage.js';
+import { listGroups } from './groups.js';
 import { findProject } from './projects.js';
+import type { Scope } from './scope.js';
 
 /**
  * Drift: the difference between what the plan says and what is true (T-7.1).
@@ -258,4 +260,67 @@ export async function driftFor(db: Db, code: string): Promise<Drift> {
 /** The one number the portfolio badge and the brief both read (FRM-REQ-127, FRM-REQ-128). */
 export async function driftCount(db: Db, code: string): Promise<number> {
   return (await driftFor(db, code)).total;
+}
+
+/** One project's drift, as the cross-project read lists it: its name beside its code. */
+export interface ProjectDrift extends Drift {
+  readonly name: string;
+}
+
+/**
+ * `GET /api/drift` — drift across projects, narrowed by a scope (FRM-ADR-024, FRM-T-17.4).
+ *
+ * The same engine as each project's drift view and the portfolio's badge, run per project, so the
+ * three cannot disagree. Projects come in the order Home shows them: by group, in each group's
+ * order, the ungrouped last — or a scope's own order when narrowed. A project with no drift is
+ * still listed: "nothing apart" is an answer, and leaving it out reads as "not checked".
+ */
+export interface DriftAcross {
+  readonly items: readonly ProjectDrift[];
+  readonly nextCursor: null;
+  readonly total: number;
+  /** Summed over `items`: the figure Home's Drift card shows for the same scope. */
+  readonly drift: { readonly total: number; readonly counts: Record<DriftCategory, number> };
+}
+
+export async function driftAcross(db: Db, scope: Scope): Promise<DriftAcross> {
+  let codes: readonly string[];
+  if (scope.kind === 'all') {
+    const listing = await listGroups(db);
+    codes = [...listing.items.flatMap((group) => group.projects), ...listing.ungrouped.projects].map((p) => p.code);
+  } else {
+    codes = scope.codes;
+  }
+
+  const names = new Map(
+    (
+      await db.project.findMany({
+        where: { deletedAt: null, code: { in: [...codes] } },
+        select: { code: true, name: true },
+      })
+    ).map((p) => [p.code, p.name]),
+  );
+  const items = await Promise.all(
+    codes
+      .filter((code) => names.has(code))
+      .map(async (code) => ({ ...(await driftFor(db, code)), name: names.get(code) ?? code })),
+  );
+
+  const counts: Record<DriftCategory, number> = {
+    'coverage-hole': 0,
+    'stale-task': 0,
+    'fired-tripwire': 0,
+    'failed-exit-gate': 0,
+    'orphan-adr': 0,
+    'screen-drift': 0,
+  };
+  for (const item of items) {
+    for (const category of Object.keys(counts) as DriftCategory[]) counts[category] += item.counts[category];
+  }
+  return {
+    items,
+    nextCursor: null,
+    total: items.length,
+    drift: { total: items.reduce((sum, item) => sum + item.total, 0), counts },
+  };
 }

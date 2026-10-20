@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { AuditKind, AuditStatus, FindingStatus, Severity, Verified } from '../enums.js';
 import { HumanId, ProjectCode } from '../ids.js';
 import { Uuid } from './common.js';
+import { GroupArg } from './groups.js';
 
 /**
  * Audits and findings (T-6.1, T-6.2).
@@ -80,6 +81,9 @@ export type FindingUpdate = z.infer<typeof FindingUpdate>;
 /** `foreman_findings` / `GET /api/findings`. Cross-project by default — that is the whole point. */
 export const FindingsInput = z.object({
   project: ProjectCode.optional().describe('Narrow to one project'),
+  // A group to narrow to — GRP-n, slug or `ungrouped` (FRM-ADR-024). Undescribed: the tool budget
+  // is full, and `foreman_portfolio`'s own `group` already says what one is.
+  group: GroupArg.optional(),
   severity: Severity.optional(),
   status: FindingStatus.optional().describe('Defaults to open'),
   lens: z.string().max(40).optional().describe('security, accessibility, operability, …'),
