@@ -3,11 +3,13 @@ import type { EntityType } from '../generated/prisma/enums.js';
 import { record, scrub, type Actor, type TransactionClient } from './audit.js';
 import { Conflict, Invalid, NotFound } from './errors.js';
 import {
+  derivedFields,
   finishUndo,
   guardUndo,
   isReorderEvent,
+  lockGroups,
+  settleProjects,
   undoReorder,
-  unchangedOrderFields,
 } from './groups.js';
 import {
   anyRow,
@@ -127,6 +129,9 @@ export async function softDelete(
     if (before === null) throw new NotFound(humanId);
 
     const id = String(before['id']);
+    // A project leaving its group's order: the lock first, so the renumbering below is not racing
+    // a move (FRM-REQ-226).
+    if (type === 'project') await lockGroups(tx);
     await (table as { update: (args: unknown) => Promise<unknown> }).update({
       where: { id },
       data: { deletedAt: new Date() },
@@ -141,6 +146,10 @@ export async function softDelete(
       before,
       after: { deleted: true },
     });
+    if (type === 'project') {
+      const groupId = typeof before['groupId'] === 'string' ? before['groupId'] : null;
+      await settleProjects(tx, actor, groupId, { cause: `${humanId} deleted` });
+    }
     // A deleted task stops counting toward its phase; a deleted phase toward its project.
     await rollupAfter(tx, actor, type, before, { ...before, deletedAt: new Date() }, humanId);
     return { id };
@@ -229,9 +238,9 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
       case 'update':
       case 'restore': {
         if (before === null) throw new Conflict('that change recorded no previous state to restore');
-        // A project's place in its group and a group's position move through their own events; a
-        // change that did not touch them neither compares nor restores them.
-        const skip = unchangedOrderFields(type, before, after);
+        // Positions are derived (always 0..n-1) and a project's group is compared only when this
+        // change made it: `finishUndo` puts the row back at its old index instead.
+        const skip = derivedFields(type, before, after);
         const without = (snapshot: Record<string, unknown>) =>
           Object.fromEntries(Object.entries(snapshot).filter(([key]) => !skip.has(key)));
         assertUnchangedSince(current, after === null ? null : without(after));
@@ -245,11 +254,22 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
     // What the row alone cannot show: the groups around a group, a project or a guideline.
     await guardUndo(tx, { type, action: event.action, current, data, before, after });
 
-    const restored = (await (table as { update: (args: unknown) => Promise<unknown> }).update({
+    await (table as { update: (args: unknown) => Promise<unknown> }).update({
       where: { id: event.entityId },
       data,
-    })) as Record<string, unknown>;
-    await finishUndo(tx, { type, action: event.action, entityId: event.entityId, before });
+    });
+    await finishUndo(tx, actor, {
+      type,
+      action: event.action,
+      entityId: event.entityId,
+      current,
+      before,
+      after,
+    });
+    // Read back after `finishUndo`, so the reversal records where the row actually ended up.
+    const restored = (await (table as { findUnique: (args: unknown) => Promise<unknown> }).findUnique(
+      { where: { id: event.entityId } },
+    )) as Record<string, unknown>;
 
     const reversalId = await record(tx, {
       ...actor,

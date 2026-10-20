@@ -19,8 +19,12 @@ import { Conflict, ConflictWith, Invalid, NotFound } from './errors.js';
  *
  * A group partitions projects: `project.group_id` is one column, so a project is in at most one,
  * and a project in none is *Ungrouped* and listed last. Order is a position on each group and a
- * position on each project within its group (or among the ungrouped); ties are broken by code, so
- * projects written before groups existed — all at position 0 — list exactly as they used to.
+ * position on each project within its group (or among the ungrouped), and **positions are dense**:
+ * always exactly 0..n-1, renumbered in the same transaction as every create, move, delete and undo
+ * (`settleProjects`, `settleGroups`). A position is therefore an index, which is what lets an undo
+ * put a project back "where it was" after others have come and gone. The migration backfilled the
+ * existing projects in code order; a row written around this code (a seed) is healed by the next
+ * settle, which orders by position, then code.
  *
  * Every write here takes one transaction-scoped advisory lock first. A name's uniqueness among
  * live groups, a slug's, and "the next position in this group" are all read-then-write, and a
@@ -29,9 +33,11 @@ import { Conflict, ConflictWith, Invalid, NotFound } from './errors.js';
  *
  * Undo (FRM-REQ-225): a create, an update and a delete are ordinary entity events the generic undo
  * reverses, with the guards in `guardUndo` for what a group's row alone cannot see. A move is the
- * moved project's own `update`, so the project's undo reverses it. A reorder is one event holding
- * every position it changed, before and after, and `undoReorder` puts them back — refused, like
- * every undo, when any of them has moved since.
+ * moved project's own `update`, so the project's undo reverses it, putting it back at its old
+ * index (clamped) and closing up the group it leaves (`finishUndo`). A reorder is one event
+ * holding every position it changed, and `undoReorder` puts them back — refused, like every undo,
+ * when any of them has moved since. The renumbering a move or delete causes is recorded too, as a
+ * reorder event naming its `cause`; undo refuses that one and points at the cause instead.
  */
 
 type Client = Db | TransactionClient;
@@ -103,14 +109,107 @@ export async function groupForProject(tx: TransactionClient, ref: string) {
   return group;
 }
 
-/** The position after the last project in a group, or among the ungrouped. */
-export async function nextGroupPosition(tx: TransactionClient, groupId: string | null): Promise<number> {
-  const last = await tx.project.aggregate({
+/**
+ * Renumber the live projects of one group — or the ungrouped, with `groupId = null` — to exactly
+ * 0..n-1, in their current order (FRM-REQ-226). Positions are dense and unique, so a position is
+ * an index, and "put it back where it was" still means something after other projects have come
+ * and gone.
+ *
+ * `place` puts those projects, in the order given, at `index` (clamped; absent appends), and the
+ * rest keep their relative order. The placed projects' own events record their positions; every
+ * other project this shifts is recorded together in one reorder event marked with its `cause`,
+ * which undo refuses in favour of the change that caused it. Returns that event's ID, if any.
+ */
+export async function settleProjects(
+  tx: TransactionClient,
+  actor: Actor,
+  groupId: string | null,
+  options: { cause: string; place?: { ids: readonly string[]; index?: number | undefined } },
+): Promise<string | null> {
+  const members = await tx.project.findMany({
     where: { groupId, deletedAt: null },
-    _max: { groupPosition: true },
+    orderBy: [{ groupPosition: 'asc' }, { code: 'asc' }],
+    select: { id: true, code: true, groupPosition: true },
   });
-  const max = last._max.groupPosition;
-  return max === null ? 0 : max + 1;
+  const placeIds = options.place?.ids ?? [];
+  const rest = members.filter((m) => !placeIds.includes(m.id));
+  const placed = placeIds
+    .map((id) => members.find((m) => m.id === id))
+    .filter((m) => m !== undefined);
+  const at = Math.max(0, Math.min(options.place?.index ?? rest.length, rest.length));
+  const sequence = [...rest.slice(0, at), ...placed, ...rest.slice(at)];
+
+  const before: Record<string, number> = {};
+  const after: Record<string, number> = {};
+  let first: { id: string; code: string } | undefined;
+  for (const [index, member] of sequence.entries()) {
+    if (member.groupPosition === index) continue;
+    await tx.project.update({ where: { id: member.id }, data: { groupPosition: index } });
+    if (placeIds.includes(member.id)) continue;
+    first ??= member;
+    before[member.code] = member.groupPosition;
+    after[member.code] = index;
+  }
+  if (first === undefined) return null;
+
+  const group =
+    groupId === null
+      ? null
+      : await tx.projectGroup.findUniqueOrThrow({
+          where: { id: groupId },
+          select: { id: true, humanId: true },
+        });
+  return recordReorder(tx, actor, {
+    // On the group when there is one; the ungrouped have no row, so on the first project shifted.
+    entityType: group === null ? 'project' : 'group',
+    entityId: group?.id ?? first.id,
+    entityHumanId: group?.humanId ?? first.code,
+    scope: 'projects',
+    group: group?.humanId ?? null,
+    cause: options.cause,
+    before,
+    after,
+  });
+}
+
+/** The same for the groups themselves: positions exactly 0..n-1 among the live groups. */
+export async function settleGroups(
+  tx: TransactionClient,
+  actor: Actor,
+  options: { cause: string; place?: { id: string; index?: number | undefined } },
+): Promise<string | null> {
+  const groups = await tx.projectGroup.findMany({
+    where: { deletedAt: null },
+    orderBy: [{ position: 'asc' }, { seq: 'asc' }],
+    select: { id: true, humanId: true, position: true },
+  });
+  const placedId = options.place?.id;
+  const rest = groups.filter((g) => g.id !== placedId);
+  const placed = groups.filter((g) => g.id === placedId);
+  const at = Math.max(0, Math.min(options.place?.index ?? rest.length, rest.length));
+  const sequence = [...rest.slice(0, at), ...placed, ...rest.slice(at)];
+
+  const before: Record<string, number> = {};
+  const after: Record<string, number> = {};
+  let first: { id: string; humanId: string } | undefined;
+  for (const [index, group] of sequence.entries()) {
+    if (group.position === index) continue;
+    await tx.projectGroup.update({ where: { id: group.id }, data: { position: index } });
+    if (group.id === placedId) continue;
+    first ??= group;
+    before[group.humanId] = group.position;
+    after[group.humanId] = index;
+  }
+  if (first === undefined) return null;
+  return recordReorder(tx, actor, {
+    entityType: 'group',
+    entityId: first.id,
+    entityHumanId: first.humanId,
+    scope: 'groups',
+    cause: options.cause,
+    before,
+    after,
+  });
 }
 
 /** A live group whose name or slug a group would collide with, other than itself. */
@@ -270,17 +369,19 @@ export async function createGroup(db: Db, actor: Actor, input: GroupCreate) {
         // Appended: a new family goes below the ones already there until somebody moves it.
         position: last._max.position === null ? 0 : last._max.position + 1,
       },
-      select: GROUP_SELECT,
+      select: { id: true, humanId: true },
     });
+    await settleGroups(tx, actor, { cause: `${group.humanId} created`, place: { id: group.id } });
+    const created = await tx.projectGroup.findUniqueOrThrow({ where: { id: group.id }, select: GROUP_SELECT });
     await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'group',
-      entityId: group.id,
-      entityHumanId: group.humanId,
-      after: group,
+      entityId: created.id,
+      entityHumanId: created.humanId,
+      after: created,
     });
-    return asGroup(group);
+    return asGroup(created);
   });
 }
 
@@ -378,6 +479,8 @@ export async function deleteGroup(db: Db, actor: Actor, ref: string): Promise<vo
       before,
       after: { deleted: true },
     });
+    // The groups below it close the gap, so positions stay 0..n-1.
+    await settleGroups(tx, actor, { cause: `${found.humanId} deleted` });
   });
 }
 
@@ -389,6 +492,8 @@ interface ReorderSnapshot {
   readonly scope: 'groups' | 'projects';
   /** For a projects reorder: the group, or null for the ungrouped. */
   readonly group?: string | null;
+  /** A renumbering another change made — a move, a delete, an undo — names it here. */
+  readonly cause?: string;
   readonly positions: Readonly<Record<string, number>>;
 }
 
@@ -450,6 +555,8 @@ async function recordReorder(
     entityHumanId: string;
     scope: 'groups' | 'projects';
     group?: string | null;
+    /** Set when this renumbering is the consequence of another change, which is what undo reverses. */
+    cause?: string;
     before: Record<string, number>;
     after: Record<string, number>;
   },
@@ -458,6 +565,7 @@ async function recordReorder(
     event: 'reorder' as const,
     scope: input.scope,
     ...(input.scope === 'projects' ? { group: input.group ?? null } : {}),
+    ...(input.cause === undefined ? {} : { cause: input.cause }),
   };
   return record(tx, {
     ...actor,
@@ -523,10 +631,11 @@ export async function reorderProjects(
  * Move projects into a group, or to the ungrouped with `ref = null` — out of whichever group held
  * them, since a project is in at most one (FRM-REQ-223).
  *
- * Each moved project is its own `update` event with the whole row before and after, so the
- * project's undo reverses the move (FRM-REQ-225). Without `position` they are appended, in the
- * order given. With one, the group is renumbered around them, and the projects already there that
- * shift are recorded together as one reorder event.
+ * Each moved project is its own `update` event with the whole row before and after, both read
+ * inside the lock, so the project's undo reverses the move (FRM-REQ-225). Without `position` the
+ * arrivals are appended in the order given and a project already in the group keeps its place;
+ * with one, every project named goes there. Both ends are renumbered 0..n-1 in the same
+ * transaction, and the projects that shifts are recorded as one reorder event per group.
  */
 export async function moveProjects(
   db: Db,
@@ -549,79 +658,41 @@ export async function moveProjects(
     }
     const byCode = new Map(moving.map((p) => [p.code, p]));
     const ordered = codes.map((code) => byCode.get(code)).filter((p) => p !== undefined);
+    const arriving = ordered.filter((p) => p.groupId !== groupId);
+    const sources = [...new Set(arriving.map((p) => p.groupId))];
 
-    const staying = await tx.project.findMany({
-      where: { groupId, deletedAt: null, code: { notIn: [...codes] } },
-      orderBy: [{ groupPosition: 'asc' }, { code: 'asc' }],
-      select: { id: true, code: true, groupPosition: true },
-    });
-
-    // Where each project ends up.
-    const placed = new Map<string, number>();
-    const shifted: { id: string; code: string; from: number; to: number }[] = [];
-    if (position === undefined) {
-      const start = await nextGroupPosition(tx, groupId);
-      // A project already in this group keeps its place when nothing says where to put it.
-      let next = start;
-      for (const project of ordered) {
-        if (project.groupId === groupId) placed.set(project.code, project.groupPosition);
-        else placed.set(project.code, next++);
-      }
-    } else {
-      const at = Math.min(position, staying.length);
-      const sequence = [
-        ...staying.slice(0, at).map((p) => p.code),
-        ...ordered.map((p) => p.code),
-        ...staying.slice(at).map((p) => p.code),
-      ];
-      for (const [index, code] of sequence.entries()) placed.set(code, index);
-      for (const project of staying) {
-        const to = placed.get(project.code) ?? project.groupPosition;
-        if (to !== project.groupPosition) {
-          shifted.push({ id: project.id, code: project.code, from: project.groupPosition, to });
-        }
-      }
+    for (const project of arriving) {
+      await tx.project.update({ where: { id: project.id }, data: { groupId } });
     }
+    const cause = `${codes.join(', ')} moved to ${group?.humanId ?? 'Ungrouped'}`;
+    const shifts = [
+      await settleProjects(tx, actor, groupId, {
+        cause,
+        place: {
+          ids: (position === undefined ? arriving : ordered).map((p) => p.id),
+          index: position,
+        },
+      }),
+    ];
+    for (const source of sources) shifts.push(await settleProjects(tx, actor, source, { cause }));
 
     const events: string[] = [];
-    for (const project of ordered) {
-      const to = placed.get(project.code) ?? 0;
-      if (project.groupId === groupId && project.groupPosition === to) continue;
-      const after = await tx.project.update({
-        where: { id: project.id },
-        data: { groupId, groupPosition: to },
-      });
+    for (const before of ordered) {
+      const after = await tx.project.findUniqueOrThrow({ where: { id: before.id } });
+      if (after.groupId === before.groupId && after.groupPosition === before.groupPosition) continue;
       events.push(
         await record(tx, {
           ...actor,
           action: 'update',
           entityType: 'project',
-          entityId: project.id,
-          entityHumanId: project.code,
-          before: project,
+          entityId: before.id,
+          entityHumanId: before.code,
+          before,
           after,
         }),
       );
     }
-
-    for (const project of shifted) {
-      await tx.project.update({ where: { id: project.id }, data: { groupPosition: project.to } });
-    }
-    const firstShifted = shifted[0];
-    if (firstShifted !== undefined) {
-      events.push(
-        await recordReorder(tx, actor, {
-          entityType: group === null ? 'project' : 'group',
-          entityId: group?.id ?? firstShifted.id,
-          entityHumanId: group?.humanId ?? firstShifted.code,
-          scope: 'projects',
-          group: group?.humanId ?? null,
-          before: Object.fromEntries(shifted.map((p) => [p.code, p.from])),
-          after: Object.fromEntries(shifted.map((p) => [p.code, p.to])),
-        }),
-      );
-    }
-    return events;
+    return [...events, ...shifts.filter((id) => id !== null)];
   });
   return { ...(await listGroups(db)), auditEventIds };
 }
@@ -653,6 +724,12 @@ export async function undoReorder(db: Db, actor: Actor, event: AuditEventRow) {
   const scope = after?.['scope'];
   const restore = positionsOf(event.before);
   const left = positionsOf(after);
+  const cause = after?.['cause'];
+  if (typeof cause === 'string') {
+    // Positions are dense, so a renumbering is part of the change that made it: reversing it
+    // alone would leave two projects in one place. The change it followed is what to undo.
+    throw new Conflict(`that renumbering followed a change (${cause}); undo that change instead`);
+  }
 
   return db.$transaction(async (tx) => {
     await lockGroups(tx);
@@ -840,47 +917,107 @@ export async function guardUndo(
   }
 }
 
-/** After a guideline's update is undone: its groups, which are rows, not a column, put back. */
+/**
+ * After the undo has written the row back, everything around it is settled.
+ *
+ * - A guideline's groups, which are rows rather than a column, are put back with its scope.
+ * - A project whose group or place the event changed goes back to its old index in its old group,
+ *   clamped and shifting the others, and the group it leaves closes up. A project whose creation
+ *   is undone leaves its group's order; one whose deletion is undone rejoins it where it was.
+ * - A group's creation undone closes the gap it leaves; its deletion undone rejoins where it was.
+ */
 export async function finishUndo(
   tx: TransactionClient,
-  input: { type: string; action: string; entityId: string; before: Record<string, unknown> | null },
+  actor: Actor,
+  input: {
+    type: string;
+    action: string;
+    entityId: string;
+    current: Record<string, unknown>;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown> | null;
+  },
 ): Promise<void> {
-  const { type, action, entityId, before } = input;
-  if (type !== 'guideline' || (action !== 'update' && action !== 'restore')) return;
-  const wanted = before?.['groups'];
-  if (!Array.isArray(wanted)) return;
-  const groups = await tx.projectGroup.findMany({
-    where: { humanId: { in: wanted.map(String) }, deletedAt: null },
-    select: { id: true },
-  });
-  await tx.guidelineGroup.deleteMany({ where: { guidelineId: entityId } });
-  if (groups.length > 0) {
-    await tx.guidelineGroup.createMany({
-      data: groups.map((g) => ({ guidelineId: entityId, groupId: g.id })),
+  const { type, action, entityId, current, before, after } = input;
+  const named = current['humanId'] ?? current['code'];
+  const cause = `undo of a change to ${typeof named === 'string' ? named : entityId}`;
+
+  if (type === 'guideline' && (action === 'update' || action === 'restore')) {
+    const wanted = before?.['groups'];
+    if (!Array.isArray(wanted)) return;
+    const groups = await tx.projectGroup.findMany({
+      where: { humanId: { in: wanted.map(String) }, deletedAt: null },
+      select: { id: true },
     });
+    await tx.guidelineGroup.deleteMany({ where: { guidelineId: entityId } });
+    if (groups.length > 0) {
+      await tx.guidelineGroup.createMany({
+        data: groups.map((g) => ({ guidelineId: entityId, groupId: g.id })),
+      });
+    }
+    return;
+  }
+
+  if (type === 'project') {
+    const was = typeof current['groupId'] === 'string' ? current['groupId'] : null;
+    const now = await tx.project.findUniqueOrThrow({
+      where: { id: entityId },
+      select: { groupId: true },
+    });
+    if (action === 'create') {
+      await settleProjects(tx, actor, was, { cause });
+      return;
+    }
+    let index: number | undefined;
+    if (action === 'delete') {
+      index = Number(current['groupPosition']);
+    } else if (
+      (action === 'update' || action === 'restore') &&
+      before !== null &&
+      (JSON.stringify(before['groupId']) !== JSON.stringify(after?.['groupId']) ||
+        before['groupPosition'] !== after?.['groupPosition'])
+    ) {
+      index = Number(before['groupPosition']);
+    }
+    if (index === undefined) return;
+    await settleProjects(tx, actor, now.groupId, {
+      cause,
+      place: { ids: [entityId], index: Number.isFinite(index) ? index : undefined },
+    });
+    if (was !== now.groupId) await settleProjects(tx, actor, was, { cause });
+    return;
+  }
+
+  if (type === 'group') {
+    if (action === 'create') await settleGroups(tx, actor, { cause });
+    if (action === 'delete') {
+      const index = Number(current['position']);
+      await settleGroups(tx, actor, {
+        cause,
+        place: { id: entityId, index: Number.isFinite(index) ? index : undefined },
+      });
+    }
   }
 }
 
 /**
- * The fields of a snapshot an undo leaves alone when the event did not change them: a project's
- * place in its groups, and a group's position. Order changes through its own events, so a rename
- * stays undoable after a reorder — comparing them would report the reorder as an edit the
- * rename's undo would discard.
+ * The fields of a snapshot an undo neither compares nor writes back.
+ *
+ * Positions are derived — always exactly 0..n-1 — so a project's `groupPosition` and a group's
+ * `position` are never compared and never restored raw: `finishUndo` puts the row back at its old
+ * index instead. A project's `groupId` is left alone unless the event changed it, so a rename
+ * stays undoable after the project has been moved.
  */
-export const ORDER_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  project: ['groupId', 'groupPosition'],
-  group: ['position'],
-};
-
-export function unchangedOrderFields(
+export function derivedFields(
   type: string,
   before: Record<string, unknown> | null,
   after: Record<string, unknown> | null,
 ): Set<string> {
-  const fields = ORDER_FIELDS[type] ?? [];
-  return new Set(
-    fields.filter(
-      (field) => JSON.stringify(scrub(before?.[field])) === JSON.stringify(scrub(after?.[field])),
-    ),
-  );
+  if (type === 'group') return new Set(['position']);
+  if (type !== 'project') return new Set();
+  const fields = new Set(['groupPosition']);
+  if (JSON.stringify(scrub(before?.['groupId'])) === JSON.stringify(scrub(after?.['groupId']))) {
+    fields.add('groupId');
+  }
+  return fields;
 }

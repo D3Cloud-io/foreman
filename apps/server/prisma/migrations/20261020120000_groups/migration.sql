@@ -79,3 +79,14 @@ ALTER TABLE "guideline_group" ADD CONSTRAINT "guideline_group_group_id_fkey" FOR
 -- The allocator for `human_id`. Owned by the column so a drop of the table takes it too, and
 -- `nextval` never hands back a number twice — so a deleted group's ID is never reused (ADR-008).
 CREATE SEQUENCE "project_group_seq" AS integer START WITH 1 OWNED BY "project_group"."seq";
+
+-- Every live project starts ungrouped, at a dense position in code order — the order the console
+-- already lists them in — so positions within a group are exactly 0..n-1 from the start.
+UPDATE "project" AS p
+SET "group_position" = ranked.position
+FROM (
+    SELECT "id", (row_number() OVER (ORDER BY "code") - 1)::integer AS position
+    FROM "project"
+    WHERE "deleted_at" IS NULL
+) AS ranked
+WHERE p."id" = ranked."id";

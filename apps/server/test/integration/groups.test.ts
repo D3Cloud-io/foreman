@@ -124,7 +124,43 @@ describe.skipIf(url === undefined)('groups', () => {
     }
   });
 
-  afterEach(cleanUp);
+  /**
+   * Positions are dense: exactly 0..n-1 among the live groups, and within each group and among the
+   * ungrouped (FRM-REQ-226). Checked after every test, so no operation here may leave a gap or a
+   * shared place behind it.
+   */
+  const assertDense = async () => {
+    const groups = await db.projectGroup.findMany({
+      where: { deletedAt: null },
+      select: { id: true, humanId: true, position: true },
+    });
+    const indices = (n: number) => Array.from({ length: n }, (_, i) => i);
+    expect(groups.map((g) => g.position).sort((a, b) => a - b), 'group positions').toEqual(indices(groups.length));
+    for (const groupId of [null, ...groups.map((g) => g.id)]) {
+      const projects = await db.project.findMany({
+        where: { groupId, deletedAt: null },
+        select: { code: true, groupPosition: true },
+      });
+      expect(
+        projects.map((p) => p.groupPosition).sort((a, b) => a - b),
+        `positions in ${groups.find((g) => g.id === groupId)?.humanId ?? 'Ungrouped'}`,
+      ).toEqual(indices(projects.length));
+    }
+  };
+  const positionsIn = async (groupId: string | null) =>
+    Object.fromEntries(
+      (
+        await db.project.findMany({
+          where: { groupId, deletedAt: null, code: { startsWith: 'GT' } },
+          select: { code: true, groupPosition: true },
+        })
+      ).map((p) => [p.code, p.groupPosition]),
+    );
+
+  afterEach(async () => {
+    await assertDense();
+    await cleanUp();
+  });
 
   afterAll(async () => {
     await cleanUp();
@@ -435,8 +471,11 @@ describe.skipIf(url === undefined)('groups', () => {
         'GTD',
         'GTB',
       ]);
-      // Two moves and the one reorder that made room for them.
-      expect(res.auditEventIds).toHaveLength(3);
+      // Two moves, and the renumbering that made room for them, recorded as a reorder.
+      const events = await db.auditEvent.findMany({ where: { id: { in: res.auditEventIds ?? [] } } });
+      expect(events.filter((e) => e.entityType === 'project')).toHaveLength(2);
+      expect(events.some((e) => (e.after as { event?: string }).event === 'reorder')).toBe(true);
+      await assertDense();
     });
 
     it('orders the ungrouped too', async () => {
@@ -475,6 +514,159 @@ describe.skipIf(url === undefined)('groups', () => {
 
       await ok(await undo(result.auditEventIds?.[0] ?? ''));
       expect((await listing()).items.map((g) => g.humanId)).toEqual(initial);
+    });
+  });
+
+  describe('positions stay dense (FRM-REQ-226)', () => {
+    it('keeps 0..n-1 through moves in and out, and an undone move goes back to its old index', async () => {
+      const group = await create({ name: `${PREFIX}Dense` });
+      await ok(await send('POST', `/api/groups/${group.humanId}/projects`, { projects: ['GTA', 'GTB', 'GTC'] }));
+      expect(await positionsIn(group.id)).toEqual({ GTA: 0, GTB: 1, GTC: 2 });
+      await assertDense();
+
+      // C leaves, D is appended where C was: the undo must not give both of them 2.
+      const out = await ok<Listing>(await send('POST', '/api/groups/ungrouped/projects', { projects: ['GTC'] }));
+      await assertDense();
+      await ok(await send('POST', `/api/groups/${group.humanId}/projects`, { projects: ['GTD'] }));
+      expect(await positionsIn(group.id)).toEqual({ GTA: 0, GTB: 1, GTD: 2 });
+      await assertDense();
+
+      await ok(await undo(out.auditEventIds?.[0] ?? ''));
+      expect(await positionsIn(group.id)).toEqual({ GTA: 0, GTB: 1, GTC: 2, GTD: 3 });
+      await assertDense();
+
+      // A move out of the middle closes the gap behind it.
+      await ok(await send('PATCH', '/api/projects/GTB', { group: null }));
+      expect(await positionsIn(group.id)).toEqual({ GTA: 0, GTC: 1, GTD: 2 });
+      await assertDense();
+    });
+
+    it('clamps an undone move to the end when its old index is past the end now', async () => {
+      const group = await create({ name: `${PREFIX}Clamp` });
+      await ok(await send('POST', `/api/groups/${group.humanId}/projects`, { projects: ['GTA', 'GTB', 'GTC'] }));
+      const out = await ok<Listing>(await send('POST', '/api/groups/ungrouped/projects', { projects: ['GTC'] }));
+      await ok(await send('POST', '/api/groups/ungrouped/projects', { projects: ['GTB'] }));
+
+      await ok(await undo(out.auditEventIds?.[0] ?? ''));
+      expect(await positionsIn(group.id)).toEqual({ GTA: 0, GTC: 1 });
+    });
+
+    it('refuses to undo the renumbering a move caused on its own, naming the move', async () => {
+      const group = await create({ name: `${PREFIX}Caused` });
+      await ok(await send('POST', `/api/groups/${group.humanId}/projects`, { projects: ['GTA', 'GTB', 'GTC'] }));
+      const out = await ok<Listing>(await send('POST', '/api/groups/ungrouped/projects', { projects: ['GTA'] }));
+      const events = await db.auditEvent.findMany({ where: { id: { in: out.auditEventIds ?? [] } } });
+      const renumbering = events.find((e) => (e.after as { group?: string }).group === group.humanId);
+      expect((renumbering?.after as { cause?: string } | undefined)?.cause).toContain('GTA');
+
+      const res = await undo(renumbering?.id ?? '');
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toMatch(/undo that change/);
+      expect(await positionsIn(group.id)).toEqual({ GTB: 0, GTC: 1 });
+    });
+
+    it('closes up the groups on a delete, and an undone delete rejoins where it was', async () => {
+      const a = await create({ name: `${PREFIX}G one` });
+      const b = await create({ name: `${PREFIX}G two` });
+      const c = await create({ name: `${PREFIX}G three` });
+      const initial = (await listing()).items.map((g) => g.humanId);
+
+      expect((await send('DELETE', `/api/groups/${b.humanId}`)).status).toBe(204);
+      await assertDense();
+      expect((await listing()).items.map((g) => g.humanId)).toEqual(initial.filter((id) => id !== b.humanId));
+
+      await ok(await undo((await lastEvent('group', b.id)).id));
+      await assertDense();
+      expect((await listing()).items.map((g) => g.humanId)).toEqual(initial);
+      expect(initial.indexOf(b.humanId)).toBe(initial.indexOf(a.humanId) + 1);
+      expect(initial.indexOf(c.humanId)).toBe(initial.indexOf(b.humanId) + 1);
+    });
+  });
+
+  describe('concurrent writes are serialised (FRM-REQ-225)', () => {
+    type Snapshot = { groupId: string | null; groupPosition: number; updatedAt: string };
+    const keyOf = (s: Snapshot) => JSON.stringify([s.groupId, s.groupPosition, s.updatedAt]);
+
+    /**
+     * The project's events since `seen` form one chain from `start` to the row as it stands: each
+     * event's `before` is exactly the state the previous one left. A write that read a stale row —
+     * a move decided on, or a `before` recorded from, a state another writer had already replaced —
+     * breaks the chain, and a final state no event left means the last writer did not win.
+     */
+    const assertChain = async (projectId: string, start: Snapshot, seen: Set<string>) => {
+      const events = (
+        await db.auditEvent.findMany({ where: { entityType: 'project', entityId: projectId } })
+      ).filter((e) => !seen.has(e.id) && (e.after as { event?: string }).event !== 'reorder');
+      let current = keyOf(start);
+      const left = [...events];
+      while (left.length > 0) {
+        // A write that changed no column leaves the row as it was, `updatedAt` included, so it
+        // starts and ends where it found the row; taken first, it cannot hide a stale `before`.
+        const starts = (e: (typeof left)[number]) => keyOf(e.before as Snapshot) === current;
+        const unchanged = left.findIndex((e) => starts(e) && keyOf(e.after as Snapshot) === current);
+        const next = unchanged === -1 ? left.findIndex(starts) : unchanged;
+        expect(next, `no event starts from ${current}: ${JSON.stringify(left.map((e) => e.before))}`).not.toBe(-1);
+        const [event] = left.splice(next, 1);
+        current = keyOf(event?.after as Snapshot);
+      }
+      const final = await db.project.findUniqueOrThrow({ where: { id: projectId } });
+      expect(current).toBe(
+        keyOf({ groupId: final.groupId, groupPosition: final.groupPosition, updatedAt: final.updatedAt.toISOString() }),
+      );
+    };
+    const snapshot = async (code: string) => {
+      const row = await db.project.findUniqueOrThrow({ where: { code } });
+      const seen = new Set(
+        (await db.auditEvent.findMany({ where: { entityId: row.id }, select: { id: true } })).map((e) => e.id),
+      );
+      return {
+        id: row.id,
+        seen,
+        start: { groupId: row.groupId, groupPosition: row.groupPosition, updatedAt: row.updatedAt.toISOString() },
+      };
+    };
+
+    it('a PATCH racing a move: the PATCH reports its own write, and every before is the real prior state', async () => {
+      const g1 = await create({ name: `${PREFIX}Race one` });
+      const g2 = await create({ name: `${PREFIX}Race two` });
+      for (let round = 0; round < 25; round++) {
+        await ok(await send('PATCH', '/api/projects/GTA', { group: g1.humanId }));
+        const { id, seen, start } = await snapshot('GTA');
+
+        const [patched, moved] = await Promise.all([
+          send('PATCH', '/api/projects/GTA', { group: g1.humanId }),
+          send('POST', `/api/groups/${g2.humanId}/projects`, { projects: ['GTA'] }),
+        ]);
+        const body = await ok<{ groupId: string | null }>(patched);
+        await ok(moved);
+        // What the PATCH answered is what it wrote, not what a later move made of it.
+        expect(body.groupId).toBe(g1.id);
+        await assertChain(id, start, seen);
+      }
+      await assertDense();
+    });
+
+    it('a four-way race of PATCHes and moves leaves one consistent chain, round after round', async () => {
+      const g1 = await create({ name: `${PREFIX}Four one` });
+      const g2 = await create({ name: `${PREFIX}Four two` });
+      await ok(await send('POST', `/api/groups/${g1.humanId}/projects`, { projects: ['GTB', 'GTC'] }));
+      for (let round = 0; round < 25; round++) {
+        await ok(await send('PATCH', '/api/projects/GTA', { group: g1.humanId }));
+        const { id, seen, start } = await snapshot('GTA');
+
+        const [toG1, toG2, toNone, atFront] = await Promise.all([
+          send('PATCH', '/api/projects/GTA', { group: g1.humanId }),
+          send('POST', `/api/groups/${g2.humanId}/projects`, { projects: ['GTA'] }),
+          send('PATCH', '/api/projects/GTA', { group: null }),
+          send('POST', `/api/groups/${g1.humanId}/projects`, { projects: ['GTA'], position: 0 }),
+        ]);
+        expect((await ok<{ groupId: string | null }>(toG1)).groupId).toBe(g1.id);
+        expect((await ok<{ groupId: string | null }>(toNone)).groupId).toBeNull();
+        await ok(toG2);
+        await ok(atFront);
+        await assertChain(id, start, seen);
+        await assertDense();
+      }
     });
   });
 

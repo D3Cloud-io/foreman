@@ -13,7 +13,7 @@ import type { Db } from '../db.js';
 import { record, type Actor } from './audit.js';
 import { Conflict, Invalid, NotFound } from './errors.js';
 import { exitGate, GateRefused } from './coverage.js';
-import { groupForProject, lockGroups, nextGroupPosition } from './groups.js';
+import { groupForProject, lockGroups, settleProjects } from './groups.js';
 import { allocate, nextTaskPosition, phaseHumanId, taskHumanId } from './humanId.js';
 import { rollupPhase, rollupProject, rollupTaskPhases } from './rollup.js';
 
@@ -44,17 +44,18 @@ export async function createProject(db: Db, actor: Actor, input: ProjectCreate) 
   if (existing !== null) throw new Conflict(`project code ${input.code} is already in use`);
 
   return db.$transaction(async (tx) => {
-    // In a group, or among the ungrouped, and at the end of it either way (FRM-REQ-223).
+    // In a group, or among the ungrouped, and at the end of it either way (FRM-REQ-223). The lock
+    // first: the position is read-then-write, and a move may be renumbering the same group.
     await lockGroups(tx);
     const group =
       input.group === undefined || input.group === null
         ? null
         : await groupForProject(tx, input.group);
-    const groupPosition = await nextGroupPosition(tx, group?.id ?? null);
-    const project = await tx.project.create({
+    const created = await tx.project.create({
       data: {
         groupId: group?.id ?? null,
-        groupPosition,
+        // Past the end; `settleProjects` makes it exactly the next index.
+        groupPosition: 2_000_000_000,
         code: input.code,
         name: input.name,
         slug: input.slug ?? slugify(input.name),
@@ -62,7 +63,13 @@ export async function createProject(db: Db, actor: Actor, input: ProjectCreate) 
         ...(input.pitch !== undefined ? { pitch: input.pitch } : {}),
         ...(input.vaultPath !== undefined ? { vaultPath: input.vaultPath } : {}),
       },
+      select: { id: true },
     });
+    await settleProjects(tx, actor, group?.id ?? null, {
+      cause: `${input.code} created`,
+      place: { ids: [created.id] },
+    });
+    const project = await tx.project.findUniqueOrThrow({ where: { id: created.id } });
     await record(tx, {
       ...actor,
       action: 'create',
@@ -76,25 +83,29 @@ export async function createProject(db: Db, actor: Actor, input: ProjectCreate) 
 }
 
 export async function updateProject(db: Db, actor: Actor, code: string, input: ProjectUpdate) {
-  const before = await findProject(db, code);
-
   return db.$transaction(async (tx) => {
-    // A new group is a move: the project joins the end of it, and the event's before and after
-    // carry both groups, so undoing it moves the project back (FRM-REQ-225).
-    let move: { groupId: string | null; groupPosition: number } | null = null;
+    // The lock, then the row. Every write to a project's group or place holds the same lock, so
+    // the row read here is the real prior state: both the move decision and the event's `before`
+    // come from it, never from a read made before some other move committed.
+    await lockGroups(tx);
+    const before = await tx.project.findFirst({ where: { code, deletedAt: null } });
+    if (before === null) throw new NotFound(`project ${code}`);
+
+    // A new group is a move: the project joins the end of it, the group it left closes up, and the
+    // event's before and after carry both groups, so undoing it moves the project back
+    // (FRM-REQ-225).
+    let groupId = before.groupId;
     if (input.group !== undefined) {
-      await lockGroups(tx);
       const group = input.group === null ? null : await groupForProject(tx, input.group);
-      const groupId = group?.id ?? null;
-      if (groupId !== before.groupId) {
-        move = { groupId, groupPosition: await nextGroupPosition(tx, groupId) };
-      }
+      groupId = group?.id ?? null;
     }
-    const project = await tx.project.update({
+    const moved = groupId !== before.groupId;
+
+    await tx.project.update({
       where: { id: before.id },
       // `code` is not in the update shape at all, so there is nothing here to guard against.
       data: {
-        ...(move ?? {}),
+        ...(moved ? { groupId } : {}),
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.slug !== undefined ? { slug: input.slug } : {}),
         ...(input.lifecycle !== undefined ? { lifecycle: input.lifecycle } : {}),
@@ -102,6 +113,12 @@ export async function updateProject(db: Db, actor: Actor, code: string, input: P
         ...(input.vaultPath !== undefined ? { vaultPath: input.vaultPath } : {}),
       },
     });
+    if (moved) {
+      const cause = `${code} moved`;
+      await settleProjects(tx, actor, groupId, { cause, place: { ids: [before.id] } });
+      await settleProjects(tx, actor, before.groupId, { cause });
+    }
+    const project = await tx.project.findUniqueOrThrow({ where: { id: before.id } });
     await record(tx, {
       ...actor,
       action: 'update',
