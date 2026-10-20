@@ -247,7 +247,7 @@ export function ProjectOverview({ code }: { code: string }) {
                     </Cluster>
                     <span className="fm-finding__title">{plainText(finding.title)}</span>
                     {finding.location !== null && (
-                      <code className="fm-muted">{finding.location}</code>
+                      <code className="fm-muted fm-path">{finding.location}</code>
                     )}
                   </Stack>
                 </Card>

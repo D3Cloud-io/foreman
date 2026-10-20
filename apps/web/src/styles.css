@@ -14,6 +14,20 @@
   color: var(--color-fg);
 }
 
+/* The phone tab bar (FRM-REQ-217) rides the foot of the screen, where a thumb is, as Shipyard's
+   does; the clearing block after the page is as tall as the bar — an item, its padding and the home
+   indicator's inset — so the page's last line is never under it. */
+.fm-tabbar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+}
+.fm-tabbar-clear {
+  height: calc(var(--space-64) + env(safe-area-inset-bottom));
+}
+
 /* The board: one column per status. It scrolls sideways below `md` rather than stacking, because
    stacked columns are a list with extra headings — and the list view already exists. */
 .fm-board {
@@ -31,6 +45,11 @@
   font-weight: var(--weight-medium);
   color: var(--color-fg-muted);
 }
+/* A file path, or a list of them: one long word as far as the line breaker knows, so at 390 it ran
+   11px off the side of the screen. It may break anywhere, the way a path in a terminal does. */
+.fm-path {
+  overflow-wrap: anywhere;
+}
 .fm-error {
   margin-top: var(--space-4);
   font-size: var(--text-13);
@@ -38,16 +57,13 @@
   color: var(--color-danger);
 }
 
-/* The strip of sections under a project's heading. Not a tab set: these are routes, and a tab that
-   changes the URL is a link wearing the wrong clothes. */
-.fm-sections {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-16);
-}
-
 /* Rendered markdown. The library styles components, not prose, so the handful of element rules a
-   document needs live here — and only the ones a document actually uses. */
+   document needs live here — and only the ones a document actually uses.
+
+   Every inset in this file — a code block, a diff, a callout, a secret, a screenshot's plate —
+   sits on `--color-fill-quiet`, the 1.5 tone for something set into a card. They were on
+   `surface-raised`, which on the recessed sheet is the card's own white in light mode, so each
+   one vanished into the card it was in. */
 .fm-markdown > :first-child {
   margin-top: 0;
 }
@@ -76,7 +92,7 @@
 .fm-markdown pre {
   padding: var(--space-12);
   border-radius: var(--radius-md);
-  background: var(--color-surface-raised);
+  background: var(--color-fill-quiet);
   overflow-x: auto;
 }
 .fm-markdown blockquote {
@@ -108,7 +124,7 @@
   margin: var(--space-8) 0 0;
   padding: var(--space-12);
   border-radius: var(--radius-md);
-  background: var(--color-surface-raised);
+  background: var(--color-fill-quiet);
   font-family: var(--font-mono);
   font-size: var(--text-13);
   line-height: var(--leading-13);
@@ -131,23 +147,14 @@
 
    Scoped to running text. A link in a table cell, a nav or a card title is surrounded by
    structure rather than by prose, and underlining every one of those makes a dense screen
-   illegible. */
+   illegible. A SideNav item is an `li > a`, so `li a` stops at a `nav` — said here rather than
+   undone afterwards by selecting the library's class names. */
 .fm-markdown a,
-li a,
+li a:not(nav a),
 p a,
 dd a {
   text-decoration: underline;
   text-underline-offset: 0.2em;
-}
-
-/* Except where the link *is* the structure: a nav item, a table cell, a card title. Underlining
-   those makes a dense screen illegible, and none of them relies on colour to be found — they are
-   found by position. The first attempt used `li > a:not(:only-child)`, which missed the real
-   case: a link followed by a bare text node is still an only *element* child. */
-.d3-nav a,
-.d3-tbl a,
-.d3-page-header a {
-  text-decoration: none;
 }
 
 /* Mermaid's edge labels, made readable.
@@ -342,9 +349,11 @@ dd a {
   margin-top: var(--space-4);
 }
 
-/* Status pills. Five tones, from tokens, because the library's Badge has three
-   and none of them is green. Tinted background at low alpha with a solid
-   foreground: readable on both themes without a second palette. */
+/* Status pills. Five tones, from tokens, because the library's Badge has four
+   and none of them is green (D-016). Each tinted plate is its tone's `-muted`
+   token with the tone itself on it: readable on both themes without a second
+   palette. The neutral plate is the quiet fill (1.5), which reads on a card on
+   the recessed sheet, where `surface-raised` is the card's own white. */
 .fm-pill {
   display: inline-flex;
   align-items: center;
@@ -355,7 +364,7 @@ dd a {
   font-size: var(--text-12);
   font-weight: var(--weight-medium);
   white-space: nowrap;
-  background: var(--color-surface-raised);
+  background: var(--color-fill-quiet);
   color: var(--color-fg-muted);
   /* A pill is its content, never its container. `inline-flex` alone does not say so inside a
      flex column, where it stretches to the full width and reads as a filled bar. */
@@ -365,7 +374,7 @@ dd a {
 .fm-pill--success { background: var(--color-success-muted); color: var(--color-success); }
 .fm-pill--danger { background: var(--color-danger-muted); color: var(--color-danger); }
 .fm-pill--accent { background: var(--color-accent-muted); color: var(--color-accent); }
-.fm-pill--warning { background: var(--color-surface-raised); color: var(--color-warning); }
+.fm-pill--warning { background: var(--color-warning-muted); color: var(--color-warning); }
 .fm-pill__dot {
   width: 0.375rem;
   height: 0.375rem;
@@ -458,6 +467,12 @@ dd a {
   flex: 1;
   min-width: 0;
 }
+/* The figures beside a donut. Their own basis, so on a phone they wrap under it rather than
+   squeezing into a column of one-word cards beside it. */
+.fm-glance {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
 .fm-finding__title {
   font-size: var(--text-13);
   line-height: var(--leading-13);
@@ -543,7 +558,7 @@ dd a {
   padding: var(--space-8) var(--space-12);
   border-left: 2px solid var(--color-accent);
   border-radius: var(--radius-sm);
-  background: var(--color-surface-raised);
+  background: var(--color-fill-quiet);
   font-size: var(--text-13);
   line-height: var(--leading-13);
 }
@@ -575,8 +590,7 @@ dd a {
   font-weight: var(--weight-medium);
   color: var(--color-fg);
 }
-.fm-tile__group,
-.fm-tile__value {
+.fm-tile__group {
   font-size: var(--text-11);
   color: var(--color-fg-muted);
 }
@@ -626,7 +640,7 @@ dd a {
   margin: 0;
   padding: var(--space-12);
   border-radius: var(--radius-md);
-  background: var(--color-surface-raised);
+  background: var(--color-fill-quiet);
   border: var(--border-width) solid var(--color-border);
   font-family: var(--font-mono);
   font-size: var(--text-13);
@@ -657,27 +671,6 @@ dd a {
   font-size: var(--text-11);
   color: var(--color-fg-muted);
   white-space: nowrap;
-}
-
-/* One comment in a thread. Unclamped, unlike a card's pitch: a discussion that hides its own
-   second half is a discussion people have somewhere else. */
-.fm-item__body-full {
-  margin: 0;
-  font-size: var(--text-13);
-  line-height: var(--leading-13);
-  white-space: pre-wrap;
-}
-
-.fm-comment {
-  padding: var(--space-8) var(--space-12);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-raised);
-}
-
-/* A board-only note. Marked by a border and by the word on its pill — never by colour alone,
-   which is the one distinction here that must survive a monochrome screen. */
-.fm-comment--internal {
-  border-left: 2px solid var(--color-warning);
 }
 
 /* ─── A project idea's page (ADR-017) ─────────────────────────────────────── */
@@ -720,13 +713,6 @@ dd a {
   min-width: 0;
 }
 
-.fm-section__heading {
-  margin: 0;
-  font-size: var(--text-16);
-  line-height: var(--leading-16);
-  font-weight: var(--weight-medium);
-}
-
 /* An empty section shows its question. Muted and italic rather than hidden, because what has not
    been written yet is the most useful thing on the page. */
 .fm-section__prompt {
@@ -737,10 +723,6 @@ dd a {
   color: var(--color-fg-muted);
 }
 
-.fm-grow {
-  flex: 1;
-  min-width: 0;
-}
 
 /* ─── Maturity: six pips for six sections ─── */
 .fm-maturity {
@@ -963,7 +945,7 @@ dd a {
   height: auto;
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius-md);
-  background: var(--color-surface-raised);
+  background: var(--color-fill-quiet);
 }
 .fm-screen-thumb {
   display: block;
@@ -973,7 +955,7 @@ dd a {
   object-position: top;
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: var(--color-surface-raised);
+  background: var(--color-fill-quiet);
 }
 
 /* The drop target is a real button, so the keyboard reaches what the mouse drags onto
@@ -1084,4 +1066,52 @@ dd a {
   grid-template-columns: 6rem minmax(0, 1fr);
   gap: var(--space-12);
   align-items: start;
+}
+
+/* ─── A thumb, not a cursor (FRM-REQ-219) ─────────────────────────────────────
+
+   Under a coarse pointer every control the console draws itself is at least 44 by 44, as the
+   library's Button, IconButton, SegmentedControl and SideNav rows are from 1.7 (D-089). A fine
+   pointer keeps the dense sizes above: a mouse does not need the room, and a list of thirty
+   findings at 44px a row is a list you scroll through rather than read. */
+@media (pointer: coarse) {
+  .fm-star,
+  .fm-tag__remove,
+  .fm-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .fm-tag {
+    height: auto;
+    min-height: 44px;
+    padding: 0 var(--space-12);
+  }
+  /* The remove inside a tag supplies its own 44px; the tag only keeps it from doubling the gap. */
+  .fm-tag:has(.fm-tag__remove) {
+    padding-right: 0;
+  }
+  .fm-row,
+  .fm-item,
+  .fm-barrow,
+  a.fm-item__id {
+    min-height: 44px;
+  }
+  a.fm-item__id {
+    display: inline-flex;
+    align-items: center;
+    min-width: 44px;
+  }
+  .fm-radio {
+    min-height: 44px;
+  }
+  .fm-history summary {
+    padding-block: var(--space-12);
+  }
+  /* The matrix's hit circle, not its mark: the dot stays the size it was drawn. */
+  .fm-matrix__hit {
+    r: 22px;
+  }
 }
