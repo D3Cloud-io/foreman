@@ -146,7 +146,10 @@ test.describe('the group scope', () => {
     await expect(page.getByRole('status').filter({ hasText: `Viewing ${DORMICE}` })).toBeVisible();
     await expect(page.getByRole('heading', { name: DORMICE, level: 2 })).toBeVisible();
     await expect(page.getByRole('heading', { name: CLOUD, level: 2 })).toHaveCount(0);
-    await expect(page.getByRole('link', { name: new RegExp(IN_DORMICE[0]) })).toBeVisible();
+    // The project is in its group's ledger, and — it has a critical finding — in the Needs-you strip
+    // above, so the link is looked for in the group's own section (FRM-T-18.6).
+    const ledger = page.getByRole('region', { name: DORMICE });
+    await expect(ledger.getByRole('link', { name: new RegExp(IN_DORMICE[0]) })).toBeVisible();
     await expect(page.getByRole('link', { name: new RegExp(IN_CLOUD) })).toHaveCount(0);
     await expect(page.getByText(/Hidden by scope:/)).toContainText(`${CLOUD} 1`);
 
@@ -167,7 +170,9 @@ test.describe('the group scope', () => {
     // In the href itself, so a middle-click, a new tab and a copied link open in Dormice too.
     await expect(main.getByRole('link', { name: /Critical \+ high/ })).toHaveAttribute('href', `/findings?group=${dormice.slug}`);
     await expect(main.getByRole('link', { name: /Drift/ }).first()).toHaveAttribute('href', `/drift?group=${dormice.slug}`);
-    await expect(main.getByRole('link', { name: new RegExp(IN_DORMICE[0]) })).toHaveAttribute('href', `/projects/${IN_DORMICE[0]}`);
+    await expect(
+      main.getByRole('region', { name: DORMICE }).getByRole('link', { name: new RegExp(IN_DORMICE[0]) }),
+    ).toHaveAttribute('href', `/projects/${IN_DORMICE[0]}`);
 
     const opened = page.context().waitForEvent('page');
     await main.getByRole('link', { name: /Critical \+ high/ }).click({ modifiers: ['ControlOrMeta'] });
@@ -380,6 +385,8 @@ test.describe('the group scope', () => {
     await expect(page).toHaveURL(new RegExp(`/\\?group=${cloud.slug}$`));
     await expect(page.getByRole('button', { name: `Scope: ${CLOUD}. Change scope` })).toBeFocused();
     await expect(page.getByRole('status').filter({ hasText: `Viewing ${CLOUD}` })).toBeVisible();
-    await expect(page.getByRole('link', { name: new RegExp(IN_CLOUD) })).toBeVisible();
+    await expect(
+      page.getByRole('region', { name: CLOUD }).getByRole('link', { name: new RegExp(IN_CLOUD) }),
+    ).toBeVisible();
   });
 });

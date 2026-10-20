@@ -122,6 +122,26 @@ describe.skipIf(url === undefined)('portfolio and search', () => {
       },
     });
 
+    // Main has moved one commit past the one that shipped (FRM-T-18.6).
+    await db.commit.create({
+      data: {
+        repoId: repo.id,
+        sha: 'c'.repeat(40),
+        message: 'Refuse the unsigned payload',
+        author: 'tester',
+        committedAt: new Date(Date.now() + 3_600_000),
+      },
+    });
+    await db.deployment.create({
+      data: {
+        projectId: a.id,
+        environment: 'production',
+        image: 'ghcr.io/test/alpha',
+        imageSha: 'b'.repeat(7),
+        deployedAt: new Date(),
+      },
+    });
+
     // PFB: planned, and nothing has ever been ingested for it.
     await db.project.create({
       data: { code: 'PFB', name: 'Beta', slug: 'beta', lifecycle: 'planned' },
@@ -149,6 +169,17 @@ describe.skipIf(url === undefined)('portfolio and search', () => {
         { projectId: c.id, phaseId: late.id, humanId: 'PFC-T-4.1', title: 'Landed', status: 'done' },
         { projectId: c.id, phaseId: late.id, humanId: 'PFC-T-4.2', title: 'Next', status: 'todo' },
       ],
+    });
+
+    // A deploy of a SHA Foreman never saw a commit for: how far main is ahead is unknown, not zero.
+    await db.deployment.create({
+      data: {
+        projectId: c.id,
+        environment: 'production',
+        image: 'ghcr.io/test/gamma',
+        imageSha: 'sha-' + 'e'.repeat(40),
+        deployedAt: new Date(),
+      },
     });
 
     server = await new Promise<Server>((resolve) => {
@@ -222,6 +253,54 @@ describe.skipIf(url === undefined)('portfolio and search', () => {
         const brief = await get<{ activePhase: { humanId: string } | null }>(`/brief/${code}`);
         const row = items.find((item) => item.code === code);
         expect(row?.phase?.humanId ?? null, code).toBe(brief.activePhase?.humanId ?? null);
+      }
+    });
+  });
+
+  describe('the ledger columns (FRM-REQ-245, FRM-T-18.6)', () => {
+    it('names the next task, the CI word and the deploy state on every row', async () => {
+      const { items } = await get<{ items: PortfolioRow[] }>('/portfolio');
+      const by = (code: string) => items.find((row) => row.code === code);
+
+      expect(by('PFA')?.nextTask).toEqual({ humanId: 'PFA-T-2.2', title: 'Verify the HMAC signature' });
+      expect(by('PFA')?.ciState).toBe('failing');
+      // Never reported is its own word: not passing, not failing.
+      expect(by('PFB')?.ciState).toBe('never');
+      expect(by('PFB')?.nextTask).toBeNull();
+      expect(by('PFB')?.deployed).toBeNull();
+      expect(by('PFC')?.nextTask?.humanId).toBe('PFC-T-4.2');
+    });
+
+    it('counts the commits on main since the deployed SHA, and says unknown when it is not a commit', async () => {
+      const { items } = await get<{ items: PortfolioRow[] }>('/portfolio');
+      const alpha = items.find((row) => row.code === 'PFA')?.deployed;
+      expect(alpha?.sha).toBe('b'.repeat(7));
+      expect(alpha?.ahead).toBe(1);
+      expect(typeof alpha?.at).toBe('string');
+      // Unknown is not zero: nothing says the project is up to date.
+      expect(items.find((row) => row.code === 'PFC')?.deployed?.ahead).toBeNull();
+    });
+
+    it('agrees with the brief about what is next, and never names a blocked task', async () => {
+      const { items } = await get<{ items: PortfolioRow[] }>('/portfolio');
+      for (const code of CODES) {
+        const brief = await get<{ nextTasks: { humanId: string; title: string }[] }>(`/brief/${code}`);
+        const row = items.find((item) => item.code === code);
+        expect(row?.nextTask?.humanId ?? null, code).toBe(brief.nextTasks[0]?.humanId ?? null);
+        expect(row?.nextTask?.humanId).not.toBe('PFA-T-2.3');
+      }
+    });
+
+    it('carries the new fields in the grouped sections too, one answer however it is read', async () => {
+      const grouped = await get<{
+        items: PortfolioRow[];
+        groups: { projects: PortfolioRow[] }[];
+        ungrouped: { projects: PortfolioRow[] } | null;
+      }>('/portfolio');
+      const sectioned = [...grouped.groups.flatMap((g) => g.projects), ...(grouped.ungrouped?.projects ?? [])];
+      for (const row of sectioned) {
+        expect(row.ciState).toBe(grouped.items.find((item) => item.code === row.code)?.ciState);
+        expect(row.nextTask).toEqual(grouped.items.find((item) => item.code === row.code)?.nextTask);
       }
     });
   });

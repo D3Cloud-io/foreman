@@ -1,6 +1,5 @@
 import { useState, type ReactNode } from 'react';
 import {
-  Badge,
   Button,
   Card,
   Cluster,
@@ -15,6 +14,7 @@ import {
   Stack,
 } from '@d3cloud/ui';
 import { ArrowUpRight, ChevronDown, ChevronRight, UsersRound } from 'lucide-react';
+import { ciDetail, figuresOf, Ledger, NeedsYouStrip, StatStrip } from '../components/Ledger';
 import { ScopeNotice, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
 import { api, foreman, type FindingsPage, type PortfolioRow } from '../lib/api';
 import { scopedHref, scopeOf } from '../lib/scope';
@@ -33,91 +33,25 @@ import {
 import { navigate } from '../lib/router';
 import { AccentDot } from '../ui/groups';
 import { SegmentBar, StatCard } from '../ui/viz';
-import {
-  breakdown,
-  ciTone,
-  ciWord,
-  CRITICAL_PLUS_HIGH,
-  lifecycleTone,
-  plural,
-  readAcross,
-  readCi,
-  readValue,
-  rowPlanned,
-} from '../ui/status';
+import { breakdown, CRITICAL_PLUS_HIGH, plural, readAcross, readValue } from '../ui/status';
 import { SERIES } from '../ui/tone';
 import { CATEGORIES } from './DriftView';
 
 /**
- * Home — the portfolio by family (17.01, FRM-REQ-224, FRM-REQ-228).
+ * Home — the portfolio ledger (17.01, FRM-REQ-224, FRM-REQ-228, FRM-REQ-245, FRM-T-18.6).
  *
- * One section per group, in the order set on the Groups screen, then Ungrouped last and quieter:
- * each with its name, its site, its line of description and its figures, and a grid of the
- * projects in it. A section collapses from its chevron by keyboard as well as by pointer, and the
+ * A compact strip of figures for the scope, one Needs-you strip across every group, then one
+ * section per group, in the order set on the Groups screen, then Ungrouped last and quieter:
+ * each with its name, its site, its line of description and its figures, and a ledger row per
+ * project in it (`components/Ledger.tsx`). A section collapses from its chevron by keyboard as well as by pointer, and the
  * console remembers it, per group, in this browser.
  *
- * The four figures above are the same ones the project cards add up to: one derivation, read
- * twice, so the summary can never disagree with the cards under it.
+ * The strip's figures and the stat cards on a group's page are one derivation (`figuresOf`), read
+ * twice, so the summary can never disagree with the rows under it.
  *
  * Membership and order come from `GET /api/groups`; the figures from the portfolio, joined by code.
  * With no group yet, the projects stand in one grid under a card offering to make one (17.14).
  */
-
-function phaseLabel(row: PortfolioRow): string {
-  const total = row.tasks.open + row.tasks.blocked + row.tasks.done + row.tasks.cancelled;
-  if (row.phase !== null) return `P-${row.phase.number} · ${row.phase.name}`;
-  return total === 0 ? 'Not started' : 'No active phase';
-}
-
-/** One project, as the board draws it: code, name, CI, lifecycle, phase, progress, figures. */
-export function ProjectTile({ row }: { row: PortfolioRow }) {
-  const total = row.tasks.open + row.tasks.blocked + row.tasks.done + row.tasks.cancelled;
-  const closed = row.tasks.done + row.tasks.cancelled;
-  const width = total === 0 ? 0 : (closed / total) * 100;
-  const planned = rowPlanned(row);
-
-  return (
-    <Card padding="md" href={`/projects/${row.code}`} interactive>
-      <Stack gap="8">
-        <div className="fm-tile__head">
-          <span className="fm-tile__name">
-            <code className="fm-code-chip">{row.code}</code>
-            <span className="fm-card__title fm-truncate">{row.name}</span>
-          </span>
-          <Badge tone={ciTone(row.ci.conclusion, row.ci.unknown)} size="sm" className="fm-badge">
-            {ciWord(row.ci)}
-          </Badge>
-        </div>
-        <Badge tone={lifecycleTone(row.lifecycle)} size="sm" className="fm-badge">
-          {row.lifecycle}
-        </Badge>
-        <span className="fm-muted fm-truncate">{phaseLabel(row)}</span>
-        {/* The figure below says it in words; the bar is how fast you see it. */}
-        <span className="fm-progress" aria-hidden="true">
-          <span className="fm-progress__fill" style={{ width: `${String(width)}%` }} />
-        </span>
-        <Cluster gap="8" align="center" justify="between">
-          <span className="fm-muted">
-            {total === 0 ? 'No tasks yet' : `${String(closed)} of ${String(total)} tasks`}
-          </span>
-          <span className="fm-muted">
-            {planned ? `${String(row.drift.total)} drift` : 'drift not measurable yet'} ·{' '}
-            {String(row.openCriticals)} {CRITICAL_PLUS_HIGH.toLowerCase()}
-          </span>
-        </Cluster>
-      </Stack>
-    </Card>
-  );
-}
-
-/** The CI tile's detail without project codes — those go in the notes line beneath the grid. */
-function ciDetail(ci: ReturnType<typeof readCi>): string {
-  const parts: string[] = [];
-  if (ci.failing.length > 0) parts.push(`${plural(ci.failing.length, 'project is', 'projects are')} failing`);
-  if (ci.silent.length > 0) parts.push(`${plural(ci.silent.length, 'project has', 'projects have')} never sent a CI result`);
-  if (parts.length === 0) parts.push(ci.total === 0 ? 'No projects to report.' : 'Every project reports, none failing.');
-  return parts.join(' · ');
-}
 
 /**
  * Open findings by severity for a scope, for the breakdown under Critical + high ("1 critical · 2
@@ -135,8 +69,38 @@ export function useOpenSeverities(scope: string | null): FindingsPage['counts'] 
   return findings.state.status === 'ready' ? findings.state.value.counts : null;
 }
 
-function taskTotal(row: PortfolioRow): number {
-  return row.tasks.open + row.tasks.blocked + row.tasks.done + row.tasks.cancelled;
+/** Task totals across rows, and the one bar that draws them. Task status as declared. */
+function WorkAcross({ rows }: { rows: readonly PortfolioRow[] }) {
+  const totals = rows.reduce(
+    (sum, row) => ({
+      done: sum.done + row.tasks.done,
+      cancelled: sum.cancelled + row.tasks.cancelled,
+      blocked: sum.blocked + row.tasks.blocked,
+      open: sum.open + row.tasks.open,
+    }),
+    { done: 0, cancelled: 0, blocked: 0, open: 0 },
+  );
+  const allTasks = totals.done + totals.cancelled + totals.blocked + totals.open;
+  return (
+    <Stack gap="8">
+      <span>
+        <strong>
+          {totals.done + totals.cancelled} of {allTasks}
+        </strong>{' '}
+        <span className="fm-muted">
+          tasks closed: {totals.done} done, {totals.cancelled} cancelled. Task status as declared.
+        </span>
+      </span>
+      <SegmentBar
+        segments={[
+          { label: 'Done', value: totals.done, color: SERIES.done },
+          { label: 'Open', value: totals.open, color: SERIES.active },
+          { label: 'Blocked', value: totals.blocked, color: SERIES.blocked },
+          { label: 'Cancelled', value: totals.cancelled, color: SERIES.quiet },
+        ]}
+      />
+    </Stack>
+  );
 }
 
 /**
@@ -159,46 +123,14 @@ export function PortfolioStats({
   /** Open findings by severity, when read — the breakdown under Critical + high. */
   severities?: FindingsPage['counts'] | null;
 }) {
-  const building = rows.filter((row) => row.lifecycle === 'building');
-  const criticals = rows.reduce((sum, row) => sum + row.openCriticals, 0);
-  const drift = rows.reduce((sum, row) => sum + row.drift.total, 0);
-  const blockedIn = rows.filter((row) => row.tasks.blocked > 0);
-  const blocked = rows.reduce((sum, row) => sum + row.tasks.blocked, 0);
-  const unplanned = rows.filter((row) => !rowPlanned(row)).map((row) => row.code);
-  const ci = readCi(rows);
-
-  const totals = rows.reduce(
-    (sum, row) => ({
-      done: sum.done + row.tasks.done,
-      cancelled: sum.cancelled + row.tasks.cancelled,
-      blocked: sum.blocked + row.tasks.blocked,
-      open: sum.open + row.tasks.open,
-    }),
-    { done: 0, cancelled: 0, blocked: 0, open: 0 },
-  );
-  const allTasks = totals.done + totals.cancelled + totals.blocked + totals.open;
+  // One derivation, read by this and by Home's strip: they cannot disagree.
+  const { building, criticals, drift, blockedIn, blocked, unplanned, noTasks, ci, blockedSignal, driftSignal, notes } =
+    figuresOf(rows);
 
   const driftBreakdown = CATEGORIES.map((category) => ({
     n: rows.reduce((sum, row) => sum + (row.drift.counts[category.key]), 0),
     one: category.label.toLowerCase(),
   }));
-
-  const blockedSignal = readAcross(blocked, {
-    unmeasured: rows.filter((row) => taskTotal(row) === 0).map((row) => row.code),
-    total: rows.length,
-  });
-  const driftSignal = readAcross(drift, { unmeasured: unplanned, total: rows.length });
-  const noTasks = rows.filter((row) => taskTotal(row) === 0);
-
-  // Codes never go inside a card: a card is one link, and its accessible name is all of its text.
-  // They are said once, beneath the grid, as plain text (see `notes`).
-  const notes = [
-    building.length === 0 ? null : `Building: ${building.map((row) => row.code).join(', ')}`,
-    blockedIn.length === 0 ? null : `Blocked in: ${blockedIn.map((row) => `${row.code} (${String(row.tasks.blocked)})`).join(', ')}`,
-    unplanned.length === 0 ? null : `No plan yet: ${unplanned.join(', ')}`,
-    ci.silent.length === 0 ? null : `Never sent a CI result: ${ci.silent.join(', ')}`,
-    ci.failing.length === 0 ? null : `CI failing: ${ci.failing.join(', ')}`,
-  ].filter((line): line is string => line !== null);
 
   return (
     <Stack gap="24">
@@ -287,24 +219,7 @@ export function PortfolioStats({
       {notes.length > 0 && <p className="fm-muted fm-stat-notes">{notes.join(' · ')}</p>}
 
       <Panel title="Work across the portfolio" surface="card">
-        <Stack gap="8">
-          <span>
-            <strong>
-              {totals.done + totals.cancelled} of {allTasks}
-            </strong>{' '}
-            <span className="fm-muted">
-              tasks closed: {totals.done} done, {totals.cancelled} cancelled. Task status as declared.
-            </span>
-          </span>
-          <SegmentBar
-            segments={[
-              { label: 'Done', value: totals.done, color: SERIES.done },
-              { label: 'Open', value: totals.open, color: SERIES.active },
-              { label: 'Blocked', value: totals.blocked, color: SERIES.blocked },
-              { label: 'Cancelled', value: totals.cancelled, color: SERIES.quiet },
-            ]}
-          />
-        </Stack>
+        <WorkAcross rows={rows} />
       </Panel>
     </Stack>
   );
@@ -360,14 +275,26 @@ function GroupSection({
         {section.rows.length === 0 ? (
           <p className="fm-muted fm-group-note">No projects yet — move some here from Projects.</p>
         ) : (
-          <div className="fm-tiles">
-            {section.rows.map((row) => (
-              <ProjectTile key={row.code} row={row} />
-            ))}
-          </div>
+          <Ledger rows={section.rows} />
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * The work chart, after the ledger: the ledger is what Home is for, and this is the totals under it.
+ * A group, not a card section — an `h2` here would be the last heading on the page, and the last
+ * heading is Ungrouped.
+ */
+function WorkBelow({ rows }: { rows: readonly PortfolioRow[] }) {
+  return (
+    <div role="group" aria-labelledby="fm-home-work" className="fm-home-work">
+      <h3 id="fm-home-work" className="fm-subheading">
+        Work across the portfolio
+      </h3>
+      <WorkAcross rows={rows} />
+    </div>
   );
 }
 
@@ -482,7 +409,8 @@ export function Home({ search }: { search: string }) {
     return frame(
       `${plural(rows.length, 'project', 'projects')}${phrase === null ? '' : ` in ${phrase}`}, and what needs looking at.`,
       <Stack gap="32">
-        <PortfolioStats rows={rows} projectsDetail={phrase === null ? 'In this scope' : `In ${phrase}`} scope={scope} severities={severities} />
+        <StatStrip rows={rows} projectsDetail={phrase === null ? 'In this scope' : `In ${phrase}`} scope={scope} severities={severities} />
+        <NeedsYouStrip rows={rows} />
         {sections.map((section) => (
           <GroupSection
             key={section.key}
@@ -492,6 +420,7 @@ export function Home({ search }: { search: string }) {
           />
         ))}
         <HiddenByScope shown={shown} />
+        <WorkBelow rows={rows} />
       </Stack>,
     );
   }
@@ -508,19 +437,17 @@ export function Home({ search }: { search: string }) {
             }}
           />
         )}
-        <PortfolioStats rows={rows} projectsDetail="No groups yet" severities={severities} />
+        <StatStrip rows={rows} projectsDetail="No groups yet" scope={null} severities={severities} />
+        <NeedsYouStrip rows={rows} />
         {rows.length === 0 ? (
           <EmptyState kind="empty" heading="No projects yet">
             Import the vault, or convert a project idea, to start.
           </EmptyState>
         ) : (
-          <div className="fm-tiles">
-            {[...rows]
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map((row) => (
-                <ProjectTile key={row.code} row={row} />
-              ))}
-          </div>
+          <>
+            <Ledger rows={[...rows].sort((a, b) => a.name.localeCompare(b.name))} />
+            <WorkBelow rows={rows} />
+          </>
         )}
       </Stack>,
     );
@@ -537,11 +464,13 @@ export function Home({ search }: { search: string }) {
       n === 1 ? 'group' : 'groups'
     }, and what needs looking at.`,
     <Stack gap="32">
-      <PortfolioStats
+      <StatStrip
         rows={rows}
         projectsDetail={groupsDetail(n, grouped.ungrouped?.projects.length ?? 0)}
+        scope={null}
         severities={severities}
       />
+      <NeedsYouStrip rows={rows} />
       {sections.map((section) => (
         <GroupSection
           key={section.key}
@@ -550,6 +479,7 @@ export function Home({ search }: { search: string }) {
           onToggle={() => { toggle(section.key); }}
         />
       ))}
+      <WorkBelow rows={rows} />
     </Stack>,
   );
 }

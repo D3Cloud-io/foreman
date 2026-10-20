@@ -204,6 +204,15 @@ export interface PortfolioRow {
   openCriticals: number;
   /** `unknown` is a third state, and renders grey rather than green (S-04). */
   ci: { conclusion: string | null; unknown: boolean };
+  /**
+   * CI in three words, served so Home and `foreman_portfolio` answer identically (FRM-T-18.6).
+   * Optional on the type only so a fixture that predates it still compiles; the server always sends it.
+   */
+  ciState?: 'passing' | 'failing' | 'never';
+  /** The first thing to pick up in the active phase, or null (FRM-REQ-245). */
+  nextTask?: { humanId: string; title: string } | null;
+  /** What is running; `ahead` is the commits since it, or null when its SHA is not a known commit. */
+  deployed?: { sha: string; at: string; ahead: number | null } | null;
   /** Proposals awaiting review — not drift, so not inside it. */
   unconfirmedAttributions: number;
   /** `counts` is the drift engine's own breakdown and sums to `total`. */
