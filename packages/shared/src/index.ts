@@ -6,6 +6,7 @@ export * from './entities/record.js';
 export * from './entities/findings.js';
 export * from './entities/api.js';
 export * from './entities/writes.js';
+export * from './entities/builds.js';
 export * from './ears/index.js';
 export * from './findings/location.js';
 export * from './import/parse.js';
