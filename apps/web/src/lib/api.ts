@@ -840,6 +840,14 @@ export interface Drift {
 }
 
 /** `GET /api/drift`: each project's drift, in Home's order, and the sum (FRM-T-17.4). */
+/**
+ * `GET /api/search`. `outside` is the exact-ID answer a scope left out, with the group it is in
+ * (null for an ungrouped project), so a scoped search can say where it is (FRM-T-17.4).
+ */
+export interface SearchResult extends Page<SearchHit> {
+  outside?: (SearchHit & { group: { humanId: string; name: string; slug: string } | null }) | null;
+}
+
 export interface DriftAcross {
   items: (Drift & { name: string })[];
   nextCursor: null;
@@ -1029,7 +1037,7 @@ export const foreman = {
     if (types.length > 0) query.set('types', types.join(','));
     if (project !== null) query.set('project', project);
     if (group !== null) query.set('group', group);
-    return api.get<Page<SearchHit>>(`/api/search?${query.toString()}`);
+    return api.get<SearchResult>(`/api/search?${query.toString()}`);
   },
   commits: (code: string, attributed: 'none' | 'proposed' | 'confirmed' | 'any' = 'any') =>
     api.get<Page<CommitRow>>(`/api/projects/${code}/commits?attributed=${attributed}&limit=100`),

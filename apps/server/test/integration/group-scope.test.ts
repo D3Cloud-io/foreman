@@ -189,6 +189,27 @@ describe.skipIf(url === undefined)('a group scope on the cross-project reads', (
     const inside = findingOf.get('GSB') ?? '';
     expect((await search(inside, `&group=${dormice.humanId}`))[0]?.humanId).toBe(inside);
 
+    // …but it says where the record is, so the console can offer it instead of "nothing matches".
+    const hidden = await json<{ items: Hit[]; outside: (Hit & { group: { name: string; slug: string } | null }) | null }>(
+      await api(`/api/search?q=${encodeURIComponent(outside)}&group=${dormice.slug}`),
+    );
+    expect(hidden.outside).toMatchObject({
+      type: 'finding',
+      humanId: outside,
+      projectCode: 'GSA',
+      group: { name: `${PREFIX}D3 Cloud`, slug: d3.slug },
+    });
+    const unscoped = await json<{ outside: unknown }>(await api(`/api/search?q=${encodeURIComponent(outside)}`));
+    expect(unscoped.outside).toBeNull();
+    const ungroupedOutside = await json<{ outside: { group: unknown } | null }>(
+      await api(`/api/search?q=${encodeURIComponent(findingOf.get('GSU') ?? '')}&group=${dormice.slug}`),
+    );
+    expect(ungroupedOutside.outside?.group).toBeNull();
+    const found = await json<{ outside: unknown }>(
+      await api(`/api/search?q=${encodeURIComponent(inside)}&group=${dormice.slug}`),
+    );
+    expect(found.outside).toBeNull();
+
     const ungrouped = await search(NEEDLE, '&group=ungrouped');
     expect(ungrouped.filter((h) => ours(h.projectCode)).map((h) => h.projectCode)).toEqual(
       expect.arrayContaining(['GSU']),

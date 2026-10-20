@@ -3,6 +3,7 @@ import { Alert, Button, FormActions, FormField, Input, PasswordInput, Stack } fr
 import { EntryHeading, EntryNotes, EntryShell } from '../entry/EntryShell';
 import { SignInWithD3Auth } from '../entry/SignInWithD3Auth';
 import { ApiError, login } from '../lib/api';
+import { replaceLocation } from '../lib/router';
 
 /**
  * Two ways in (ADR-004).
@@ -41,7 +42,7 @@ export function Login({ oidcAvailable, onSignedIn }: LoginProps) {
     setError(reason);
     setLinkAfterSignIn(params.get('link_after_signin') === '1');
     // Cleared from the URL so a reload does not re-announce a failure that already happened.
-    window.history.replaceState(null, '', window.location.pathname);
+    replaceLocation(window.location.pathname);
   }, []);
 
   const submit = (event: SyntheticEvent) => {

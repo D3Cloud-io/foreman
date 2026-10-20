@@ -56,7 +56,8 @@ function ciLabel(row: PortfolioRow): string {
 
 export function Projects({ search }: { search: string }) {
   // The group filter is the scope (FRM-T-17.4): `?group=` in the URL, read by the server, so
-  // Projects narrowed to Dormice is the same set as Home and Findings narrowed to it.
+  // Projects narrowed to Dormice is the same set as Home and Findings narrowed to it. Every state
+  // is header, scope bar, body, so the switcher keeps focus while a new scope loads.
   const scope = scopeOf(search);
   const { setScope } = useScope();
   const portfolio = useAsync(() => foreman.portfolio(scope), [scope]);
@@ -102,6 +103,7 @@ export function Projects({ search }: { search: string }) {
     return (
       <Page>
         {header}
+        <ScopeBar />
         <EmptyState kind="error" heading="The projects did not load">
           {message}
         </EmptyState>
@@ -113,6 +115,7 @@ export function Projects({ search }: { search: string }) {
     return (
       <Page>
         {header}
+        <ScopeBar />
         <Skeleton lines={6} />
       </Page>
     );
@@ -153,8 +156,8 @@ export function Projects({ search }: { search: string }) {
   return (
     <Page>
       {header}
+      <ScopeBar />
       <Stack gap="16">
-        <ScopeBar />
         <Cluster gap="12" align="center" justify="between">
           <Cluster gap="12" align="center" className="fm-filters">
             <SearchField

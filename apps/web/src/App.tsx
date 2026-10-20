@@ -162,12 +162,13 @@ function Screen({ path, search }: { path: string; search: string }) {
   const route = routeFor(path);
 
   switch (route.screen) {
-    // The scoped screens (FRM-T-17.4) are keyed by the query, so following a link into another
-    // scope re-reads it rather than keeping the last one's data.
+    // The scoped screens (FRM-T-17.4) read the scope and their filters from the query on every
+    // render and re-read when it changes. They are not keyed by it: a remount per query would drop
+    // the focus of the control that changed it — the scope switcher, a filter.
     case 'dashboard':
-      return <Home key={search} search={search} />;
+      return <Home search={search} />;
     case 'projects':
-      return <Projects key={search} search={search} />;
+      return <Projects search={search} />;
     case 'project-ideas':
       return <ProjectIdeas />;
     case 'project-idea':
@@ -216,13 +217,13 @@ function Screen({ path, search }: { path: string; search: string }) {
     case 'activity':
       return <Activity code={route.code ?? ''} />;
     case 'findings':
-      return <Findings key={search} search={search} />;
+      return <Findings search={search} />;
     case 'finding':
       return <FindingDetail humanId={route.humanId ?? ''} />;
     case 'drift':
       return <DriftView code={route.code ?? ''} />;
     case 'drift-across':
-      return <DriftAcross key={search} search={search} />;
+      return <DriftAcross search={search} />;
     case 'screens':
       return <Screens code={route.code ?? ''} />;
     case 'screen':
@@ -233,7 +234,7 @@ function Screen({ path, search }: { path: string; search: string }) {
     case 'tokens':
       return <Tokens />;
     case 'search':
-      return <SearchScreen key={search} search={search} />;
+      return <SearchScreen search={search} />;
     case 'task':
       return <TaskDetail humanId={route.humanId ?? ''} />;
     case 'not-found':

@@ -7,7 +7,7 @@ import { getByHumanId } from '../domain/entities.js';
 import { groupedPortfolio } from '../domain/portfolio.js';
 import { resolveScope, scopeCodes } from '../domain/scope.js';
 import { resourceCatalogue } from '../domain/resources.js';
-import { SEARCHABLE, search } from '../domain/search.js';
+import { SEARCHABLE, searchScoped } from '../domain/search.js';
 import { handler, param, parseQuery } from './helpers.js';
 
 /**
@@ -60,13 +60,37 @@ export function searchRoutes(db: Db): Router {
         );
 
       const codes = scopeCodes(await resolveScope(db, query.group));
-      const hits = await search(db, query.q, {
+      const { hits, outside } = await searchScoped(db, query.q, {
         ...(requested !== undefined && requested.length > 0 ? { types: requested } : {}),
         ...(query.project === undefined ? {} : { projectCode: query.project }),
         ...(codes === undefined ? {} : { projectCodes: codes }),
         limit: query.limit,
       });
-      res.json({ items: hits, nextCursor: null, total: hits.length });
+      // The exact ID a scope hid, with the group it is in — null when there was none to hide.
+      const outsideGroup =
+        outside === null || outside.projectCode === null
+          ? null
+          : (
+              await db.project.findFirst({
+                where: { code: outside.projectCode, deletedAt: null },
+                select: { group: { select: { humanId: true, name: true, slug: true, deletedAt: true } } },
+              })
+            )?.group ?? null;
+      res.json({
+        items: hits,
+        nextCursor: null,
+        total: hits.length,
+        outside:
+          outside === null
+            ? null
+            : {
+                ...outside,
+                group:
+                  outsideGroup === null || outsideGroup.deletedAt !== null
+                    ? null
+                    : { humanId: outsideGroup.humanId, name: outsideGroup.name, slug: outsideGroup.slug },
+              },
+      });
     }),
   );
 

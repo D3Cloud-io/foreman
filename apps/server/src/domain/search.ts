@@ -57,8 +57,22 @@ function snippet(text: string | null, query: string, width = 160): string | null
 }
 
 export async function search(db: Db, query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
+  return (await searchScoped(db, query, options)).hits;
+}
+
+/**
+ * A search, and — when a scope left it out — the exact-ID answer from outside the scope
+ * (FRM-T-17.4). A pasted `SC4SWI-CR-001` that exists in another group is not "nothing matches":
+ * the caller can say where it is and offer it, rather than leave somebody searching for a record
+ * the scope is hiding.
+ */
+export async function searchScoped(
+  db: Db,
+  query: string,
+  options: SearchOptions = {},
+): Promise<{ hits: SearchHit[]; outside: SearchHit | null }> {
   const q = query.trim();
-  if (q.length === 0) return [];
+  if (q.length === 0) return { hits: [], outside: null };
 
   const limit = Math.min(options.limit ?? DEFAULT_LIMIT, 100);
   const types = options.types ?? SEARCHABLE;
@@ -78,6 +92,7 @@ export async function search(db: Db, query: string, options: SearchOptions = {})
   // first and never crowded out by a text match further down.
   const exact = await exactByHumanId(db, q);
   if (exact !== null && inScope(exact)) hits.push(exact);
+  const outside = exact !== null && !inScope(exact) ? exact : null;
 
   if (wants('requirement')) {
     const rows = await db.requirement.findMany({
@@ -350,14 +365,17 @@ export async function search(db: Db, query: string, options: SearchOptions = {})
 
   // De-duplicate: an exact ID hit will usually also match its own type's text search.
   const seen = new Set<string>();
-  return hits
-    .filter((hit) => {
-      const key = `${hit.type}:${hit.humanId ?? hit.title}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, limit);
+  return {
+    hits: hits
+      .filter((hit) => {
+        const key = `${hit.type}:${hit.humanId ?? hit.title}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, limit),
+    outside,
+  };
 }
 
 /** Resolve an exact human ID across every entity that has one. */

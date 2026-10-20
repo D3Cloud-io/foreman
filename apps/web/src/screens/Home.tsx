@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   Button,
   Card,
@@ -254,7 +254,7 @@ function HiddenByScope({ shown }: { shown: ReadonlySet<string> }) {
   return (
     <p className="fm-scope-hidden">
       Hidden by scope: {hidden.map((option) => `${option.name} ${String(option.count)}`).join(' · ')}.{' '}
-      <Link variant="inline" href={hrefFor(null)} data-fm-scope="">
+      <Link variant="inline" href={hrefFor(null)}>
         Show all
       </Link>
     </p>
@@ -263,7 +263,7 @@ function HiddenByScope({ shown }: { shown: ReadonlySet<string> }) {
 
 export function Home({ search }: { search: string }) {
   // The scope is the URL's (FRM-T-17.4): `/?group=dormice` is Home for Dormice, and a link to it
-  // opens there. App keys this screen by the query, so a new scope is a fresh read.
+  // opens there. A new scope is a fresh read of the portfolio.
   const scope = scopeOf(search);
   const { phrase } = useScopeView();
   const portfolio = useAsync(() => foreman.portfolio(scope), [scope]);
@@ -271,36 +271,30 @@ export function Home({ search }: { search: string }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [introDismissed, setIntroDismissed] = useState(readIntroDismissed);
 
-  const header = (description: string) => <PageHeader title="Home" description={description} />;
+  // Every state is the same frame — header, scope bar, body — so the switcher on the bar is one
+  // element across a scope change and its loading, and keeps focus.
+  const frame = (description: string, content: ReactNode) => (
+    <Page>
+      <PageHeader title="Home" description={description} />
+      <ScopeBar />
+      {content}
+    </Page>
+  );
 
   if (portfolio.state.status === 'loading') {
-    return (
-      <Page>
-        {header('Where everything stands.')}
-        <Skeleton lines={8} />
-      </Page>
-    );
-  }
-
-  if (portfolio.state.status === 'error' && portfolio.state.notFound && scope !== null) {
-    return (
-      <Page>
-        {header('Where everything stands.')}
-        <ScopeBar />
-        <UnknownScope scope={scope} />
-      </Page>
-    );
+    return frame('Where everything stands.', <Skeleton lines={8} />);
   }
 
   if (portfolio.state.status === 'error') {
-    const message = portfolio.state.message;
-    return (
-      <Page>
-        {header('Where everything stands.')}
+    return frame(
+      'Where everything stands.',
+      portfolio.state.notFound && scope !== null ? (
+        <UnknownScope scope={scope} />
+      ) : (
         <EmptyState kind="error" heading="Home did not load">
-          {message}
+          {portfolio.state.message}
         </EmptyState>
-      </Page>
+      ),
     );
   }
 
@@ -320,56 +314,50 @@ export function Home({ search }: { search: string }) {
     // Scoped (17.02): only that family's section — or the ungrouped — and the figures for it.
     const sections = portfolioSections(grouped, descriptionsOf(listing));
     const shown = new Set(sections.map((section) => section.key));
-    return (
-      <Page>
-        {header(`${plural(rows.length, 'project', 'projects')} in ${phrase}, and what needs looking at.`)}
-        <Stack gap="32">
-          <ScopeBar />
-          <PortfolioStats rows={rows} projectsDetail={`In ${phrase}`} scope={scope} />
-          {sections.map((section) => (
-            <GroupSection
-              key={section.key}
-              section={section}
-              collapsed={isCollapsed(section.key)}
-              onToggle={() => { toggle(section.key); }}
-            />
-          ))}
-          <HiddenByScope shown={shown} />
-        </Stack>
-      </Page>
+    return frame(
+      `${plural(rows.length, 'project', 'projects')}${phrase === null ? '' : ` in ${phrase}`}, and what needs looking at.`,
+      <Stack gap="32">
+        <PortfolioStats rows={rows} projectsDetail={phrase === null ? 'In this scope' : `In ${phrase}`} scope={scope} />
+        {sections.map((section) => (
+          <GroupSection
+            key={section.key}
+            section={section}
+            collapsed={isCollapsed(section.key)}
+            onToggle={() => { toggle(section.key); }}
+          />
+        ))}
+        <HiddenByScope shown={shown} />
+      </Stack>,
     );
   }
 
   if (grouped.groups.length === 0) {
-    return (
-      <Page>
-        {header(`${plural(rows.length, 'project', 'projects')}, and what needs looking at.`)}
-        <Stack gap="24">
-          <ScopeBar />
-          {!introDismissed && (
-            <FirstRun
-              onDismiss={() => {
-                writeIntroDismissed();
-                setIntroDismissed(true);
-              }}
-            />
-          )}
-          <PortfolioStats rows={rows} projectsDetail="No groups yet" />
-          {rows.length === 0 ? (
-            <EmptyState kind="empty" heading="No projects yet">
-              Import the vault, or convert a project idea, to start.
-            </EmptyState>
-          ) : (
-            <div className="fm-tiles">
-              {[...rows]
-                .sort((a, b) => a.name.localeCompare(b.name))
-                .map((row) => (
-                  <ProjectTile key={row.code} row={row} />
-                ))}
-            </div>
-          )}
-        </Stack>
-      </Page>
+    return frame(
+      `${plural(rows.length, 'project', 'projects')}, and what needs looking at.`,
+      <Stack gap="24">
+        {!introDismissed && (
+          <FirstRun
+            onDismiss={() => {
+              writeIntroDismissed();
+              setIntroDismissed(true);
+            }}
+          />
+        )}
+        <PortfolioStats rows={rows} projectsDetail="No groups yet" />
+        {rows.length === 0 ? (
+          <EmptyState kind="empty" heading="No projects yet">
+            Import the vault, or convert a project idea, to start.
+          </EmptyState>
+        ) : (
+          <div className="fm-tiles">
+            {[...rows]
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((row) => (
+                <ProjectTile key={row.code} row={row} />
+              ))}
+          </div>
+        )}
+      </Stack>,
     );
   }
 
@@ -379,25 +367,20 @@ export function Home({ search }: { search: string }) {
   );
   const n = grouped.groups.length;
 
-  return (
-    <Page>
-      {header(
-        `${plural(rows.length, 'project', 'projects')} in ${n < WORDS.length ? (WORDS[n] ?? String(n)).toLowerCase() : String(n)} ${
-          n === 1 ? 'group' : 'groups'
-        }, and what needs looking at.`,
-      )}
-      <Stack gap="32">
-        <ScopeBar />
-        <PortfolioStats rows={rows} projectsDetail={groupsDetail(n, grouped.ungrouped?.projects.length ?? 0)} />
-        {sections.map((section) => (
-          <GroupSection
-            key={section.key}
-            section={section}
-            collapsed={isCollapsed(section.key)}
-            onToggle={() => { toggle(section.key); }}
-          />
-        ))}
-      </Stack>
-    </Page>
+  return frame(
+    `${plural(rows.length, 'project', 'projects')} in ${n < WORDS.length ? (WORDS[n] ?? String(n)).toLowerCase() : String(n)} ${
+      n === 1 ? 'group' : 'groups'
+    }, and what needs looking at.`,
+    <Stack gap="32">
+      <PortfolioStats rows={rows} projectsDetail={groupsDetail(n, grouped.ungrouped?.projects.length ?? 0)} />
+      {sections.map((section) => (
+        <GroupSection
+          key={section.key}
+          section={section}
+          collapsed={isCollapsed(section.key)}
+          onToggle={() => { toggle(section.key); }}
+        />
+      ))}
+    </Stack>,
   );
 }

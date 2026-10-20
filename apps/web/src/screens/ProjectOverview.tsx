@@ -20,7 +20,7 @@ import { Ellipsis, UsersRound } from 'lucide-react';
 import { foreman, type Brief, type ProjectGroupRef } from '../lib/api';
 import { applicableGuidelines, listJoin } from '../lib/groups';
 import { GroupChip, MoveToGroupDialog, useMoveToast } from '../ui/groups';
-import { useLocation } from '../lib/router';
+import { replaceLocation, useLocation } from '../lib/router';
 import { useAsync } from '../lib/useAsync';
 import { percentClosed } from '../lib/completion';
 import { EditForm, LIFECYCLES } from './EditForms';
@@ -73,7 +73,7 @@ export function ProjectOverview({ code }: { code: string }) {
     if (new URLSearchParams(search).get('move') !== '1') return;
     askedToMove.current = true;
     setMoving(true);
-    window.history.replaceState({}, '', `/projects/${code}`);
+    replaceLocation(`/projects/${code}`);
   }, [search, listingReady, code]);
   const toastMove = useMoveToast(() => {
     project.reload();

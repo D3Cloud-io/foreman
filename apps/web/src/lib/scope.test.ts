@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { GroupListing } from '@foreman/shared';
 import { routeFor } from './router';
 import {
-  carryScope,
   isScopedPath,
   matchScope,
   scopedHref,
@@ -11,6 +10,7 @@ import {
   scopeOptions,
   scopePhrase,
   scopeTarget,
+  withParams,
   withScope,
 } from './scope';
 
@@ -63,23 +63,21 @@ describe('the scope persists between scoped pages and drops elsewhere', () => {
     expect(scopedHref('/projects/KURO?group=dormice', 'dormice')).toBe('/projects/KURO');
   });
 
-  it('carries the scope onto a shell link that names none', () => {
-    expect(carryScope('/findings', '/', '?group=dormice')).toBe('/findings?group=dormice');
-    expect(carryScope('/', '/search', '?q=x&group=dormice')).toBe('/?group=dormice');
-    expect(carryScope('/search', '/findings', '?group=GRP-002&severity=high')).toBe('/search?group=GRP-002');
-  });
-
-  it('leaves alone a link that names its own scope, goes somewhere unscoped, or starts unscoped', () => {
-    expect(carryScope('/findings?group=d3-cloud', '/', '?group=dormice')).toBe('/findings?group=d3-cloud');
-    expect(carryScope('/projects/KURO', '/', '?group=dormice')).toBe('/projects/KURO');
-    expect(carryScope('/findings', '/', '')).toBe('/findings');
-    // A stray ?group= on a page that is not scoped is not a scope.
-    expect(carryScope('/findings', '/projects/KURO', '?group=dormice')).toBe('/findings');
+  it('rewrites only the parameters it names, so a filter keeps the scope and a scope keeps the query', () => {
+    expect(withParams('/findings?group=dormice', { severity: 'high' })).toBe('/findings?group=dormice&severity=high');
+    expect(withParams('/findings?group=dormice&severity=high', { severity: null })).toBe('/findings?group=dormice');
+    expect(withParams('/search?q=Scoped&group=dormice', { q: '' })).toBe('/search?group=dormice');
+    expect(withParams('/search?group=dormice&q=Scoped', { group: null })).toBe('/search?q=Scoped');
   });
 
   it('chooses a scope in place on a scoped page, and on Home from anywhere else', () => {
     expect(scopeTarget('/findings', '?severity=high', 'dormice')).toBe('/findings?severity=high&group=dormice');
     expect(scopeTarget('/findings', '?group=dormice', null)).toBe('/findings');
+    // All projects from a search keeps the search.
+    expect(scopeTarget('/search', '?group=dormice&q=Scoped', null)).toBe('/search?q=Scoped');
+    expect(scopeTarget('/findings', '?severity=high&lens=security&group=dormice', 'd3-cloud')).toBe(
+      '/findings?severity=high&lens=security&group=d3-cloud',
+    );
     expect(scopeTarget('/projects/FRM', '', 'dormice')).toBe('/?group=dormice');
     expect(scopeTarget('/groups', '', null)).toBe('/');
   });
@@ -113,8 +111,9 @@ describe('what a scope is called', () => {
     expect(scopePhrase(null, matchScope(null, options))).toBe('every project');
     expect(scopePhrase('d3-cloud', matchScope('d3-cloud', options))).toBe('D3 Cloud');
     expect(scopePhrase('ungrouped', matchScope('ungrouped', options))).toBe('the ungrouped projects');
-    // Before the groups load, the URL's own word rather than nothing.
-    expect(scopePhrase('dormice', undefined)).toBe('dormice');
+    // Never the URL's own word: before the groups load, or for a group that is gone, no name.
+    expect(scopePhrase('dormice', undefined)).toBeNull();
+    expect(scopePhrase('no-such-group', matchScope('no-such-group', options))).toBeNull();
     expect(scopeName(null, undefined)).toBe('All projects');
     expect(scopeName('GRP-002', matchScope('GRP-002', options))).toBe('Dormice');
   });

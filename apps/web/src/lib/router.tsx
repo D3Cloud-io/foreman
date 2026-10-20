@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { carryScope, SCOPE_EXPLICIT_ATTR } from './scope';
+import { useSyncExternalStore } from 'react';
 
 /**
  * A small router.
@@ -19,46 +18,116 @@ export interface Location {
   readonly search: string;
 }
 
+/**
+ * The one record of where the console is (FRM-T-17.4).
+ *
+ * Every `useLocation` reads this store, so every instance — a screen, the scope switcher, the
+ * shell — hears every change at once. It used to be one `useState` per hook with one document
+ * click listener each: the first listener to run called `preventDefault`, every later one saw
+ * `defaultPrevented` and bailed, so a second instance went stale on the first link click, and a
+ * `history.replaceState` (Search writing `?q=`) was heard by none of them.
+ *
+ * It is told by: `navigate` and `replaceLocation` (the app's two ways to change the URL from
+ * code), the browser's `popstate` (Back and Forward), and a click on an in-app link.
+ *
+ * `createLocationStore` takes the window so it can be tested without a browser.
+ */
+export interface LocationStore {
+  /** The current `pathname + search`. A string, so a snapshot compares by value. */
+  readonly snapshot: () => string;
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly navigate: (to: string) => void;
+  readonly replace: (to: string) => void;
+}
+
+/** The slice of `window` the store touches. */
+export interface LocationHost {
+  readonly location: { readonly pathname: string; readonly search: string };
+  readonly history: {
+    pushState(data: unknown, unused: string, url?: string | URL | null): void;
+    replaceState(data: unknown, unused: string, url?: string | URL | null): void;
+  };
+  addEventListener(type: 'popstate', listener: () => void): void;
+  removeEventListener(type: 'popstate', listener: () => void): void;
+  readonly document: {
+    addEventListener(type: 'click', listener: (event: MouseEvent) => void): void;
+    removeEventListener(type: 'click', listener: (event: MouseEvent) => void): void;
+  };
+  scrollTo(x: number, y: number): void;
+}
+
+export function createLocationStore(host: LocationHost): LocationStore {
+  const listeners = new Set<() => void>();
+  const snapshot = () => host.location.pathname + host.location.search;
+  const emit = () => {
+    for (const listener of [...listeners]) listener();
+  };
+
+  // Anchors are intercepted here rather than replaced with a Link component, so `@d3cloud/ui`'s
+  // own Link keeps working and nothing has to know it is inside a router. One listener for the
+  // whole console, however many components are reading the location.
+  const onClick = (event: MouseEvent) => {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+    const anchor = (event.target as HTMLElement | null)?.closest('a');
+    if (anchor === null || anchor === undefined) return;
+
+    const to = anchor.getAttribute('href');
+    if (to === null || !to.startsWith('/')) return;
+    if (anchor.target === '_blank' || anchor.hasAttribute('download')) return;
+    // The server owns these, and they are real navigations — `/auth/oidc/start` redirects to the
+    // identity provider. Intercepting one turns the D3 Auth button into a link that does nothing.
+    if (SERVER_PATHS.some((prefix) => to === prefix || to.startsWith(`${prefix}/`))) return;
+
+    event.preventDefault();
+    navigate(to);
+  };
+
+  const navigate = (to: string) => {
+    host.history.pushState({}, '', to);
+    host.scrollTo(0, 0);
+    emit();
+  };
+
+  return {
+    snapshot,
+    subscribe: (listener) => {
+      if (listeners.size === 0) {
+        host.addEventListener('popstate', emit);
+        host.document.addEventListener('click', onClick);
+      }
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) {
+          host.removeEventListener('popstate', emit);
+          host.document.removeEventListener('click', onClick);
+        }
+      };
+    },
+    navigate,
+    // No scroll: a replace rewrites where you already are — a search's `?q=`, a filter.
+    replace: (to) => {
+      host.history.replaceState({}, '', to);
+      emit();
+    },
+  };
+}
+
+let store: LocationStore | null = null;
+
+function shared(): LocationStore {
+  store ??= createLocationStore(window);
+  return store;
+}
+
 export function useLocation(): Location {
-  const [href, setHref] = useState(() => window.location.pathname + window.location.search);
-
-  useEffect(() => {
-    const onPop = () => { setHref(window.location.pathname + window.location.search); };
-    window.addEventListener('popstate', onPop);
-    // Anchors are intercepted here rather than replaced with a Link component, so `@d3cloud/ui`'s
-    // own Link keeps working and nothing has to know it is inside a router.
-    const onClick = (event: MouseEvent) => {
-      if (event.defaultPrevented || event.button !== 0) return;
-      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-
-      const anchor = (event.target as HTMLElement | null)?.closest('a');
-      if (anchor === null || anchor === undefined) return;
-
-      // Named `written` and `to`, not `href`: the state above is also called that, and a shadow
-      // here would be a line that reads correctly and means something else.
-      const written = anchor.getAttribute('href');
-      if (written === null || !written.startsWith('/')) return;
-      if (anchor.target === '_blank' || anchor.hasAttribute('download')) return;
-      // The server owns these, and they are real navigations — `/auth/oidc/start` redirects to the
-      // identity provider. Intercepting one turns the D3 Auth button into a link that does nothing.
-      if (SERVER_PATHS.some((prefix) => written === prefix || written.startsWith(`${prefix}/`))) return;
-
-      // A link to a scoped page keeps the scope in view unless it names its own (FRM-T-17.4), so
-      // the shell's destinations — Home, Findings, Search — stay in Dormice once you are there.
-      const to = anchor.hasAttribute(SCOPE_EXPLICIT_ATTR) ? written : carryScope(written, window.location.pathname, window.location.search);
-
-      event.preventDefault();
-      window.history.pushState({}, '', to);
-      setHref(to);
-      window.scrollTo(0, 0);
-    };
-    document.addEventListener('click', onClick);
-
-    return () => {
-      window.removeEventListener('popstate', onPop);
-      document.removeEventListener('click', onClick);
-    };
-  }, []);
+  const href = useSyncExternalStore(
+    (listener) => shared().subscribe(listener),
+    () => shared().snapshot(),
+    () => '/',
+  );
 
   const index = href.indexOf('?');
   return index === -1
@@ -68,12 +137,18 @@ export function useLocation(): Location {
 
 /**
  * Go somewhere from code, the way a link click does: no reload, the back button works, and every
- * `useLocation` hears it through the same `popstate` the browser sends for Back.
+ * `useLocation` hears it.
  */
 export function navigate(to: string): void {
-  window.history.pushState({}, '', to);
-  window.dispatchEvent(new PopStateEvent('popstate'));
-  window.scrollTo(0, 0);
+  shared().navigate(to);
+}
+
+/**
+ * Rewrite the URL where you are — a search's query, a filter — without a history entry, and tell
+ * every `useLocation`. The console's only way to call `history.replaceState`.
+ */
+export function replaceLocation(to: string): void {
+  shared().replace(to);
 }
 
 /** The path alone, for the screens that do not care about the query. */

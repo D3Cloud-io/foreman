@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
 
   EmptyState,
@@ -16,7 +15,8 @@ import {
 } from '@d3cloud/ui';
 import { ScopeBar, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
 import { foreman, type FindingRow } from '../lib/api';
-import { scopeOf } from '../lib/scope';
+import { replaceLocation } from '../lib/router';
+import { scopeOf, withParams } from '../lib/scope';
 import { useAsync } from '../lib/useAsync';
 import { plainText } from '../lib/text';
 import { Pill, SegmentBar, StatCard } from '../ui/viz';
@@ -51,15 +51,25 @@ const LENSES = [
 const ANY = '';
 
 export function Findings({ search }: { search: string }) {
-  const initial = new URLSearchParams(search);
-  const [severity, setSeverity] = useState(initial.get('severity') ?? ANY);
-  const [lens, setLens] = useState(initial.get('lens') ?? ANY);
-  const [status, setStatus] = useState(initial.get('status') ?? 'open');
+  // Every filter lives in the URL, beside the scope (FRM-T-17.4): a filtered inbox is a link, and
+  // changing the scope keeps the filters because the switcher rewrites only `group`. The screen is
+  // not remounted per query, so a Select keeps focus while its own change re-reads the list.
+  const params = new URLSearchParams(search);
+  const severity = params.get('severity') ?? ANY;
+  const lens = params.get('lens') ?? ANY;
+  const status = params.get('status') ?? 'open';
+  const setFilter = (key: 'severity' | 'lens' | 'status', value: string) => {
+    // `open` is the default status, so it is the absence of one.
+    replaceLocation(withParams(`/findings${search}`, { [key]: key === 'status' && value === 'open' ? null : value }));
+  };
+  const setSeverity = (value: string) => { setFilter('severity', value); };
+  const setLens = (value: string) => { setFilter('lens', value); };
+  const setStatus = (value: string) => { setFilter('status', value); };
 
-  // The scope comes from the URL (FRM-T-17.4); the screen is keyed by the query, so a new scope
-  // is a fresh read rather than a filter applied over the last one.
   const scope = scopeOf(search);
-  const { phrase } = useScopeView();
+  const { phrase, current } = useScopeView();
+  /** A scope with no projects has nothing to deal with, which is not the same as all of it dealt with. */
+  const emptyGroup = scope !== null && current !== undefined && current.count === 0;
   const findings = useAsync(
     () => foreman.findings({ severity, lens, status, group: scope ?? '' }),
     [severity, lens, status, scope],
@@ -142,7 +152,7 @@ export function Findings({ search }: { search: string }) {
         description={
           scope === null
             ? 'Every project at once, worst first — the question the vault could not answer.'
-            : `${status === 'open' ? 'Open findings' : 'Findings'} across ${phrase}, worst first.`
+            : `${status === 'open' ? 'Open findings' : 'Findings'}${phrase === null ? '' : ` across ${phrase}`}, worst first.`
         }
         {...(findings.state.status === 'ready'
           ? {
@@ -238,7 +248,7 @@ export function Findings({ search }: { search: string }) {
         </EmptyState>
       ) : (
         <Table
-          caption={`Findings across ${phrase}`}
+          caption={phrase === null ? 'Findings' : `Findings across ${phrase}`}
           captionHidden
           density="compact"
           columns={columns}
@@ -247,18 +257,34 @@ export function Findings({ search }: { search: string }) {
           maxHeight="70vh"
           stickyHeader
           empty={
-            <EmptyState
-              kind={status === 'open' ? 'empty' : 'no-results'}
-              heading={
-                status !== 'open' ? 'Nothing matches' : scope === null ? 'Nothing open anywhere' : `Nothing open across ${phrase}`
-              }
-            >
-              {status !== 'open'
-                ? 'Widen the filters.'
-                : scope === null
-                  ? 'Every finding in every project has been dealt with — which is a success state.'
-                  : 'Every finding in these projects has been dealt with — which is a success state.'}
-            </EmptyState>
+            emptyGroup ? (
+              <EmptyState kind="empty" heading={`${current.name} has no projects`}>
+                So it has no findings. Move projects into it from{' '}
+                <Link variant="inline" href="/projects">
+                  Projects
+                </Link>
+                .
+              </EmptyState>
+            ) : (
+              <EmptyState
+                kind={status === 'open' ? 'empty' : 'no-results'}
+                heading={
+                  status !== 'open'
+                    ? 'Nothing matches'
+                    : scope === null
+                      ? 'Nothing open anywhere'
+                      : phrase === null
+                        ? 'Nothing open'
+                        : `Nothing open across ${phrase}`
+                }
+              >
+                {status !== 'open'
+                  ? 'Widen the filters.'
+                  : scope === null
+                    ? 'Every finding in every project has been dealt with — which is a success state.'
+                    : 'Every finding in these projects has been dealt with — which is a success state.'}
+              </EmptyState>
+            )
           }
         />
       )}

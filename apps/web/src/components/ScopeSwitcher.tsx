@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { EmptyState, Link, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger, Modal } from '@d3cloud/ui';
 import { Check, ChevronsUpDown, Settings2 } from 'lucide-react';
 import { foreman } from '../lib/api';
@@ -74,6 +74,25 @@ export function useScopeView() {
 export function ScopeSwitcher({ presentation }: { presentation: 'menu' | 'sheet' }) {
   const { hrefFor, groups, options, current, name } = useScopeView();
   const [open, setOpen] = useState(false);
+  // The checked entry, so opening lands on where you are rather than on the first row (17.03).
+  // Focus goes back to the trigger on close: the Menu and the Modal (given it as `trigger`) both
+  // return it there.
+  const currentRef = useRef<HTMLAnchorElement | null>(null);
+  // The sheet: after the Modal's own open-focus, which lands on its close button.
+  useEffect(() => {
+    if (!open) return;
+    const frame = window.requestAnimationFrame(() => { currentRef.current?.focus(); });
+    return () => { window.cancelAnimationFrame(frame); };
+  }, [open, options.length]);
+  // The Menu: instead of its own open-focus (the first entry), in the same moment, so a quick
+  // reopen never races a late focus. `MenuContent` passes it through to Radix's content.
+  const openOnCurrent = {
+    onOpenAutoFocus: (event: Event) => {
+      if (currentRef.current === null) return;
+      event.preventDefault();
+      currentRef.current.focus();
+    },
+  };
 
   const isCurrent = (option: ScopeOption) => current !== undefined && option.key === current.key;
   // Until the groups load, the button still says where you are — from the URL.
@@ -85,26 +104,27 @@ export function ScopeSwitcher({ presentation }: { presentation: 'menu' | 'sheet'
   if (presentation === 'sheet') {
     return (
       <>
-        <button
-          type="button"
-          className="fm-scope-chip"
-          aria-haspopup="dialog"
-          aria-label={label}
-          onClick={() => { setOpen(true); }}
+        <Modal
+          open={open}
+          onOpenChange={setOpen}
+          title={SHEET_TITLE}
+          closeLabel="Close"
+          trigger={
+            <button type="button" className="fm-scope-chip" aria-haspopup="dialog" aria-label={label}>
+              {dot}
+              <span className="fm-scope-chip__name fm-truncate">{name}</span>
+              <ChevronsUpDown aria-hidden="true" className="fm-icon-sm" />
+            </button>
+          }
         >
-          {dot}
-          <span className="fm-scope-chip__name fm-truncate">{name}</span>
-          <ChevronsUpDown aria-hidden="true" className="fm-icon-sm" />
-        </button>
-        <Modal open={open} onOpenChange={setOpen} title={SHEET_TITLE} closeLabel="Close">
           <nav aria-label="Scope">
             <ul className="fm-scope-sheet">
               {options.map((option) => (
                 <li key={option.key}>
                   <a
                     className={`fm-scope-sheet__row${isCurrent(option) ? ' fm-scope-sheet__row--on' : ''}`}
+                    ref={isCurrent(option) ? currentRef : undefined}
                     href={hrefFor(option.value)}
-                    data-fm-scope=""
                     aria-label={optionLabel(option)}
                     aria-current={isCurrent(option) ? 'true' : undefined}
                     onClick={() => { setOpen(false); }}
@@ -149,12 +169,12 @@ export function ScopeSwitcher({ presentation }: { presentation: 'menu' | 'sheet'
             <ChevronsUpDown aria-hidden="true" className="fm-icon-sm fm-scope__chevron" />
           </button>
         </MenuTrigger>
-        <MenuContent className="fm-scope__menu">
+        <MenuContent className="fm-scope__menu" {...openOnCurrent}>
           {options.map((option) => (
             <MenuItem key={option.key} asChild>
               <a
+                ref={isCurrent(option) ? currentRef : undefined}
                 href={hrefFor(option.value)}
-                data-fm-scope=""
                 aria-label={optionLabel(option)}
                 role="menuitemradio"
                 aria-checked={isCurrent(option)}
@@ -201,7 +221,7 @@ export function ScopeNotice() {
         </span>
       )}
       <span aria-hidden="true">·</span>
-      <Link variant="inline" href={hrefFor(null)} data-fm-scope="">
+      <Link variant="inline" href={hrefFor(null)}>
         Show all
       </Link>
     </p>
@@ -214,7 +234,7 @@ export function UnknownScope({ scope }: { scope: string }) {
   return (
     <EmptyState kind="no-results" heading={`No group is called “${scope}”`}>
       It may have been renamed or deleted.{' '}
-      <Link variant="inline" href={hrefFor(null)} data-fm-scope="">
+      <Link variant="inline" href={hrefFor(null)}>
         Show every project
       </Link>
     </EmptyState>
