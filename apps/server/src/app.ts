@@ -32,6 +32,7 @@ import { buildRegistry, type JobRegistry } from './jobs/index.js';
 import { linkRoutes } from './routes/links.js';
 import { guidelineRoutes } from './routes/guidelines.js';
 import { blobRoutes } from './routes/blobs.js';
+import { screenRoutes } from './routes/screens.js';
 import { projectIdeaRoutes } from './routes/projectIdeas.js';
 import { boardRoutes } from './routes/board.js';
 import { tokenRoutes } from './routes/tokens.js';
@@ -146,6 +147,7 @@ export function createApp({ config, db, oidc = null, registry, verifier: given }
   mount(app, '/api/projects', recordRoutes(db));
   mount(app, '/api/projects', realityRoutes(db, jobs));
   mount(app, '/api/projects', projectFindingRoutes(db));
+  mount(app, '/api/projects', screenRoutes(db, config));
   mount(app, '/api', findingRoutes(db));
   mount(app, '/api', operationsRoutes(db, config));
 

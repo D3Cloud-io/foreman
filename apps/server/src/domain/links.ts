@@ -37,6 +37,8 @@ function typeOf(humanId: string): EntityType {
     FR: 'finding',
     API: 'finding',
     AUD: 'audit',
+    // So `foreman_link BND-SCR-001 relates BND-REQ-012` records what a screen serves (FRM-REQ-189).
+    SCR: 'screen',
   };
   const type = map[parsed.type];
   if (type === undefined) throw new Invalid(`${humanId} names no kind of entity Foreman knows`);

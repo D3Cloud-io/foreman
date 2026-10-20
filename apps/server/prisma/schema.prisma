@@ -263,6 +263,10 @@ enum EntityType {
   api_token
   job
   blob
+  screen
+  screen_version
+  screen_verdict
+  screen_component
 }
 
 enum AuditAction {
@@ -333,6 +337,7 @@ model Project {
   deployments  Deployment[]
   techItems    TechItem[]
   ideas        Idea[]
+  screens      Screen[]
   cameFrom     ProjectIdea[]    @relation("ConvertedFrom")
 
   @@index([lifecycle])
@@ -467,6 +472,8 @@ model Requirement {
   phase    Phase?            @relation(fields: [phaseId], references: [id], onDelete: SetNull)
   tasks    TaskRequirement[]
   findings Finding[]
+  /// Component gaps citing this requirement (FRM-REQ-199) — a DS requirement, always.
+  screenGaps ScreenComponent[]
 
   @@unique([projectId, seq])
   @@index([projectId, priority])
@@ -1567,5 +1574,144 @@ model Blob {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  screenVersions ScreenVersion[]
+
   @@map("blob")
+}
+
+// ─── Screens (FRM-P-12) ────────────────────────────────────────────────────
+
+enum ScreenVersionKind {
+  proposal
+  capture
+}
+
+enum ScreenViewport {
+  desktop
+  mobile
+}
+
+enum ScreenTheme {
+  light
+  dark
+}
+
+/// A proposal's place in its (viewport, theme) line. Null on a capture, which is never superseded:
+/// each capture is what the code looked like at one commit, and the next one does not unsay it.
+enum ScreenProposalStatus {
+  current
+  superseded
+}
+
+enum ScreenVerdictKind {
+  matches
+  drifted_accepted
+  drifted_fix
+}
+
+enum ScreenComponentKind {
+  uses
+  gap
+}
+
+/// One screen of a project's UI (FRM-REQ-189): `BND-SCR-001`, a name, the route it lives at, and
+/// — through `reference` rows — the requirements and tasks it serves. What it should look like
+/// (proposals, from Figma per FRM-ADR-023) and what it does look like (captures) are versions.
+model Screen {
+  id        String @id @default(uuid(7)) @db.Uuid
+  projectId String @map("project_id") @db.Uuid
+
+  /// `BND-SCR-001`, from the project's counter. Immutable once assigned (ADR-008).
+  humanId String  @unique @map("human_id")
+  seq     Int
+  name    String
+  /// The console route, e.g. `/projects/:code`. Null for a screen that is a state, not a page.
+  route   String?
+  /// Where the screen's frame lives in Figma, when it is known before the first proposal.
+  figmaFileKey String? @map("figma_file_key")
+  figmaNodeId  String? @map("figma_node_id")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  project    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions   ScreenVersion[]
+  components ScreenComponent[]
+
+  @@unique([projectId, seq])
+  @@map("screen")
+}
+
+/// A proposal or a capture of a screen, one table for both because both are an image of the same
+/// screen at one (viewport, theme). A proposal carries its Figma provenance (FRM-REQ-192) and is
+/// `current` until the next proposal for the same viewport and theme supersedes it — and stays
+/// readable after (FRM-REQ-193). A capture carries the commit it was taken at (FRM-REQ-194).
+/// Append-only: a version is never edited, which is what makes a verdict on one mean something.
+model ScreenVersion {
+  id       String            @id @default(uuid(7)) @db.Uuid
+  screenId String            @map("screen_id") @db.Uuid
+  kind     ScreenVersionKind
+  /// The image, by content address. The bytes are in the blob store, never here.
+  blobSha256 String         @map("blob_sha256")
+  viewport   ScreenViewport
+  theme      ScreenTheme
+  /// Proposals only; null on a capture.
+  status     ScreenProposalStatus?
+
+  figmaFileKey     String? @map("figma_file_key")
+  figmaNodeId      String? @map("figma_node_id")
+  figmaFileVersion String? @map("figma_file_version")
+  /// Captures only: the full 40-character SHA the screenshot was taken at.
+  commitSha        String? @map("commit_sha")
+
+  createdBy String   @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  screen   Screen          @relation(fields: [screenId], references: [id], onDelete: Cascade)
+  blob     Blob            @relation(fields: [blobSha256], references: [sha256])
+  verdicts ScreenVerdict[]
+
+  @@index([screenId, kind, viewport, theme, createdAt])
+  @@index([blobSha256])
+  @@map("screen_version")
+}
+
+/// A reviewer's judgement of one capture against the proposal (FRM-REQ-195). Several may exist;
+/// the newest is the one that stands, and the older ones are the history of how it got there.
+model ScreenVerdict {
+  id        String            @id @default(uuid(7)) @db.Uuid
+  versionId String            @map("version_id") @db.Uuid
+  verdict   ScreenVerdictKind
+  /// The actor, as the audit trail names them.
+  reviewer  String
+  note      String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  version ScreenVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@index([versionId, createdAt])
+  @@map("screen_verdict")
+}
+
+/// An `@d3cloud/ui` component a screen uses, or one it needs and the library lacks (FRM-REQ-199).
+/// A gap cites the DS requirement that would fill it, and a `reference` row makes the screen show
+/// up in that requirement's backlinks.
+model ScreenComponent {
+  id            String              @id @default(uuid(7)) @db.Uuid
+  screenId      String              @map("screen_id") @db.Uuid
+  name          String
+  kind          ScreenComponentKind
+  /// Gaps only, and always a requirement of the DS project.
+  requirementId String?             @map("requirement_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  screen      Screen       @relation(fields: [screenId], references: [id], onDelete: Cascade)
+  requirement Requirement? @relation(fields: [requirementId], references: [id], onDelete: SetNull)
+
+  @@unique([screenId, name, kind])
+  @@index([requirementId])
+  @@map("screen_component")
 }

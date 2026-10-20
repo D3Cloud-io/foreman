@@ -4,7 +4,9 @@ import {
   CoverageInput,
   FindingsInput,
   GetInput,
+  parseHumanId,
   PortfolioInput,
+  type ScreenImages,
   SearchInput,
 } from '@foreman/shared';
 import { z } from 'zod';
@@ -35,6 +37,31 @@ export interface ToolDefinition {
    * caller that has to handle both a throw and a rejection will eventually handle only one.
    */
   run(client: ForemanClient, input: unknown): Promise<unknown>;
+  /**
+   * Pictures to send beside the JSON, as MCP `image` content. Only `foreman_get` has any: a screen
+   * is something to look at, and its JSON alone says what changed without showing it (FRM-REQ-198).
+   */
+  images?(client: ForemanClient, input: unknown, result: unknown): Promise<readonly ToolImage[]>;
+}
+
+/** One MCP `image` content item: base64 bytes and their type. */
+export interface ToolImage {
+  readonly data: string;
+  readonly mimeType: string;
+}
+
+/**
+ * A screen's current proposal and latest capture (FRM-REQ-198), fetched as base64 JSON through
+ * the same API client as every other call — so the stdio shim and the remote `/mcp`, which loops
+ * back through that client, attach them the same way.
+ */
+async function screenImages(client: ForemanClient, result: unknown): Promise<readonly ToolImage[]> {
+  const found = result as { type?: unknown; humanId?: unknown } | null;
+  if (found?.type !== 'screen' || typeof found.humanId !== 'string') return [];
+  const code = parseHumanId(found.humanId)?.code;
+  if (code === undefined) return [];
+  const answer = await client.get<ScreenImages>(`/api/projects/${code}/screens/${found.humanId}/images`);
+  return answer.images.map((image) => ({ data: image.data, mimeType: image.mimeType }));
 }
 
 export const READ_TOOLS: readonly ToolDefinition[] = [
@@ -80,6 +107,8 @@ export const READ_TOOLS: readonly ToolDefinition[] = [
   {
     name: 'foreman_get',
     title: 'Get by ID',
+    // A screen also comes back with its current proposal and latest capture as image content
+    // (FRM-REQ-198) — not said here, because the definition budget has almost nothing left.
     description: 'One entity by human ID (BND-REQ-021), with what cites it.',
     inputSchema: GetInput,
     cache: CACHE.get,
@@ -87,6 +116,7 @@ export const READ_TOOLS: readonly ToolDefinition[] = [
       const args = GetInput.parse(input);
       return client.get(`/api/entities/${args.id}`, { backlinks: args.backlinks });
     },
+    images: (client, _input, result) => screenImages(client, result),
   },
   {
     name: 'foreman_coverage',
