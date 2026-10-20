@@ -23,6 +23,7 @@ import {
 } from '../domain/screens.js';
 import { softDelete } from '../domain/undo.js';
 import { actorOf, handler, param, parseBody } from './helpers.js';
+import { noContentWithEvents } from './undo.js';
 
 /**
  * Screens over HTTP (FRM-REQ-189 … FRM-REQ-199), under `/api/projects/:code/screens`.
@@ -79,8 +80,8 @@ export function screenRoutes(db: Db, config: Config): Router {
     handler(async (req, res) => {
       // Checked against the path first, so another project's screen is a 404 here too.
       await getScreen(db, param(req, 'code'), param(req, 'humanId'));
-      await softDelete(db, actorOf(req), 'screen', param(req, 'humanId'));
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'screen', param(req, 'humanId'));
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 

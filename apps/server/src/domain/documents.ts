@@ -141,14 +141,14 @@ export async function createDocument(db: Db, actor: Actor, code: string, input: 
       await syncCitations(tx, 'document_section', section.id, section.bodyMd);
     }
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'document',
       entityId: document.id,
       after: document,
     });
-    return document;
+    return { ...document, auditEventIds: [event] };
   });
 }
 
@@ -186,7 +186,7 @@ export async function updateDocument(db: Db, actor: Actor, id: string, input: Do
     });
 
     await writeRevision(tx, id, actor, snapshotOf(document));
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'document',
@@ -194,7 +194,7 @@ export async function updateDocument(db: Db, actor: Actor, id: string, input: Do
       before,
       after: document,
     });
-    return document;
+    return { ...document, auditEventIds: [event] };
   });
 }
 
@@ -237,7 +237,7 @@ export async function updateSection(
     // Citations are re-read on every write, so a removed mention stops being a backlink.
     await syncCitations(tx, 'document_section', section.id, section.bodyMd);
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'document_section',
@@ -247,7 +247,7 @@ export async function updateSection(
       after: section,
     });
 
-    return { ...section, revisionNo };
+    return { ...section, revisionNo, auditEventIds: [event] };
   });
 }
 
@@ -289,7 +289,7 @@ export async function addSection(db: Db, actor: Actor, documentId: string, input
     await writeRevision(tx, documentId, actor, snapshotOf({ ...document, sections: fresh }));
     await syncCitations(tx, 'document_section', section.id, section.bodyMd);
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'document_section',
@@ -297,7 +297,7 @@ export async function addSection(db: Db, actor: Actor, documentId: string, input
       entityHumanId: `${document.project.code}/${document.kind}#${key}`,
       after: section,
     });
-    return section;
+    return { ...section, auditEventIds: [event] };
   });
 }
 

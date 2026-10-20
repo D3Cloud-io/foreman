@@ -10,7 +10,7 @@ import {
   type TaskUpdate,
 } from '@foreman/shared';
 import type { Db } from '../db.js';
-import { record, type Actor } from './audit.js';
+import { eventIds, record, type Actor } from './audit.js';
 import { Conflict, Invalid, NotFound } from './errors.js';
 import { exitGate, GateRefused } from './coverage.js';
 import { groupForProject, lockGroups, settleProjects } from './groups.js';
@@ -65,12 +65,12 @@ export async function createProject(db: Db, actor: Actor, input: ProjectCreate) 
       },
       select: { id: true },
     });
-    await settleProjects(tx, actor, group?.id ?? null, {
+    const shifted = await settleProjects(tx, actor, group?.id ?? null, {
       cause: `${input.code} created`,
       place: { ids: [created.id] },
     });
     const project = await tx.project.findUniqueOrThrow({ where: { id: created.id } });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'project',
@@ -78,7 +78,8 @@ export async function createProject(db: Db, actor: Actor, input: ProjectCreate) 
       entityHumanId: project.code,
       after: project,
     });
-    return project;
+    // The project's own event first, then the renumbering it caused (FRM-T-18.3).
+    return { ...project, auditEventIds: eventIds(event, shifted) };
   });
 }
 
@@ -115,13 +116,14 @@ export async function updateProject(db: Db, actor: Actor, code: string, input: P
         ...(input.vaultPath !== undefined ? { vaultPath: input.vaultPath } : {}),
       },
     });
+    const shifted: (string | null)[] = [];
     if (moved) {
       const cause = `${code} moved`;
-      await settleProjects(tx, actor, groupId, { cause, place: { ids: [before.id] } });
-      await settleProjects(tx, actor, before.groupId, { cause });
+      shifted.push(await settleProjects(tx, actor, groupId, { cause, place: { ids: [before.id] } }));
+      shifted.push(await settleProjects(tx, actor, before.groupId, { cause }));
     }
     const project = await tx.project.findUniqueOrThrow({ where: { id: before.id } });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'project',
@@ -130,7 +132,7 @@ export async function updateProject(db: Db, actor: Actor, code: string, input: P
       before,
       after: project,
     });
-    return project;
+    return { ...project, auditEventIds: eventIds(event, ...shifted) };
   });
 }
 
@@ -167,7 +169,7 @@ export async function createPhase(db: Db, actor: Actor, code: string, input: Pha
         ...(input.size !== undefined ? { size: input.size } : {}),
       },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'phase',
@@ -175,7 +177,7 @@ export async function createPhase(db: Db, actor: Actor, code: string, input: Pha
       entityHumanId: phase.humanId,
       after: phase,
     });
-    return phase;
+    return { ...phase, auditEventIds: [event] };
   });
 }
 
@@ -214,7 +216,7 @@ export async function updatePhase(db: Db, actor: Actor, humanId: string, input: 
         ...(input.status === 'complete' ? { completedAt: new Date() } : {}),
       },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'phase',
@@ -223,11 +225,12 @@ export async function updatePhase(db: Db, actor: Actor, humanId: string, input: 
       before,
       after: phase,
     });
+    const events: string[] = [];
     const rolledUp =
       phase.status === before.status
         ? []
-        : await rollupProject(tx, actor, phase.projectId, phase.humanId);
-    return { ...phase, rolledUp };
+        : await rollupProject(tx, actor, phase.projectId, phase.humanId, { events });
+    return { ...phase, rolledUp, auditEventIds: [event, ...events] };
   });
 }
 
@@ -269,7 +272,7 @@ export async function createRequirement(
         phaseId: input.phaseId ?? null,
       },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'requirement',
@@ -277,7 +280,7 @@ export async function createRequirement(
       entityHumanId: requirement.humanId,
       after: requirement,
     });
-    return requirement;
+    return { ...requirement, auditEventIds: [event] };
   });
 }
 
@@ -306,7 +309,7 @@ export async function updateRequirement(
         ...(input.phaseId !== undefined ? { phaseId: input.phaseId ?? null } : {}),
       },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'requirement',
@@ -315,7 +318,7 @@ export async function updateRequirement(
       before,
       after: requirement,
     });
-    return requirement;
+    return { ...requirement, auditEventIds: [event] };
   });
 }
 
@@ -402,7 +405,7 @@ export async function createTask(db: Db, actor: Actor, code: string, input: Task
       },
       include: { files: true, requirements: true },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'task',
@@ -411,9 +414,12 @@ export async function createTask(db: Db, actor: Actor, code: string, input: Task
       after: task,
     });
     // New work in a closed phase reopens it; new work that is already started starts one.
+    const events: string[] = [];
     const rolledUp =
-      task.phaseId === null ? [] : await rollupPhase(tx, actor, task.phaseId, task.humanId);
-    return { ...task, rolledUp };
+      task.phaseId === null
+        ? []
+        : await rollupPhase(tx, actor, task.phaseId, task.humanId, { events });
+    return { ...task, rolledUp, auditEventIds: [event, ...events] };
   });
 }
 
@@ -476,7 +482,7 @@ export async function updateTask(db: Db, actor: Actor, humanId: string, input: T
       },
       include: { files: true, requirements: true },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'task',
@@ -485,6 +491,9 @@ export async function updateTask(db: Db, actor: Actor, humanId: string, input: T
       before,
       after: task,
     });
-    return { ...task, rolledUp: await rollupTaskPhases(tx, actor, before, task) };
+    // The task's own event first, then each phase and project it moved, in the order they moved.
+    const events: string[] = [];
+    const rolledUp = await rollupTaskPhases(tx, actor, before, task, { events });
+    return { ...task, rolledUp, auditEventIds: [event, ...events] };
   });
 }

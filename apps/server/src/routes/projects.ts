@@ -38,6 +38,7 @@ import {
   parseBody,
   parseQuery,
 } from './helpers.js';
+import { noContentWithEvents } from './undo.js';
 
 /**
  * What `foreman_create` addresses by human ID, resolved to the row IDs the create shapes take.
@@ -463,8 +464,8 @@ export function projectRoutes(db: Db): Router {
     '/:code/requirements/:humanId',
     canWrite,
     handler(async (req, res) => {
-      await softDelete(db, actorOf(req), 'requirement', param(req, 'humanId'));
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'requirement', param(req, 'humanId'));
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 
@@ -472,8 +473,8 @@ export function projectRoutes(db: Db): Router {
     '/:code/tasks/:humanId',
     canWrite,
     handler(async (req, res) => {
-      await softDelete(db, actorOf(req), 'task', param(req, 'humanId'));
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'task', param(req, 'humanId'));
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 
@@ -481,8 +482,8 @@ export function projectRoutes(db: Db): Router {
     '/:code/phases/:humanId',
     canWrite,
     handler(async (req, res) => {
-      await softDelete(db, actorOf(req), 'phase', param(req, 'humanId'));
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'phase', param(req, 'humanId'));
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 

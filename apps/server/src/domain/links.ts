@@ -92,6 +92,8 @@ export interface LinkResult {
   readonly to: string;
   readonly kind: string;
   readonly created: boolean;
+  /** The audit event this link or unlink wrote (FRM-REQ-243). */
+  readonly auditEventIds: string[];
 }
 
 /** Every link kind is a reference kind, so each writes and removes a reference row of its own. */
@@ -457,7 +459,7 @@ export async function link(
   return db.$transaction(async (tx) => {
     const { created, rows } = await writeLink(tx, resolved);
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: resolved.fromType,
@@ -468,7 +470,7 @@ export async function link(
       after: { event: 'link', to, kind, changed: anyRow(rows), rows },
     });
 
-    return { from, to, kind, created };
+    return { from, to, kind, created, auditEventIds: [event] };
   });
 }
 
@@ -495,7 +497,7 @@ export async function unlink(
         ? await tx.adr.findUnique({ where: { id: resolved.toId }, select: { status: true } })
         : null;
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'delete',
       entityType: resolved.fromType,
@@ -514,6 +516,6 @@ export async function unlink(
       },
     });
 
-    return { from, to, kind, created: false, removed } as LinkResult;
+    return { from, to, kind, created: false, removed, auditEventIds: [event] } as LinkResult;
   });
 }

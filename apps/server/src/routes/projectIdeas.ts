@@ -29,6 +29,7 @@ import {
 } from '../domain/board.js';
 import { softDelete } from '../domain/undo.js';
 import { actorOf, handler, param, parseBody, parseQuery } from './helpers.js';
+import { noContentWithEvents } from './undo.js';
 
 /**
  * Project ideas (FRM-REQ-159 … FRM-REQ-164).
@@ -130,8 +131,8 @@ export function projectIdeaRoutes(db: Db, config: Config): Router {
           return;
         }
       }
-      await softDelete(db, actorOf(req), 'project_idea', humanId);
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'project_idea', humanId);
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 

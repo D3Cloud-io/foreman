@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { type ActorKind, type AuditAction } from '../enums.js';
 import { AnyId, HumanId, ProjectCode } from '../ids.js';
 import { GroupArg } from './groups.js';
 
@@ -99,3 +100,49 @@ export const CACHE = {
   coverage: { ttlMs: 30_000, cacheScope: 'project' },
   findings: { ttlMs: 30_000, cacheScope: 'global' },
 } as const satisfies Record<string, CacheMeta>;
+
+// ─── Undo (FRM-REQ-243) ────────────────────────────────────────────────────
+
+/**
+ * What every console mutation adds to the JSON it already returns: the audit events the change
+ * wrote, the record's own first and anything that moved because of it (a phase or project rolled
+ * up, a group renumbered) after. `POST /api/undo/:auditEventId` reverses any one of them.
+ *
+ * Additive — a client that does not read it sees the response it always saw. A DELETE keeps its
+ * 204 and carries the same IDs in the `Audit-Event-Ids` header (the first also in `Audit-Event-Id`).
+ */
+export interface WithAuditEventIds {
+  readonly auditEventIds: readonly string[];
+}
+
+/** Response headers on a DELETE, which has no body to put `auditEventIds` in. */
+export const AUDIT_EVENT_ID_HEADER = 'Audit-Event-Id';
+export const AUDIT_EVENT_IDS_HEADER = 'Audit-Event-Ids';
+
+/** `GET /api/audit-events?entity=<humanId>&limit=`: one record's history. */
+export const AuditEventsQuery = z.object({
+  // A human ID (FRM-REQ-001, PI-007, GL-004, GRP-001), a project code, or a document's UUID.
+  entity: z.string().trim().min(1).max(200),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+export type AuditEventsQuery = z.infer<typeof AuditEventsQuery>;
+
+export interface AuditEventEntry {
+  readonly id: string;
+  /** ISO 8601. */
+  readonly at: string;
+  readonly actor: { readonly kind: ActorKind; readonly label: string };
+  readonly action: AuditAction;
+  /** One human sentence: what changed. */
+  readonly summary: string;
+  /** Whether `POST /api/undo/:id` would succeed right now. */
+  readonly undoable: boolean;
+  /** Why not, when it is not: the refusal the undo itself would give. */
+  readonly reason?: string;
+}
+
+export interface AuditEventsResponse {
+  readonly entity: string;
+  /** Newest first. */
+  readonly items: readonly AuditEventEntry[];
+}
