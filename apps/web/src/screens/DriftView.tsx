@@ -15,7 +15,7 @@ import { ProjectHeader } from '../components/ProjectHeader';
 import { plainText } from '../lib/text';
 import { SegmentBar, StatCard } from '../ui/viz';
 import { SERIES } from '../ui/tone';
-import { measurable, readCount } from '../ui/status';
+import { checkMeasurable, measurable, plural, readCount } from '../ui/status';
 
 /**
  * S-23 — drift: where the plan and reality have come apart (FRM-REQ-126).
@@ -101,8 +101,8 @@ function hrefFor(code: string, item: DriftItem): string {
 
 export function DriftView({ code }: { code: string }) {
   const { state } = useAsync(() => foreman.drift(code), [code]);
-  // What the plan lets the checks measure. If the project row fails the checks are taken as having
-  // run: the drift figures are the engine's own, and a missing row is not evidence of no plan.
+  // What the plan lets the checks measure. If the project row cannot be read we cannot tell whether
+  // they could run, so a zero is never reported as clean (see below).
   const project = useAsync(() => foreman.project(code), [code]);
 
   if (state.status === 'loading' || project.state.status === 'loading') {
@@ -124,8 +124,8 @@ export function DriftView({ code }: { code: string }) {
   }
 
   const drift = state.value;
-  const planned =
-    project.state.status === 'ready' ? measurable(project.state.value.counts).hasPlan : true;
+  const counts = project.state.status === 'ready' ? project.state.value.counts : null;
+  const planned = counts !== null && measurable(counts).hasPlan;
 
   return (
     <Page>
@@ -135,7 +135,12 @@ export function DriftView({ code }: { code: string }) {
         description="Where the plan and what is actually true have come apart."
       />
 
-      {drift.total === 0 && !planned ? (
+      {drift.total === 0 && counts === null ? (
+        <EmptyState kind="error" heading="Drift could not be confirmed">
+          Nothing drifts that the engine found, but the project's plan could not be read, so whether
+          the checks had anything to run on is not known. Reload to try again.
+        </EmptyState>
+      ) : drift.total === 0 && !planned ? (
         <Card padding="md">
           <Stack gap="12">
             <Cluster gap="8" align="center">
@@ -173,9 +178,10 @@ export function DriftView({ code }: { code: string }) {
               </Badge>
             </Cluster>
             <span className="fm-muted">
-              All six checks ran and found nothing: every Must has a task, nothing is stale, no
-              tripwire has fired, every completed phase would still pass its gate, and every accepted
-              decision is cited.
+              The checks found nothing in what is recorded — {plural(counts?.phases ?? 0, 'phase', 'phases')},{' '}
+              {plural(counts?.requirements ?? 0, 'requirement', 'requirements')} and{' '}
+              {plural(counts?.tasks ?? 0, 'task', 'tasks')}. A check with nothing to look at (no
+              completed phase, no tripwire) has nothing to find.
             </span>
           </Stack>
         </Card>
@@ -192,7 +198,7 @@ export function DriftView({ code }: { code: string }) {
                   key={category.key}
                   label={category.label}
                   value={value}
-                  signal={readCount(value, { measured: planned })}
+                  signal={readCount(value, { measured: counts !== null && checkMeasurable(category.key, counts) })}
                   detail={category.blurb}
                 />
               );

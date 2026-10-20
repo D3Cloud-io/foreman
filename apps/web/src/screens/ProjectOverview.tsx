@@ -36,6 +36,7 @@ import {
   ciWord,
   CRITICAL_PLUS_HIGH,
   measurable,
+  plural,
   readCount,
   severityTone,
   taskStatusTone,
@@ -73,6 +74,8 @@ export function ProjectOverview({ code }: { code: string }) {
   // The brief does not carry the group (FRM-T-17.2 adds scope to it); the project row does.
   const project = useAsync(() => foreman.project(code), [code]);
   const groups = useAsync(() => foreman.groups(), []);
+  // The counts under "Coverage holes" (Musts with no task / tasks citing nothing).
+  const coverage = useAsync(() => foreman.coverage(code), [code]);
   const guidelines = useAsync(() => foreman.guidelines(), []);
   const [moving, setMoving] = useState(false);
   // `?move=1` opens Move to group… — where a toast elsewhere sends you to finish a move that did
@@ -123,8 +126,8 @@ export function ProjectOverview({ code }: { code: string }) {
   const listing = groups.state.status === 'ready' ? groups.state.value : null;
 
   // What the plan lets each signal measure (FRM-REQ-241). While the project row loads there is no
-  // answer, so the tiles wait rather than show a zero as clean; if it fails they fall back to the
-  // brief's own figures, which are the same ones the MCP serves.
+  // answer, so the tiles wait rather than show a zero as clean. If it fails to load the plan is
+  // *unknown*: nothing is measurable, so no zero can read clean — what is found still shows.
   const counts =
     project.state.status === 'loading'
       ? ('loading' as const)
@@ -133,12 +136,35 @@ export function ProjectOverview({ code }: { code: string }) {
         : null;
   const can =
     counts === 'loading' || counts === null
-      ? { hasPlan: true, drift: true, coverage: true, blocked: true }
+      ? { hasPlan: false, drift: false, coverage: false, blocked: false }
       : measurable(counts);
+  const planUnknown = counts === null;
   const holes = brief.drift.counts['coverage-hole'];
   const coverageSignal = readCount(holes, { measured: can.coverage });
   const driftSignal = readCount(brief.drift.total, { measured: can.drift });
   const blockedSignal = readCount(brief.blocked.length, { measured: can.blocked });
+  const unmeasuredWhy = (nothing: string) =>
+    planUnknown ? "The project's plan could not be read, so this is not measured" : nothing;
+  const holesDetail =
+    coverage.state.status === 'ready'
+      ? breakdown(
+          [
+            { n: coverage.state.value.uncoveredMusts.length, one: 'Must with no task', other: 'Musts with no task' },
+            {
+              n: coverage.state.value.tasksWithoutRequirements.length,
+              one: 'task citing nothing',
+              other: 'tasks citing nothing',
+            },
+          ],
+          plural(holes, 'coverage hole', 'coverage holes'),
+        )
+      : plural(holes, 'coverage hole', 'coverage holes');
+  const blockedLink =
+    brief.blocked.length === 1 && brief.blocked[0] !== undefined
+      ? { href: `/tasks/${brief.blocked[0].humanId}`, action: 'Open the blocked task' }
+      : brief.blocked.length > 1 && phase !== null
+        ? { href: `/projects/${code}/phases/${phase.humanId}`, action: 'Open the phase board' }
+        : {};
 
   return (
     <Page>
@@ -208,12 +234,13 @@ export function ProjectOverview({ code }: { code: string }) {
               signal={coverageSignal}
               detail={
                 coverageSignal.state === 'not-measurable'
-                  ? 'No requirements or tasks recorded, so there is nothing to cover'
+                  ? unmeasuredWhy('No requirements or tasks recorded, so there is nothing to cover')
                   : holes === 0
                     ? '0 coverage holes · every Must has a task, every task a reason'
-                    : 'Musts with no task, or tasks citing nothing'
+                    : holesDetail
               }
-              {...(holes === 0 ? {} : { href: `/projects/${code}/drift`, action: 'Open the coverage holes' })}
+              href={`/projects/${code}/drift`}
+              action={holes === 0 ? 'Open drift' : 'Open the coverage holes'}
             />
             <StatCard
               label={CRITICAL_PLUS_HIGH}
@@ -226,8 +253,9 @@ export function ProjectOverview({ code }: { code: string }) {
                 ],
                 'No open critical or high findings',
               )}
-              href={`/projects/${code}/audits`}
-              action="Open the audits"
+              // The findings screen is the list; `project` narrows it to this one.
+              href={`/findings?project=${code}`}
+              action={brief.openCriticals.length === 0 ? 'Open findings' : `Open ${plural(brief.openCriticals.length, 'finding', 'findings')}`}
             />
             <StatCard
               label="Drift"
@@ -235,9 +263,9 @@ export function ProjectOverview({ code }: { code: string }) {
               signal={driftSignal}
               detail={
                 driftSignal.state === 'not-measurable'
-                  ? 'No phases, tasks or requirements to compare with what shipped'
+                  ? unmeasuredWhy('No phases, tasks or requirements to compare with what shipped')
                   : brief.drift.total === 0
-                    ? '0 drift · all six checks ran and found nothing'
+                    ? '0 drift · the checks found nothing in what is recorded'
                     : breakdown(
                         CATEGORIES.map((category) => ({
                           n: brief.drift.counts[category.key],
@@ -255,11 +283,12 @@ export function ProjectOverview({ code }: { code: string }) {
               signal={blockedSignal}
               detail={
                 blockedSignal.state === 'not-measurable'
-                  ? 'No tasks yet'
+                  ? unmeasuredWhy('No tasks yet')
                   : brief.blocked.length === 0
                     ? 'No task is waiting on another'
-                    : `${brief.blocked.map((task) => task.humanId).join(', ')} cannot start`
+                    : `${plural(brief.blocked.length, 'task cannot', 'tasks cannot')} start`
               }
+              {...blockedLink}
             />
           </Grid>
         )}

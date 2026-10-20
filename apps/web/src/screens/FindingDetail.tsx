@@ -44,9 +44,10 @@ function FixVerdict({ fix }: { fix: Detail['fix'] }) {
     );
   }
 
-  // `success` only for green. `warning` covers unverified and running — both mean "not known to
-  // have passed", and neither may look like the first.
-  const tone = fix.verdict === 'green' ? 'success' : fix.verdict === 'red' ? 'danger' : 'warning';
+  // No green (D-016): a passing fix is a plain `info` note, its heading says it passed. `warning`
+  // covers unverified and running — both mean "not known to have passed", and neither may look like
+  // the first.
+  const tone = fix.verdict === 'green' ? 'info' : fix.verdict === 'red' ? 'danger' : 'warning';
   const heading =
     fix.verdict === 'green'
       ? 'CI was green on the fix'
