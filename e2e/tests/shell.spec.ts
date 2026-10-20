@@ -243,7 +243,7 @@ test.describe('an unknown project code', () => {
   }
 });
 
-test('⌘K goes to Search, with the cursor in it', async ({ page }) => {
+test('⌘K opens the command palette, with the cursor in it (FRM-T-18.5)', async ({ page }) => {
   await page.setViewportSize(LAPTOP);
   await signIn(page);
   await page.goto('/projects/EXMP');
@@ -252,8 +252,11 @@ test('⌘K goes to Search, with the cursor in it', async ({ page }) => {
   // user agent says Windows wherever it runs.
   const mac = await page.evaluate(() => /Mac|iPhone|iPad/.test(navigator.userAgent));
   await page.keyboard.press(mac ? 'Meta+k' : 'Control+k');
-  await expect(page).toHaveURL(/\/search$/);
-  await expect(page.getByRole('textbox', { name: 'Find' })).toBeFocused();
+  const palette = page.getByRole('dialog', { name: 'Search and jump' });
+  await expect(palette).toBeVisible();
+  await expect(palette.getByRole('combobox', { name: 'Search and jump' })).toBeFocused();
+  // It opens over the page; it does not take the person away from it.
+  await expect(page).toHaveURL(/\/projects\/EXMP$/);
 });
 
 test('a task page given another kind’s ID says so, rather than blanking the console', async ({ page }) => {
