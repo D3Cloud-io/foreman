@@ -223,12 +223,24 @@ function bare(row: {
  * `foreman_link` writes — and the DS requirements its gaps cite, which are references too.
  */
 async function linksOf(db: Db, screenId: string): Promise<ScreenLink[]> {
+  // `foreman_link` keeps whichever direction it was given, so `FRM-T-5 relates FRM-SCR-001` lands
+  // as task→screen. Both directions are the screen's links; the gate and drift read both too.
   const rows = await db.reference.findMany({
-    where: { fromType: 'screen', fromId: screenId, toType: { in: ['requirement', 'task'] } },
+    where: {
+      OR: [
+        { fromType: 'screen', fromId: screenId, toType: { in: ['requirement', 'task'] } },
+        { toType: 'screen', toId: screenId, fromType: { in: ['requirement', 'task'] }, kind: 'relates' },
+      ],
+    },
     orderBy: { createdAt: 'asc' },
   });
-  const requirementIds = rows.filter((r) => r.toType === 'requirement').map((r) => r.toId);
-  const taskIds = rows.filter((r) => r.toType === 'task').map((r) => r.toId);
+  const ends = rows.map((r) =>
+    r.fromType === 'screen'
+      ? { type: r.toType, id: r.toId, kind: r.kind }
+      : { type: r.fromType, id: r.fromId, kind: r.kind },
+  );
+  const requirementIds = ends.filter((e) => e.type === 'requirement').map((e) => e.id);
+  const taskIds = ends.filter((e) => e.type === 'task').map((e) => e.id);
   const [requirements, tasks] = await Promise.all([
     db.requirement.findMany({
       where: { id: { in: requirementIds }, deletedAt: null },
@@ -244,11 +256,16 @@ async function linksOf(db: Db, screenId: string): Promise<ScreenLink[]> {
     ...tasks.map((t) => [t.id, { humanId: t.humanId, title: t.title }] as const),
   ]);
   const links: ScreenLink[] = [];
-  for (const row of rows) {
-    const target = titles.get(row.toId);
+  const seen = new Set<string>();
+  for (const end of ends) {
+    const target = titles.get(end.id);
     // A deleted target is not something the screen still serves.
     if (target === undefined) continue;
-    links.push({ type: row.toType, humanId: target.humanId, title: target.title, kind: row.kind });
+    // The same pair linked once each way is one link to a reader.
+    const key = `${end.type}:${end.id}:${end.kind}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    links.push({ type: end.type, humanId: target.humanId, title: target.title, kind: end.kind });
   }
   return links;
 }

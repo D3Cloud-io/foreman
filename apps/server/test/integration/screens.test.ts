@@ -494,6 +494,15 @@ describe.skipIf(url === undefined)('screens', () => {
     expect(screen.links).toContainEqual(expect.objectContaining({ humanId: ownRequirement, kind: 'relates' }));
   });
 
+  it('counts a link made from the other end as one of its links too', async () => {
+    // `foreman_link <REQ> relates <SCR>` is stored requirement→screen; the screen still serves it.
+    const res = await post('/links', { from: ownRequirement, to: first, kind: 'relates' });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const screen = await detail(first);
+    const matching = screen.links.filter((l) => l.humanId === ownRequirement && l.kind === 'relates');
+    expect(matching).toHaveLength(1);
+  });
+
   it('is made by foreman_create, kind screen', async () => {
     const client = await connect(writeToken);
     const result = await client.callTool({
