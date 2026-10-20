@@ -2,6 +2,7 @@ import { GUIDELINE_PREFIX, parseAnyId, PROJECT_IDEA_PREFIX } from '@foreman/shar
 import type { Db } from '../db.js';
 import type { EntityType } from '../generated/prisma/enums.js';
 import { NotFound } from './errors.js';
+import { screenByHumanId } from './screens.js';
 
 /** How a dependency edge names the task at its other end. */
 const EDGE = { humanId: true, title: true, status: true } as const;
@@ -29,6 +30,9 @@ const BY_TYPE: Record<string, EntityType> = {
   API: 'finding',
   AUD: 'audit',
   IDEA: 'idea',
+  // A screen of a project's UI (FRM-REQ-189). Its detail carries every version; `foreman_get`
+  // adds the current proposal and latest capture as images (FRM-REQ-198).
+  SCR: 'screen',
   // The one entry whose ID carries no project code: a project idea belongs to no project, which
   // is the entire point of it (FRM-ADR-015).
   [PROJECT_IDEA_PREFIX]: 'project_idea',
@@ -222,6 +226,8 @@ async function findOne(
       });
       return row === null ? null : { id: row.id, entity: row };
     }
+    case 'screen':
+      return screenByHumanId(db, humanId);
     case 'audit': {
       const row = await db.audit.findFirst({
         where,
@@ -276,6 +282,11 @@ async function findOneById(
     case 'finding': {
       const row = await db.finding.findUnique({ where: { id } });
       return row === null ? null : { humanId: row.humanId, title: row.title };
+    }
+    case 'screen': {
+      // A gap citing a DS requirement shows the screen in that requirement's backlinks (FRM-REQ-199).
+      const row = await db.screen.findUnique({ where: { id } });
+      return row === null ? null : { humanId: row.humanId, title: row.name };
     }
     case 'document_section': {
       const row = await db.documentSection.findUnique({

@@ -75,7 +75,7 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
     name: 'foreman_create',
     title: 'Create',
     description:
-      'Add a project, a project idea, or a requirement, task, phase or idea inside a project.',
+      'Add a project, a project idea, or a requirement, task, phase, idea or screen inside a project.',
     inputSchema: CreateInput,
     // Creating loses nothing, so it is never gated.
     gate: () => Promise.resolve({ gated: false }),
@@ -119,6 +119,11 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
           body['name'] = args.text;
           body['number'] = args.number ?? 0;
           if (args.size !== undefined) body['size'] = args.size;
+          break;
+        case 'screen':
+          // A name and a route (FRM-REQ-189); proposals and captures arrive through the API.
+          body['name'] = args.text;
+          if (args.route !== undefined) body['route'] = args.route;
           break;
       }
       // Anything a kind does not store was refused by `CreateInput` (CREATE_FIELDS) before this

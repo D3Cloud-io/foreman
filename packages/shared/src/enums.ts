@@ -251,8 +251,36 @@ export const EntityType = z.enum([
   'api_token',
   'job',
   'blob',
+  'screen',
+  'screen_version',
+  'screen_verdict',
+  'screen_component',
 ]);
 export type EntityType = z.infer<typeof EntityType>;
+
+// ─── Screens (FRM-REQ-189 … FRM-REQ-199) ───────────────────────────────────
+
+/** One table holds both: what the screen should look like, and what it did look like. */
+export const ScreenVersionKind = z.enum(['proposal', 'capture']);
+export type ScreenVersionKind = z.infer<typeof ScreenVersionKind>;
+
+export const ScreenViewport = z.enum(['desktop', 'mobile']);
+export type ScreenViewport = z.infer<typeof ScreenViewport>;
+
+export const ScreenTheme = z.enum(['light', 'dark']);
+export type ScreenTheme = z.infer<typeof ScreenTheme>;
+
+/** A proposal's standing in its (viewport, theme) line (FRM-REQ-193). A capture has none. */
+export const ScreenProposalStatus = z.enum(['current', 'superseded']);
+export type ScreenProposalStatus = z.infer<typeof ScreenProposalStatus>;
+
+/** A reviewer's judgement of a capture against the proposal (FRM-REQ-195). */
+export const ScreenVerdictKind = z.enum(['matches', 'drifted_accepted', 'drifted_fix']);
+export type ScreenVerdictKind = z.infer<typeof ScreenVerdictKind>;
+
+/** An `@d3cloud/ui` component the screen uses, or one it needs that the library lacks. */
+export const ScreenComponentKind = z.enum(['uses', 'gap']);
+export type ScreenComponentKind = z.infer<typeof ScreenComponentKind>;
 
 export const AuditAction = z.enum(['create', 'update', 'delete', 'restore', 'undo']);
 export type AuditAction = z.infer<typeof AuditAction>;

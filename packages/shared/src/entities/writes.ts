@@ -23,6 +23,9 @@ import { TASK_BODY_MAX, TaskFiles } from './spine.js';
  * `idea` is here for the same reason: an idea is a title and a line of what it buys, so `text`
  * says all of it and `foreman_update` can write the rest.
  *
+ * `screen` is here because a screen is a name and a route (FRM-REQ-189); its proposals, captures
+ * and components arrive through the API with a write token, from the Figma import and CI.
+ *
  * ADRs, risks, decisions and terms are deliberately still absent. Each is a record with a body —
  * context, decision and consequences on an ADR; likelihood, impact and a tripwire on a risk — and
  * `foreman_update` cannot write any of those fields. Creating one over MCP would make a titled
@@ -35,6 +38,7 @@ export const CreatableKind = z.enum([
   'phase',
   'idea',
   'project_idea',
+  'screen',
 ]);
 export type CreatableKind = z.infer<typeof CreatableKind>;
 
@@ -71,6 +75,7 @@ export const CREATE_FIELDS: Readonly<Record<CreatableKind, readonly string[]>> =
   task: ['body', 'doneWhen', 'size', 'phase', 'satisfies'],
   phase: ['number', 'size'],
   idea: ['body'],
+  screen: ['route'],
 };
 
 const ALWAYS_CREATE = new Set(['project', 'kind', 'text']);
@@ -100,6 +105,8 @@ export const CreateInput = z.strictObject({
   doneWhen: z.string().max(2000).optional(),
   /** Phase only. Decimal is legal: a Phase 8.5 exists. */
   number: z.number().optional(),
+  /** Screen only: the route it lives at. Undescribed, because the tool budget is nearly spent. */
+  route: z.string().max(500).optional(),
   /** Requirements this task satisfies. */
   satisfies: z.array(HumanId).optional(),
   /**

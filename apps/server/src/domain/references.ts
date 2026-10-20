@@ -32,6 +32,8 @@ const BY_TYPE: Record<string, EntityType> = {
   FR: 'finding',
   API: 'finding',
   AUD: 'audit',
+  // A screen is citable from prose like any other entity with a project-prefixed ID (FRM-REQ-189).
+  SCR: 'screen',
 };
 
 /** Resolve a human ID to its row, or null when nothing of that name exists. */
@@ -76,6 +78,10 @@ async function resolve(
     }
     case 'audit': {
       const row = await tx.audit.findFirst({ where, select: { id: true } });
+      return row === null ? null : { type, id: row.id };
+    }
+    case 'screen': {
+      const row = await tx.screen.findFirst({ where, select: { id: true } });
       return row === null ? null : { type, id: row.id };
     }
     default:
