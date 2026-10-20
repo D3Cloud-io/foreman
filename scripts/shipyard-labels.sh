@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Computes the two Shipyard label values for the HEAD commit:
 #
-#   migration=<expand|contract|none>   from the HEAD commit's `Shipyard-Migration` trailer
+#   migration=<expand|contract|none>   from the `Shipyard-Migration` trailer of HEAD, or — when HEAD
+#                                      is a merge — the strongest among the commits it brought in
 #   schema=<newest migration dir>      the newest directory under apps/server/prisma/migrations
 #
 # Shipyard (SHP) reads these off the published image (`dev.d3cloud.shipyard.migration` and
@@ -17,23 +18,36 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-raw_trailer="$(git -C "$repo_root" log -1 --format='%(trailers:key=Shipyard-Migration,valueonly)' HEAD)"
-# Trailers can repeat; take the last non-empty line, matching how git itself resolves a repeated key.
-trailer="$(printf '%s\n' "$raw_trailer" | awk 'NF { v = $0 } END { print v }')"
+# The trailer of one commit. Trailers can repeat; take the last non-empty line, matching how git
+# itself resolves a repeated key.
+trailer_of() {
+  git -C "$repo_root" log -1 --format='%(trailers:key=Shipyard-Migration,valueonly)' "$1" \
+    | awk 'NF { v = $0 } END { print v }'
+}
 
-migration="$(printf '%s' "$trailer" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || true)"
-
-if [ -z "$migration" ]; then
-  migration="none"
+# A merge commit made by GitHub carries no trailer of its own, so reading HEAD alone would label a
+# release that brings in a migration as `none`. For a merge, every commit it brought in counts
+# (HEAD^1..HEAD), and the strongest wins: one contract migration makes the whole release contract.
+if git -C "$repo_root" rev-parse -q --verify HEAD^2 >/dev/null; then
+  commits="$(git -C "$repo_root" rev-list HEAD^1..HEAD)"
+else
+  commits="HEAD"
 fi
 
-case "$migration" in
-  expand|contract|none) ;;
-  *)
-    echo "shipyard-labels: Shipyard-Migration trailer must be expand, contract or none (got '$trailer')" >&2
-    exit 1
-    ;;
-esac
+migration="none"
+for commit in $commits; do
+  trailer="$(trailer_of "$commit")"
+  value="$(printf '%s' "$trailer" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || true)"
+  case "$value" in
+    "" | none) ;;
+    expand) [ "$migration" = "contract" ] || migration="expand" ;;
+    contract) migration="contract" ;;
+    *)
+      echo "shipyard-labels: Shipyard-Migration trailer must be expand, contract or none (got '$trailer' on $commit)" >&2
+      exit 1
+      ;;
+  esac
+done
 
 migrations_dir="$repo_root/apps/server/prisma/migrations"
 # Portable across BSD (macOS, local runs) and GNU (CI) find: no -printf, just basename each
