@@ -40,6 +40,16 @@ describe('InlineMarkdown', () => {
     expect(unsafe).toContain('click');
   });
 
+  it('refuses a link the browser would read as protocol-relative', () => {
+    for (const href of ['//evil.com', '/\\evil.com', '\\\\evil.com', '/%09/evil.com', 'javascript:alert(1)']) {
+      const out = html(`[x](<${href}>)`);
+      expect(out, href).not.toMatch(/href="(\/\/|\/\\|\\|javascript)/);
+    }
+    // A literal tab or backslash inside the target never survives as a link.
+    expect(html('[x](</a\\b>)')).not.toContain('href');
+    expect(html('[x](</\t/evil.com>)')).not.toContain('href');
+  });
+
   it('does not render block syntax in a cell', () => {
     const out = html('# not a heading\n- not a list');
     expect(out).not.toContain('<h1');
