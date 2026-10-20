@@ -2,7 +2,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { z } from 'zod';
 import { Prisma } from '../db.js';
 import type { Actor } from '../domain/audit.js';
-import { Conflict, Invalid, NotFound } from '../domain/errors.js';
+import { Conflict, ConflictWith, Invalid, NotFound } from '../domain/errors.js';
 import { ImmutableHumanIdError } from '../domain/humanId.js';
 import { GateRefused } from '../domain/coverage.js';
 import { StaleWrite } from './concurrency.js';
@@ -61,6 +61,10 @@ function respondToError(error: unknown, res: Response, next: NextFunction): void
     // 409 with every failure listed. "The exit gate failed" sends somebody looking; naming the
     // three Musts with no task tells them what to do (FRM-REQ-056).
     res.status(409).json({ error: error.message, gate: error.result });
+    return;
+  }
+  if (error instanceof ConflictWith) {
+    res.status(409).json({ error: error.message, ...error.detail });
     return;
   }
   if (error instanceof Conflict) {

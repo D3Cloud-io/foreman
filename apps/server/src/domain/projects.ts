@@ -13,6 +13,7 @@ import type { Db } from '../db.js';
 import { record, type Actor } from './audit.js';
 import { Conflict, Invalid, NotFound } from './errors.js';
 import { exitGate, GateRefused } from './coverage.js';
+import { groupForProject, lockGroups, nextGroupPosition } from './groups.js';
 import { allocate, nextTaskPosition, phaseHumanId, taskHumanId } from './humanId.js';
 import { rollupPhase, rollupProject, rollupTaskPhases } from './rollup.js';
 
@@ -43,8 +44,17 @@ export async function createProject(db: Db, actor: Actor, input: ProjectCreate) 
   if (existing !== null) throw new Conflict(`project code ${input.code} is already in use`);
 
   return db.$transaction(async (tx) => {
+    // In a group, or among the ungrouped, and at the end of it either way (FRM-REQ-223).
+    await lockGroups(tx);
+    const group =
+      input.group === undefined || input.group === null
+        ? null
+        : await groupForProject(tx, input.group);
+    const groupPosition = await nextGroupPosition(tx, group?.id ?? null);
     const project = await tx.project.create({
       data: {
+        groupId: group?.id ?? null,
+        groupPosition,
         code: input.code,
         name: input.name,
         slug: input.slug ?? slugify(input.name),
@@ -69,10 +79,22 @@ export async function updateProject(db: Db, actor: Actor, code: string, input: P
   const before = await findProject(db, code);
 
   return db.$transaction(async (tx) => {
+    // A new group is a move: the project joins the end of it, and the event's before and after
+    // carry both groups, so undoing it moves the project back (FRM-REQ-225).
+    let move: { groupId: string | null; groupPosition: number } | null = null;
+    if (input.group !== undefined) {
+      await lockGroups(tx);
+      const group = input.group === null ? null : await groupForProject(tx, input.group);
+      const groupId = group?.id ?? null;
+      if (groupId !== before.groupId) {
+        move = { groupId, groupPosition: await nextGroupPosition(tx, groupId) };
+      }
+    }
     const project = await tx.project.update({
       where: { id: before.id },
       // `code` is not in the update shape at all, so there is nothing here to guard against.
       data: {
+        ...(move ?? {}),
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.slug !== undefined ? { slug: input.slug } : {}),
         ...(input.lifecycle !== undefined ? { lifecycle: input.lifecycle } : {}),

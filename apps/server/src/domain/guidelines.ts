@@ -1,13 +1,15 @@
 import {
   formatGuidelineId,
   type GuidelineCreate,
+  type GuidelineScope,
   type GuidelineStatus,
   type GuidelineSummary,
   type GuidelineUpdate,
 } from '@foreman/shared';
 import type { Db } from '../db.js';
 import { record, type Actor, type TransactionClient } from './audit.js';
-import { NotFound } from './errors.js';
+import { Invalid, NotFound } from './errors.js';
+import { lockGroups } from './groups.js';
 
 /**
  * Guidelines — standing decisions that apply to every project (FRM-REQ-186 … FRM-REQ-188).
@@ -31,9 +33,65 @@ const SELECT = {
   rationale: true,
   guidance: true,
   status: true,
+  appliesTo: true,
+  // The groups a scoped guideline applies to, in the groups' own order (FRM-REQ-235).
+  groups: {
+    where: { group: { deletedAt: null } },
+    orderBy: { group: { position: 'asc' } },
+    select: { group: { select: { humanId: true } } },
+  },
   createdAt: true,
   updatedAt: true,
 } as const;
+
+type Row = Awaited<ReturnType<typeof readOne>>;
+
+async function readOne(db: Db | TransactionClient, where: { id: string } | { humanId: string }) {
+  return db.guideline.findFirst({ where: { ...where, deletedAt: null }, select: SELECT });
+}
+
+/** Read back what a write just wrote, inside its transaction. */
+async function readView(tx: TransactionClient, id: string) {
+  const row = await readOne(tx, { id });
+  if (row === null) throw new Error(`guideline ${id} vanished inside its own write`);
+  return view(row);
+}
+
+/** A guideline as the API returns it and its audit events record it: `groups` as `GRP-` IDs. */
+function view(row: NonNullable<Row>) {
+  return { ...row, groups: row.groups.map((g) => g.group.humanId) };
+}
+
+/**
+ * Write a guideline's scope: `all` clears its groups, `groups` replaces them. Every group named
+ * must be live — a guideline cannot name a deleted group, or one that never existed (422).
+ */
+async function writeScope(
+  tx: TransactionClient,
+  guidelineId: string,
+  appliesTo: GuidelineScope,
+  groups: readonly string[] | undefined,
+): Promise<void> {
+  await lockGroups(tx);
+  const wanted = appliesTo === 'groups' ? [...(groups ?? [])] : [];
+  const live = await tx.projectGroup.findMany({
+    where: { humanId: { in: wanted }, deletedAt: null },
+    select: { id: true, humanId: true },
+  });
+  const missing = wanted.filter((humanId) => !live.some((g) => g.humanId === humanId));
+  if (missing.length > 0) {
+    throw new Invalid(`no group ${missing.join(', ')}`, [
+      { path: 'groups', message: `not live groups: ${missing.join(', ')}` },
+    ]);
+  }
+  await tx.guideline.update({ where: { id: guidelineId }, data: { appliesTo } });
+  await tx.guidelineGroup.deleteMany({ where: { guidelineId } });
+  if (live.length > 0) {
+    await tx.guidelineGroup.createMany({
+      data: live.map((g) => ({ guidelineId, groupId: g.id })),
+    });
+  }
+}
 
 async function nextSeq(tx: TransactionClient): Promise<number> {
   const rows = await tx.$queryRaw<{ seq: number }[]>`
@@ -48,13 +106,14 @@ async function nextSeq(tx: TransactionClient): Promise<number> {
 const orNull = (value: string): string | null => (value.trim().length === 0 ? null : value);
 
 export async function allGuidelines(db: Db, options: { status?: GuidelineStatus } = {}) {
-  return db.guideline.findMany({
+  const rows = await db.guideline.findMany({
     where: { deletedAt: null, ...(options.status === undefined ? {} : { status: options.status }) },
     // Active above retired (the enum is ordered that way), then grouped by area, then in the
     // order they were written — the first rule in an area is usually the one the rest refine.
     orderBy: [{ status: 'asc' }, { area: 'asc' }, { seq: 'asc' }],
     select: SELECT,
   });
+  return rows.map(view);
 }
 
 /**
@@ -72,9 +131,9 @@ export async function activeGuidelineSummaries(db: Db): Promise<GuidelineSummary
 }
 
 export async function findGuideline(db: Db, humanId: string) {
-  const row = await db.guideline.findFirst({ where: { humanId, deletedAt: null }, select: SELECT });
+  const row = await readOne(db, { humanId });
   if (row === null) throw new NotFound(humanId);
-  return row;
+  return view(row);
 }
 
 export async function createGuideline(db: Db, actor: Actor, input: GuidelineCreate) {
@@ -90,17 +149,21 @@ export async function createGuideline(db: Db, actor: Actor, input: GuidelineCrea
         ...(input.rationale === undefined ? {} : { rationale: orNull(input.rationale) }),
         ...(input.guidance === undefined ? {} : { guidance: orNull(input.guidance) }),
       },
-      select: SELECT,
+      select: { id: true },
     });
+    if (input.appliesTo !== undefined) {
+      await writeScope(tx, guideline.id, input.appliesTo, input.groups);
+    }
+    const created = await readView(tx, guideline.id);
     await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'guideline',
-      entityId: guideline.id,
-      entityHumanId: guideline.humanId,
-      after: guideline,
+      entityId: created.id,
+      entityHumanId: created.humanId,
+      after: created,
     });
-    return guideline;
+    return created;
   });
 }
 
@@ -111,13 +174,11 @@ export async function updateGuideline(
   input: GuidelineUpdate,
 ) {
   return db.$transaction(async (tx) => {
-    const before = await tx.guideline.findFirst({
-      where: { humanId, deletedAt: null },
-      select: SELECT,
-    });
-    if (before === null) throw new NotFound(humanId);
+    const found = await readOne(tx, { humanId });
+    if (found === null) throw new NotFound(humanId);
+    const before = view(found);
 
-    const after = await tx.guideline.update({
+    await tx.guideline.update({
       where: { id: before.id },
       data: {
         ...(input.title === undefined ? {} : { title: input.title }),
@@ -127,8 +188,11 @@ export async function updateGuideline(
         ...(input.guidance === undefined ? {} : { guidance: orNull(input.guidance) }),
         ...(input.status === undefined ? {} : { status: input.status }),
       },
-      select: SELECT,
     });
+    if (input.appliesTo !== undefined) {
+      await writeScope(tx, before.id, input.appliesTo, input.groups);
+    }
+    const after = await readView(tx, before.id);
     await record(tx, {
       ...actor,
       action: 'update',

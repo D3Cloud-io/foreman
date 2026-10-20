@@ -3,6 +3,13 @@ import type { EntityType } from '../generated/prisma/enums.js';
 import { record, scrub, type Actor, type TransactionClient } from './audit.js';
 import { Conflict, Invalid, NotFound } from './errors.js';
 import {
+  finishUndo,
+  guardUndo,
+  isReorderEvent,
+  undoReorder,
+  unchangedOrderFields,
+} from './groups.js';
+import {
   anyRow,
   LINK_ROWS,
   removeLink,
@@ -47,6 +54,8 @@ const UNDOABLE = [
   'guideline',
   // The screen row only. Its versions, verdicts and components are append-only history.
   'screen',
+  // A family of projects (FRM-ADR-024). Its reorders are their own events — see `undoReorder`.
+  'group',
 ] as const;
 
 export type UndoableType = (typeof UNDOABLE)[number];
@@ -92,6 +101,8 @@ function model(tx: TransactionClient, type: UndoableType) {
       return tx.guideline;
     case 'screen':
       return tx.screen;
+    case 'group':
+      return tx.projectGroup;
   }
 }
 
@@ -183,6 +194,9 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
   const linkEvent = linkEventOf(event.action, after);
   if (linkEvent !== null) return undoLink(db, actor, event, linkEvent);
 
+  // A reorder changed several rows' positions at once, and is reversed as one (FRM-REQ-226).
+  if (event.action === 'update' && isReorderEvent(after)) return undoReorder(db, actor, event);
+
   if (!isUndoable(event.entityType)) {
     throw new Conflict(`${event.entityType} changes cannot be undone`);
   }
@@ -215,18 +229,27 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
       case 'update':
       case 'restore': {
         if (before === null) throw new Conflict('that change recorded no previous state to restore');
-        assertUnchangedSince(current, after);
-        data = restorable(before, current);
+        // A project's place in its group and a group's position move through their own events; a
+        // change that did not touch them neither compares nor restores them.
+        const skip = unchangedOrderFields(type, before, after);
+        const without = (snapshot: Record<string, unknown>) =>
+          Object.fromEntries(Object.entries(snapshot).filter(([key]) => !skip.has(key)));
+        assertUnchangedSince(current, after === null ? null : without(after));
+        data = restorable(without(before), current);
         break;
       }
       default:
         throw new Conflict(`a ${event.action} cannot be undone`);
     }
 
+    // What the row alone cannot show: the groups around a group, a project or a guideline.
+    await guardUndo(tx, { type, action: event.action, current, data, before, after });
+
     const restored = (await (table as { update: (args: unknown) => Promise<unknown> }).update({
       where: { id: event.entityId },
       data,
     })) as Record<string, unknown>;
+    await finishUndo(tx, { type, action: event.action, entityId: event.entityId, before });
 
     const reversalId = await record(tx, {
       ...actor,

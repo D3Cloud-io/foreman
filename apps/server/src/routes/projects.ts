@@ -168,14 +168,21 @@ export function projectRoutes(db: Db): Router {
     '/:code',
     handler(async (req, res) => {
       const project = await findProject(db, param(req, 'code'));
-      const [phases, requirements, tasks, openFindings] = await Promise.all([
+      const [phases, requirements, tasks, openFindings, group] = await Promise.all([
         db.phase.count({ where: { projectId: project.id, deletedAt: null } }),
         db.requirement.count({ where: { projectId: project.id, deletedAt: null } }),
         db.task.count({ where: { projectId: project.id, deletedAt: null } }),
         db.finding.count({ where: { projectId: project.id, status: 'open', deletedAt: null } }),
+        // The family it belongs to, by the names a link uses (FRM-ADR-024), or null for none.
+        project.groupId === null
+          ? null
+          : db.projectGroup.findFirst({
+              where: { id: project.groupId, deletedAt: null },
+              select: { humanId: true, name: true, slug: true, accent: true },
+            }),
       ]);
       setEtag(res, project);
-      res.json({ ...project, counts: { phases, requirements, tasks, openFindings } });
+      res.json({ ...project, group, counts: { phases, requirements, tasks, openFindings } });
     }),
   );
 
