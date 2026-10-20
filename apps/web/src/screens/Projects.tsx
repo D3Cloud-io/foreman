@@ -177,9 +177,15 @@ export function Projects() {
           <EmptyState kind="empty" heading="No projects yet">
             Import the vault, or convert a project idea, to start.
           </EmptyState>
+        ) : sections.length === 0 && needle === '' && groupFilter === UNGROUPED ? (
+          <EmptyState kind="empty" heading="No project is ungrouped">
+            Every project is in a group.
+          </EmptyState>
         ) : sections.length === 0 ? (
           <EmptyState kind="no-results" heading="Nothing matches">
-            No project has {query.trim()} in its code or name.
+            {groupFilter === UNGROUPED
+              ? `No ungrouped project has ${query.trim()} in its code or name.`
+              : `No project has ${query.trim()} in its code or name.`}
           </EmptyState>
         ) : (
           <div className="fm-gtable-wrap">
@@ -285,10 +291,10 @@ export function Projects() {
         onOpenChange={setMoving}
         projects={chosen.map((row) => ({ code: row.code, name: row.name }))}
         listing={listing}
-        onMoved={(result, codes, targetName) => {
+        onMoved={(result, codes, targetName, origin) => {
           setSelected(new Set());
           reload();
-          toastMove(result, codes, targetName);
+          toastMove(result, codes, targetName, origin);
         }}
       />
     </Page>

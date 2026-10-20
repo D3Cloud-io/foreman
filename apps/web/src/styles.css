@@ -1259,6 +1259,10 @@ dd a {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  /* A long site (a path of forty characters) truncates, with the whole address in its title,
+     rather than pushing the page sideways at 390. */
+  max-width: 100%;
+  min-width: 0;
   font-size: var(--text-13);
   color: var(--color-accent);
 }
@@ -1695,4 +1699,10 @@ a.fm-glist__name:focus-visible {
 .fm-tile__head .fm-pill {
   align-self: center;
   flex: none;
+}
+
+/* Text that may hold a long unbroken address: it breaks anywhere rather than overflowing. */
+.fm-break {
+  overflow-wrap: anywhere;
+  min-width: 0;
 }

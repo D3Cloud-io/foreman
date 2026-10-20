@@ -1,10 +1,14 @@
 import { useToast } from '@d3cloud/ui';
 import { ApiError, foreman } from './api';
+import { listJoin } from './groups';
 
 /**
  * Undo, from the console (FRM-T-17.3): every audited write answers with the events it recorded,
  * and `POST /api/undo/:auditEventId` reverses one. This is the one place the console does that,
  * small on purpose so every screen can adopt it.
+ *
+ * An undo is not atomic — each event is its own request — so it never claims more than happened:
+ * it tries every event, counts what was reversed, and says plainly when only part of it was.
  */
 
 /**
@@ -13,29 +17,70 @@ import { ApiError, foreman } from './api';
  */
 const FOLLOWED_A_CHANGE = /renumbering followed a change/;
 
+/** What an undo did: how many of the write's own events it reversed, and why the rest refused. */
+export interface UndoReport {
+  /** Events that counted — every one but the renumberings a change caused. */
+  readonly total: number;
+  readonly undone: number;
+  /** The server's reason for each event it refused, or the error for one that never arrived. */
+  readonly refused: readonly { readonly id: string; readonly message: string; readonly conflict: boolean }[];
+}
+
 /**
- * Reverse a write: its audit events undone last-first, as the server recorded them.
+ * Reverse a write: its audit events undone last-first, as the server recorded them, each tried
+ * even when one before it was refused — the rest are still worth putting back.
  *
  * A move or a create records the row's own event, then the renumberings it caused. Those answer
- * 409 "undo that change instead" — undoing the change settles the order around it — so that one
- * refusal is passed over; any other refusal still fails the undo.
+ * 409 "undo that change instead" — undoing the change settles the order around it — so they are
+ * passed over and not counted.
  */
-export async function undoAll(auditEventIds: readonly string[]): Promise<void> {
+export async function undoAll(auditEventIds: readonly string[]): Promise<UndoReport> {
+  let total = 0;
+  let undone = 0;
+  const refused: { id: string; message: string; conflict: boolean }[] = [];
   for (const id of [...auditEventIds].reverse()) {
     try {
       await foreman.undo(id);
+      total += 1;
+      undone += 1;
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 409 && FOLLOWED_A_CHANGE.test(caught.message)) continue;
-      throw caught;
+      total += 1;
+      refused.push({
+        id,
+        message: caught instanceof Error ? caught.message : String(caught),
+        conflict: caught instanceof ApiError && caught.status === 409,
+      });
     }
   }
+  return { total, undone, refused };
 }
 
-/** Why an undo did not happen, in words: a 409 means the ledger has moved on since the write. */
-export function undoFailure(caught: unknown): string {
-  return caught instanceof ApiError && caught.status === 409
-    ? 'Not undone — something has changed since'
-    : 'That was not undone';
+/**
+ * Which of the things a write touched are back as they were, checked against the state after the
+ * undo — so a partial undo can be told item by item ("U1 has changed since").
+ */
+export interface UndoCheck {
+  readonly back: readonly string[];
+  readonly notBack: readonly string[];
+}
+
+/** The sentence an undo ends with. `undone` is the success line; nothing here overstates. */
+export function undoSummary(report: UndoReport, undone: string, check?: UndoCheck): string {
+  if (report.refused.length === 0) return undone;
+  const movedOn = report.refused.every((r) => r.conflict);
+  const why = movedOn ? 'changed since' : 'not been undone';
+  if (check !== undefined && check.notBack.length > 0) {
+    const all = check.back.length + check.notBack.length;
+    const verb = check.notBack.length === 1 ? 'has' : 'have';
+    return check.back.length === 0
+      ? `Not undone — ${listJoin(check.notBack)} ${verb} ${why}`
+      : `Undid ${String(check.back.length)} of ${String(all)} — ${listJoin(check.notBack)} ${verb} ${why}`;
+  }
+  if (report.undone === 0) {
+    return movedOn ? 'Not undone — something has changed since' : 'That was not undone';
+  }
+  return `Undid ${String(report.undone)} of ${String(report.total)} changes — the rest ${movedOn ? 'had changed since' : 'failed'}`;
 }
 
 export interface Undoable {
@@ -45,18 +90,20 @@ export interface Undoable {
   readonly auditEventIds: readonly string[];
   /** What the toast says once it is undone: "Put KURO and BURR back". */
   readonly undone?: string;
+  /** After a refused event, says which items are back — read from the state, not assumed. */
+  readonly check?: () => Promise<UndoCheck>;
   /** Re-read in place after the undo, whether it worked or not. */
   readonly reload: () => void;
 }
 
 /**
  * A toast saying what just happened, with Undo (`@d3cloud/ui` Toast through `ToastRegion`). Undo
- * reverses the write's events last-first, then says that it did — or, on a 409, that the state has
- * moved on — and reloads the screen in place.
+ * reverses the write's events last-first, then says what it did — all of it, part of it naming
+ * what it could not put back, or none of it — and reloads the screen in place.
  */
 export function useUndoToast(): (undoable: Undoable) => void {
   const toast = useToast();
-  return ({ message, auditEventIds, undone = 'Undone', reload }) => {
+  return ({ message, auditEventIds, undone = 'Undone', check, reload }) => {
     toast.show({
       message,
       ...(auditEventIds.length === 0
@@ -65,14 +112,18 @@ export function useUndoToast(): (undoable: Undoable) => void {
             action: {
               label: 'Undo',
               onAction: () => {
-                void undoAll(auditEventIds)
-                  .then(() => {
-                    toast.show({ message: undone });
-                  })
-                  .catch((caught: unknown) => {
-                    toast.show({ message: undoFailure(caught) });
-                  })
-                  .finally(reload);
+                void (async () => {
+                  const report = await undoAll(auditEventIds);
+                  let checked: UndoCheck | undefined;
+                  if (report.refused.length > 0 && check !== undefined) {
+                    checked = await check().catch(() => undefined);
+                  }
+                  // A partial undo stays until it is read: it is the one that needs acting on.
+                  toast.show({
+                    message: undoSummary(report, undone, checked),
+                    ...(report.refused.length > 0 ? { duration: 0 } : {}),
+                  });
+                })().finally(reload);
               },
             },
           }),

@@ -248,6 +248,95 @@ test.describe('groups', () => {
     await expect(gammaRows.getByRole('link', { name: `Grouped one ${RUN}` })).toBeVisible();
   });
 
+  test('a partial undo says what it put back and what it could not', async ({ page }) => {
+    await page.goto('/projects');
+    await page.getByRole('searchbox', { name: 'Filter by code or name' }).fill(RUN);
+    await page.getByRole('checkbox', { name: `Select ${P1} Grouped one ${RUN}` }).click();
+    await page.getByRole('checkbox', { name: `Select ${P2} Grouped two ${RUN}` }).click();
+    await page.getByRole('region', { name: 'Selected projects' }).getByRole('button', { name: 'Move to group…' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Move 2 projects to…' });
+    await dialog.getByRole('radio', { name: DELTA }).check();
+    await dialog.getByRole('button', { name: 'Move 2 projects' }).click();
+    await expect(page.getByText(`Moved ${P1} and ${P2} to ${DELTA}`)).toBeVisible();
+
+    // Somebody moves P1 on before Undo is pressed: its move can no longer be reversed, P2's can.
+    const beta = (await listing(page.request)).items.find((g) => g.name === BETA);
+    expect(beta).toBeDefined();
+    const moved = await page.request.post(`/api/groups/${beta?.humanId ?? ''}/projects`, { data: { projects: [P1] } });
+    expect(moved.ok(), await moved.text()).toBe(true);
+
+    await page.getByRole('button', { name: /^Undo/ }).click();
+    await expect(page.getByText(`Undid 1 of 2 — ${P1} has changed since`)).toBeVisible();
+    await expect.poll(() => groupOf(page.request, P2)).toBe(GAMMA);
+    expect(await groupOf(page.request, P1)).toBe(BETA);
+
+    // Put the world back as the rest of the spec expects it: both in Gamma, P1 first.
+    const back = await page.request.post(`/api/groups/${seeded.gamma.humanId}/projects`, { data: { projects: [P1] } });
+    expect(back.ok(), await back.text()).toBe(true);
+    const order = await page.request.post(`/api/groups/${seeded.gamma.humanId}/projects/order`, { data: { order: [P1, P2] } });
+    expect(order.ok(), await order.text()).toBe(true);
+  });
+
+  test('the Move dialog waits for the guidelines, and says so when it cannot read them', async ({ page }) => {
+    // Slow reads first: Move stays disabled until the consequence is known.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route('**/api/groups/GRP-*', async (route) => {
+      if (route.request().method() !== 'GET') return route.continue();
+      await held;
+      return route.continue();
+    });
+    await page.goto(`/projects/${P1}`);
+    await page.getByRole('button', { name: `More for Grouped one ${RUN}` }).click();
+    await page.getByRole('menuitem', { name: 'Move to group…' }).click();
+    const dialog = page.getByRole('dialog', { name: `Move ${P1} to…` });
+    await dialog.getByRole('radio', { name: DELTA }).check();
+    await expect(dialog.getByRole('button', { name: 'Checking guidelines…' })).toBeDisabled();
+    release();
+    await expect(dialog.getByRole('button', { name: 'Move', exact: true })).toBeEnabled();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await page.unrouteAll({ behavior: 'wait' });
+
+    // A read that fails is said, not skipped.
+    await page.route('**/api/groups/GRP-*', (route) =>
+      route.request().method() === 'GET'
+        ? route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'boom' }) })
+        : route.continue(),
+    );
+    await page.getByRole('button', { name: `More for Grouped one ${RUN}` }).click();
+    await page.getByRole('menuitem', { name: 'Move to group…' }).click();
+    await dialog.getByRole('radio', { name: DELTA }).check();
+    await expect(dialog.getByText('Could not check which guidelines change — the move will still apply them.')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+  });
+
+  test('the group editor shows the server’s reason beside the field it is about', async ({ page }) => {
+    await page.goto('/groups');
+    await page.getByRole('button', { name: 'New group' }).click();
+    const dialog = page.getByRole('dialog', { name: 'New group' });
+    await dialog.getByRole('textbox', { name: 'Name' }).fill('Ungrouped');
+    await dialog.getByRole('button', { name: 'Create group' }).click();
+    await expect(dialog.getByText(/reserved/)).toBeVisible();
+    await expect(dialog.getByText('the request body is not valid')).toHaveCount(0);
+    await expect(dialog.getByRole('textbox', { name: 'Name' })).toHaveAttribute('aria-invalid', 'true');
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+  });
+
+  test('Projects says so when no project is ungrouped', async ({ page }) => {
+    // The shared database always holds an ungrouped project, so the answer is narrowed here.
+    await page.route('**/api/portfolio', async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as { ungrouped: { projects: unknown[] } | null };
+      if (body.ungrouped !== null) body.ungrouped.projects = [];
+      await route.fulfill({ response, json: body });
+    });
+    await page.goto('/projects');
+    await page.getByRole('combobox', { name: 'Group' }).click();
+    await page.getByRole('option', { name: 'Ungrouped' }).click();
+    await expect(page.getByRole('heading', { name: 'No project is ungrouped' })).toBeVisible();
+    await expect(page.getByText(/No project has\s+in its code or name/)).toHaveCount(0);
+  });
+
   test('the Groups screen refuses deleting a non-empty group, naming its projects', async ({ page }) => {
     await page.goto('/groups');
     await page.getByRole('button', { name: `More for ${GAMMA}` }).click();
@@ -336,6 +425,34 @@ test.describe('groups', () => {
     await expect(page).toHaveURL(new RegExp(`/projects/${code}$`));
     await expect(page.getByRole('main').getByRole('link', { name: DELTA }).first()).toBeVisible();
     expect(await groupOf(page.request, code)).toBe(DELTA);
+  });
+
+  test('a Joins group that does not stick is said, with the way to finish it', async ({ page }) => {
+    const idea = await page.request.post('/api/project-ideas', { data: { title: `Join fails ${RUN}` } });
+    expect(idea.status(), await idea.text()).toBe(201);
+    const { humanId } = (await idea.json()) as { humanId: string };
+    const code = `GF${RUN}`;
+    await page.route('**/api/projects/*', (route) =>
+      route.request().method() === 'PATCH'
+        ? route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'the database went away' }) })
+        : route.continue(),
+    );
+
+    await page.goto(`/project-ideas/${humanId}`);
+    await page.getByRole('button', { name: 'Convert' }).click();
+    const dialog = page.getByRole('dialog', { name: `Make ${humanId} a project` });
+    await dialog.getByRole('textbox', { name: 'Code' }).fill(code);
+    await dialog.getByRole('combobox', { name: 'Joins group' }).click();
+    await page.getByRole('option', { name: DELTA }).click();
+    await dialog.getByRole('button', { name: 'Convert to project' }).click();
+
+    // On the project, which exists, with the failure in words and the way to finish it.
+    await expect(page).toHaveURL(new RegExp(`/projects/${code}$`));
+    await expect(page.getByText(`${code} was created, but it did not join ${DELTA}: the database went away`)).toBeVisible();
+    expect(await groupOf(page.request, code)).toBeNull();
+    await page.unrouteAll({ behavior: 'wait' });
+    await page.getByRole('region', { name: 'Notifications' }).getByRole('button', { name: 'Move to group…' }).click();
+    await expect(page.getByRole('dialog', { name: `Move ${code} to…` })).toBeVisible();
   });
 
   test("a group's page lists its projects in order, with Move up / Move down", async ({ page }) => {

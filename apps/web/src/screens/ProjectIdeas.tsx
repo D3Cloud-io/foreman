@@ -17,10 +17,12 @@ import {
   Skeleton,
   Stack,
   Textarea,
+  useToast,
 } from '@d3cloud/ui';
 import type { GroupListing } from '@foreman/shared';
 import { foreman, ApiError, type GuidelineRow, type ProjectIdeaRow } from '../lib/api';
 import { applicableGuidelines } from '../lib/groups';
+import { navigate } from '../lib/router';
 import { useAsync } from '../lib/useAsync';
 import { useMode, useMoney, useReviews } from '../lib/session';
 import { Pill, SegmentBar, StatCard } from '../ui/viz';
@@ -571,6 +573,7 @@ export function ConvertIdea({ idea, onConverted }: { idea: ProjectIdeaRow; onCon
   const [guidelines, setGuidelines] = useState<readonly GuidelineRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   const submit = (event: SyntheticEvent) => {
     event.preventDefault();
@@ -579,24 +582,39 @@ export function ConvertIdea({ idea, onConverted }: { idea: ProjectIdeaRow; onCon
     const projectCode = code.toUpperCase();
     // The convert endpoint takes no group (it creates the project from the idea's fields alone),
     // so the group is set on the new project straight after, with the same write Projects uses.
+    const groupName = listing?.items.find((item) => item.humanId === group)?.name ?? group;
     void foreman
       .convertProjectIdea(idea.humanId, { code: projectCode, name })
       .then(async (result) => {
-        if (group !== NO_GROUP) {
-          try {
-            await foreman.setProjectGroup(result.project.code, group);
-          } catch {
-            // The project exists; only its family did not stick. Its overview offers Move to group.
-          }
+        if (group === NO_GROUP) return { result, joinError: null };
+        try {
+          await foreman.setProjectGroup(result.project.code, group);
+          return { result, joinError: null };
+        } catch (caught) {
+          return { result, joinError: caught instanceof Error ? caught.message : String(caught) };
         }
-        return result;
       })
-      .then((result) => {
+      .then(({ result, joinError }) => {
         setOpen(false);
         onConverted();
-        // Straight to the thing that now exists. Converting and then having to go and find it is
-        // the sort of small friction that makes a feature feel unfinished.
-        window.location.assign(`/projects/${result.project.code}`);
+        const created = result.project.code;
+        if (joinError === null) {
+          // Straight to the thing that now exists. Converting and then having to go and find it
+          // is the sort of small friction that makes a feature feel unfinished.
+          window.location.assign(`/projects/${created}`);
+          return;
+        }
+        // The project exists, but the family the person chose did not stick. Never silently: land
+        // on it, say so in a toast that stays until it is read, and offer the way to finish it.
+        navigate(`/projects/${created}`);
+        toast.show({
+          message: `${created} was created, but it did not join ${groupName}: ${joinError}`,
+          duration: 0,
+          action: {
+            label: 'Move to group…',
+            onAction: () => { navigate(`/projects/${created}?move=1`); },
+          },
+        });
       })
       .catch((caught: unknown) => {
         setError(caught instanceof ApiError ? caught.message : 'That did not convert.');

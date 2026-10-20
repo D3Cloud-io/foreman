@@ -7,10 +7,11 @@ import { useUndoToast } from '../lib/undo';
 import {
   accentColor,
   changes,
-  describeChange,
+  describeMove,
   guidelineChange,
   listJoin,
   type GuidelineChange,
+  type SourceChange,
 } from '../lib/groups';
 
 /**
@@ -99,14 +100,25 @@ export function RadioList({
   );
 }
 
-/** The toast after a move, with Undo (17.06): every project goes back to its group and place. */
+/** Where each moving project was before the move, by code — a GRP-n, or null for Ungrouped. */
+export type MoveOrigin = ReadonlyMap<string, string | null>;
+
+/**
+ * The toast after a move, with Undo (17.06): every project goes back to its group and place. If
+ * the undo is refused for some of them, the toast says which, read back from the groups.
+ */
 export function useMoveToast(reload: () => void) {
   const show = useUndoToast();
-  return (result: GroupWrite, codes: readonly string[], targetName: string) => {
+  return (result: GroupWrite, codes: readonly string[], targetName: string, origin: MoveOrigin) => {
     show({
       message: `Moved ${listJoin(codes)} to ${targetName}`,
       auditEventIds: result.auditEventIds,
       undone: `Put ${listJoin(codes)} back`,
+      check: async () => {
+        const now = await foreman.groups();
+        const back = codes.filter((code) => groupOf(now, code) === (origin.get(code) ?? null));
+        return { back, notBack: codes.filter((code) => !back.includes(code)) };
+      },
       reload,
     });
   };
@@ -144,11 +156,12 @@ export function MoveToGroupDialog({
   onOpenChange: (open: boolean) => void;
   projects: readonly MovingProject[];
   listing: GroupListing;
-  onMoved: (result: GroupWrite, codes: string[], targetName: string) => void;
+  onMoved: (result: GroupWrite, codes: string[], targetName: string, origin: MoveOrigin) => void;
 }) {
   const name = useId();
   const [target, setTarget] = useState<string | null>(null);
-  const [guidelines, setGuidelines] = useState<Map<string, string[]> | null>(null);
+  // `null` while the reads are in flight, `'failed'` when one did not come back.
+  const [guidelines, setGuidelines] = useState<Map<string, string[]> | 'failed' | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -176,7 +189,7 @@ export function MoveToGroupDialog({
         setGuidelines(map);
       })
       .catch(() => {
-        if (live) setGuidelines(new Map());
+        if (live) setGuidelines('failed');
       });
     return () => {
       live = false;
@@ -210,13 +223,22 @@ export function MoveToGroupDialog({
         : (listing.items.find((group) => group.humanId === target)?.name ?? target);
   const alreadyThere = target !== null && sources.size === 1 && sources.has(target);
 
+  // Each source group's change on its own: projects from different families lose different rules.
+  let perSource: SourceChange[] | null = null;
   let change: GuidelineChange | null = null;
-  if (target !== null && guidelines !== null && guidelines.size > 0) {
+  if (target !== null && guidelines !== null && guidelines !== 'failed') {
+    const after = guidelines.get(target) ?? [];
+    perSource = [...sources].map((source) => ({
+      name: source === UNGROUPED ? 'Ungrouped' : (listing.items.find((g) => g.humanId === source)?.name ?? source),
+      codes: codes.filter((code) => (groupOf(listing, code) ?? UNGROUPED) === source),
+      change: guidelineChange([guidelines.get(source) ?? []], after),
+    }));
     change = guidelineChange(
       [...sources].map((source) => guidelines.get(source) ?? []),
-      guidelines.get(target) ?? [],
+      after,
     );
   }
+  const origin: MoveOrigin = new Map(codes.map((code) => [code, groupOf(listing, code)]));
 
   const submit = () => {
     if (target === null) return;
@@ -226,7 +248,7 @@ export function MoveToGroupDialog({
       .moveToGroup(target === UNGROUPED ? null : target, codes)
       .then((result) => {
         onOpenChange(false);
-        onMoved(result, codes, targetName);
+        onMoved(result, codes, targetName, origin);
       })
       .catch((caught: unknown) => {
         setError(caught instanceof Error ? caught.message : String(caught));
@@ -248,7 +270,7 @@ export function MoveToGroupDialog({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          if (!busy && target !== null && !alreadyThere) submit();
+          if (!busy && target !== null && !alreadyThere && guidelines !== null) submit();
         }}
       >
         <Stack gap="16">
@@ -267,14 +289,20 @@ export function MoveToGroupDialog({
             </p>
           )}
 
-          {change !== null && !alreadyThere && (
+          {target !== null && !alreadyThere && guidelines === 'failed' && (
+            <Alert tone="warning" title="Could not check which guidelines change" icon={<TriangleAlert />}>
+              Could not check which guidelines change — the move will still apply them.
+            </Alert>
+          )}
+
+          {change !== null && perSource !== null && !alreadyThere && (
             changes(change) ? (
               <Alert tone="warning" title="Guidelines that apply will change" icon={<TriangleAlert />}>
-                {describeChange(change, codes)}
+                {describeMove(perSource)}
               </Alert>
             ) : (
               <Alert tone="info" title="The same guidelines apply">
-                {describeChange(change, codes)}
+                {describeMove(perSource)}
               </Alert>
             )
           )}
@@ -289,8 +317,14 @@ export function MoveToGroupDialog({
             <Button type="button" onClick={() => { onOpenChange(false); }}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary" disabled={busy || target === null || alreadyThere}>
-              {busy ? 'Moving…' : verb}
+            {/* Not before the consequence is known: moving first and reading what it did after is
+                the mistake the sentence above exists to prevent. */}
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={busy || target === null || alreadyThere || guidelines === null}
+            >
+              {busy ? 'Moving…' : guidelines === null ? 'Checking guidelines…' : verb}
             </Button>
           </FormActions>
         </Stack>

@@ -255,7 +255,7 @@ export function Groups({ search }: { search: string }) {
                     <a className="fm-glist__name" href={`/groups/${group.slug}`}>
                       {group.name}
                     </a>
-                    <span className="fm-muted">
+                    <span className="fm-muted fm-break">
                       {[group.description, group.siteUrl === null ? 'no site' : siteLabel(group.siteUrl)]
                         .filter((part) => part !== null && part !== '')
                         .join(' · ')}
@@ -398,7 +398,7 @@ export function Groups({ search }: { search: string }) {
         onOpenChange={(next) => { if (!next) setMoveFor(null); }}
         projects={moveFor?.projects ?? []}
         listing={listing}
-        onMoved={(result, codes, targetName) => {
+        onMoved={(result, codes, targetName, origin) => {
           if (moveFor !== null) {
             const cleared = moveFor.group;
             setRefusals((current) => {
@@ -409,7 +409,7 @@ export function Groups({ search }: { search: string }) {
           }
           setMoveFor(null);
           setListing(result);
-          toastMove(result, codes, targetName);
+          toastMove(result, codes, targetName, origin);
         }}
       />
     </Page>
@@ -458,6 +458,13 @@ function AccentPicker({
       </p>
     </fieldset>
   );
+}
+
+/** What the server said about each field of a group, by field. */
+interface FieldErrors {
+  name?: string | undefined;
+  description?: string | undefined;
+  siteUrl?: string | undefined;
 }
 
 const BLANK: GroupInput = { name: '', description: '', siteUrl: '', accent: 'neutral' };
@@ -531,7 +538,9 @@ function EditorBody({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [serverNameError, setServerNameError] = useState<string | null>(null);
+  // What the server said about each field on a 400 or a 409, shown beside the field it is about.
+  const [serverFields, setServerFields] = useState<FieldErrors>({});
+  const serverNameError = serverFields.name ?? null;
   const self = editing === 'new' ? null : editing.humanId;
 
   const clash = listing.items.find(
@@ -542,7 +551,10 @@ function EditorBody({
       ? `${clash.name} already exists (${clash.humanId}). Names are unique, ignoring case.`
       : serverNameError;
   const siteError =
-    draft.siteUrl.trim() !== '' && !isHttps(draft.siteUrl.trim()) ? 'A site is an absolute https:// address.' : null;
+    draft.siteUrl.trim() !== '' && !isHttps(draft.siteUrl.trim())
+      ? 'A site is an absolute https:// address.'
+      : (serverFields.siteUrl ?? null);
+  const descriptionError = serverFields.description ?? null;
   const valid = draft.name.trim().length > 0 && nameError === null && siteError === null;
 
   const applying = applicableGuidelines(guidelines, self);
@@ -552,12 +564,31 @@ function EditorBody({
   const submit = () => {
     setBusy(true);
     setError(null);
-    setServerNameError(null);
+    setServerFields({});
     (editing === 'new' ? foreman.createGroup(draft) : foreman.updateGroup(editing.humanId, draft))
       .then((saved) => { onSaved(saved, editing === 'new'); })
       .catch((caught: unknown) => {
         if (caught instanceof ApiError && caught.status === 409) {
-          setServerNameError(`${caught.message}. Names are unique, ignoring case.`);
+          setServerFields({ name: `${caught.message}. Names are unique, ignoring case.` });
+          return;
+        }
+        // A 400 names each field and what is wrong with it — `Ungrouped` and `All` are reserved,
+        // a site must be https. Said beside the field, not as "the request body is not valid".
+        if (caught instanceof ApiError && caught.status === 400) {
+          const fields = (caught.body as { fields?: { path: string; message: string }[] } | undefined)?.fields ?? [];
+          const byField: FieldErrors = {};
+          const other: string[] = [];
+          for (const field of fields) {
+            if (field.path === 'name' || field.path === 'description' || field.path === 'siteUrl') {
+              byField[field.path] = byField[field.path] === undefined ? field.message : `${byField[field.path] ?? ''} ${field.message}`;
+            } else {
+              other.push(field.path === '' ? field.message : `${field.path}: ${field.message}`);
+            }
+          }
+          setServerFields(byField);
+          if (other.length > 0 || Object.keys(byField).length === 0) {
+            setError(other.length > 0 ? other.join(' ') : caught.message);
+          }
           return;
         }
         setError(caught instanceof Error ? caught.message : String(caught));
@@ -578,16 +609,23 @@ function EditorBody({
             value={draft.name}
             maxLength={80}
             onChange={(event) => {
-              setServerNameError(null);
+              setServerFields({ ...serverFields, name: undefined });
               setDraft({ ...draft, name: event.target.value });
             }}
           />
         </FormField>
-        <FormField label="Description" help="One line. Shown under the name on Home.">
+        <FormField
+          label="Description"
+          help="One line. Shown under the name on Home."
+          {...(descriptionError === null ? {} : { error: descriptionError })}
+        >
           <Input
             value={draft.description}
             maxLength={200}
-            onChange={(event) => { setDraft({ ...draft, description: event.target.value.replace(/[\r\n]/g, ' ') }); }}
+            onChange={(event) => {
+              setServerFields({ ...serverFields, description: undefined });
+              setDraft({ ...draft, description: event.target.value.replace(/[\r\n]/g, ' ') });
+            }}
           />
         </FormField>
         <FormField label="Site URL" optional {...(siteError === null ? {} : { error: siteError })}>
@@ -596,7 +634,10 @@ function EditorBody({
             inputMode="url"
             value={draft.siteUrl}
             placeholder="https://dormice.ai"
-            onChange={(event) => { setDraft({ ...draft, siteUrl: event.target.value }); }}
+            onChange={(event) => {
+              setServerFields({ ...serverFields, siteUrl: undefined });
+              setDraft({ ...draft, siteUrl: event.target.value });
+            }}
           />
         </FormField>
         <AccentPicker

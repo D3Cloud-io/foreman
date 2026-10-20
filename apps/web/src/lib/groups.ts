@@ -109,6 +109,40 @@ export function describeChange(change: GuidelineChange, codes: readonly string[]
   return parts.length === 0 ? 'No guideline applies before or after.' : parts.join(' ');
 }
 
+/** What one source group's projects go through in a move. */
+export interface SourceChange {
+  /** The group they leave — or "Ungrouped". */
+  readonly name: string;
+  readonly codes: readonly string[];
+  readonly change: GuidelineChange;
+}
+
+function changeParts(change: GuidelineChange): string[] {
+  const parts: string[] = [];
+  if (change.stop.length > 0) parts.push(`${listJoin(change.stop)} ${change.stop.length === 1 ? 'stops' : 'stop'} applying`);
+  if (change.start.length > 0) parts.push(`${listJoin(change.start)} ${change.start.length === 1 ? 'starts' : 'start'} applying`);
+  return parts;
+}
+
+/**
+ * The Move dialog's sentence. From one group, it is that group's change for every moving project.
+ * From several, each source is said separately — projects leaving D3 Cloud lose what projects
+ * leaving Ungrouped never had, and one sentence over all of them would claim otherwise.
+ */
+export function describeMove(sources: readonly SourceChange[]): string {
+  const [only] = sources;
+  if (sources.length === 1 && only !== undefined) return describeChange(only.change, only.codes);
+  const lines = sources
+    .filter((source) => changes(source.change))
+    .map((source) => `${listJoin(source.codes)}, from ${source.name}: ${changeParts(source.change).join(', and ')}.`);
+  const first = sources[0]?.change.keep ?? [];
+  const keep = first.filter((id) => sources.every((source) => source.change.keep.includes(id)));
+  if (keep.length > 0) {
+    lines.push(`${listJoin(keep)} still ${keep.length === 1 ? 'applies' : 'apply'} to all of them.`);
+  }
+  return lines.length === 0 ? 'No guideline applies before or after.' : lines.join(' ');
+}
+
 /** The active guidelines that apply to a group, or to the ungrouped (`null`) — by ID, in order. */
 export function applicableGuidelines(
   guidelines: readonly GuidelineRow[],

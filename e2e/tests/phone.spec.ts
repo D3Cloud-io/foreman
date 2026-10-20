@@ -157,6 +157,25 @@ test.describe('a thumb, not a cursor', () => {
 test.describe('no sideways scroll at 390', () => {
   test.use({ viewport: PHONE });
 
+  // A family's site can be a long address with no break in it; it must not push the page wide.
+  test('a group with a long site address', async ({ page }) => {
+    await signIn(page);
+    const name = `Long site ${Date.now().toString(36)}`;
+    const created = await page.request.post('/api/groups', {
+      data: { name, siteUrl: `https://example.com/${'a-very-long-unbroken-path-segment'.repeat(3)}` },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const { slug } = (await created.json()) as { slug: string };
+    for (const path of ['/', '/groups', `/groups/${slug}`]) {
+      await page.goto(path);
+      await page.waitForLoadState('networkidle');
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `${path} scrolls sideways by ${String(overflow)}px`).toBeLessThanOrEqual(0);
+    }
+  });
+
   for (const path of ['/', '/projects', '/projects/EXMP', '/projects/EXMP/requirements', '/findings', '/tokens', '/groups']) {
     test(path, async ({ page }) => {
       await signIn(page);

@@ -91,7 +91,7 @@ export function settingsItems(ctx: NavContext): readonly NavItem[] {
  * twenty-two links that cannot sit under a thumb. So below `lg` the console splits them the way
  * Shipyard does, with one difference Shipyard does not need:
  *
- * - **The tab bar** carries the four a person reaches for from anywhere — Dashboard, Projects
+ * - **The tab bar** carries the four a person reaches for from anywhere — Home, Projects
  *   (Submissions on a board), Findings and Search — and a fifth that follows where they are:
  *   **the project they are in**, labelled by its code, so its overview is one tap from any of its
  *   sections; outside a project, **Project ideas** (Members for a board's admin).

@@ -157,12 +157,12 @@ export function GroupPage({ slug }: { slug: string }) {
         title={detail.name}
         back={back}
         description={
-          <span>
+          <span className="fm-break">
             {detail.description ?? ''}
             {detail.siteUrl !== null && (
               <>
                 {detail.description === null ? '' : ' · '}
-                <a href={detail.siteUrl} target="_blank" rel="noreferrer">
+                <a className="fm-break" href={detail.siteUrl} target="_blank" rel="noreferrer" title={detail.siteUrl}>
                   {siteLabel(detail.siteUrl)}
                   <ArrowUpRight aria-hidden="true" className="fm-icon-sm" />
                   <span className="fm-visually-hidden"> (opens in a new tab)</span>
@@ -313,10 +313,10 @@ export function GroupPage({ slug }: { slug: string }) {
             onOpenChange={(next) => { if (!next) setMoving(null); }}
             projects={moving === null ? [] : [moving]}
             listing={listing}
-            onMoved={(result, codes, targetName) => {
+            onMoved={(result, codes, targetName, origin) => {
               setMoving(null);
               refresh();
-              toastMove(result, codes, targetName);
+              toastMove(result, codes, targetName, origin);
             }}
           />
         </>

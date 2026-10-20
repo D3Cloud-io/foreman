@@ -5,6 +5,7 @@ import {
   accentColor,
   applicableGuidelines,
   describeChange,
+  describeMove,
   guidelineChange,
   listJoin,
   moveBy,
@@ -65,6 +66,26 @@ describe('the guideline consequence of a move', () => {
 
   it('sorts by number, so GL-010 comes after GL-009', () => {
     expect(guidelineChange([['GL-010', 'GL-009']], []).stop).toEqual(['GL-009', 'GL-010']);
+  });
+});
+
+describe('the Move dialog sentence', () => {
+  const all = ['GL-001', 'GL-002'];
+  const d3 = [...all, 'GL-004'];
+
+  it('is the one change, for every project, when they come from one group', () => {
+    expect(describeMove([{ name: 'D3 Cloud', codes: ['KURO', 'BURR'], change: guidelineChange([d3], all) }])).toBe(
+      'GL-004 stops applying to KURO and BURR. GL-001 and GL-002 still apply.',
+    );
+  });
+
+  it('says each source group on its own, never "stops applying" to a project it never applied to', () => {
+    const sentence = describeMove([
+      { name: 'D3 Cloud', codes: ['KURO'], change: guidelineChange([d3], all) },
+      { name: 'Ungrouped', codes: ['PW'], change: guidelineChange([all], all) },
+    ]);
+    expect(sentence).toBe('KURO, from D3 Cloud: GL-004 stops applying. GL-001 and GL-002 still apply to all of them.');
+    expect(sentence).not.toContain('KURO and PW');
   });
 });
 

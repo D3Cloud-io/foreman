@@ -158,8 +158,8 @@ function GroupSection({
               {section.name}
             </h2>
             {group !== null && group.siteUrl !== null && (
-              <a className="fm-gsection__site" href={group.siteUrl} target="_blank" rel="noreferrer">
-                {siteLabel(group.siteUrl)}
+              <a className="fm-gsection__site" href={group.siteUrl} target="_blank" rel="noreferrer" title={group.siteUrl}>
+                <span className="fm-truncate">{siteLabel(group.siteUrl)}</span>
                 <ArrowUpRight aria-hidden="true" className="fm-icon-sm" />
                 <span className="fm-visually-hidden"> (opens in a new tab)</span>
               </a>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -20,6 +20,7 @@ import { Ellipsis, UsersRound } from 'lucide-react';
 import { foreman, type Brief, type ProjectGroupRef } from '../lib/api';
 import { applicableGuidelines, listJoin } from '../lib/groups';
 import { GroupChip, MoveToGroupDialog, useMoveToast } from '../ui/groups';
+import { useLocation } from '../lib/router';
 import { useAsync } from '../lib/useAsync';
 import { percentClosed } from '../lib/completion';
 import { EditForm, LIFECYCLES } from './EditForms';
@@ -62,6 +63,18 @@ export function ProjectOverview({ code }: { code: string }) {
   const groups = useAsync(() => foreman.groups(), []);
   const guidelines = useAsync(() => foreman.guidelines(), []);
   const [moving, setMoving] = useState(false);
+  // `?move=1` opens Move to group… — where a toast elsewhere sends you to finish a move that did
+  // not happen (a converted idea whose group did not stick). Once, then the address is cleaned.
+  const { search } = useLocation();
+  const askedToMove = useRef(false);
+  const listingReady = groups.state.status === 'ready';
+  useEffect(() => {
+    if (askedToMove.current || !listingReady) return;
+    if (new URLSearchParams(search).get('move') !== '1') return;
+    askedToMove.current = true;
+    setMoving(true);
+    window.history.replaceState({}, '', `/projects/${code}`);
+  }, [search, listingReady, code]);
   const toastMove = useMoveToast(() => {
     project.reload();
     groups.reload();
@@ -337,10 +350,10 @@ export function ProjectOverview({ code }: { code: string }) {
           onOpenChange={setMoving}
           projects={[{ code, name: brief.project.name }]}
           listing={listing}
-          onMoved={(result, codes, targetName) => {
+          onMoved={(result, codes, targetName, origin) => {
             project.reload();
             groups.reload();
-            toastMove(result, codes, targetName);
+            toastMove(result, codes, targetName, origin);
           }}
         />
       )}
