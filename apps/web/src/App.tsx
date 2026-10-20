@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, Button, EmptyState, Spinner, ThemeProvider } from '@d3cloud/ui';
+import { Alert, Button, EmptyState, Spinner, ThemeProvider, ToastRegion } from '@d3cloud/ui';
 import { Shell } from './components/Shell';
 import { EntryHeading, EntryShell } from './entry/EntryShell';
 import { fetchSession, logout, type SessionState } from './lib/api';
@@ -8,7 +8,9 @@ import { SessionProvider } from './lib/session';
 import { Login } from './screens/Login';
 import { PhaseDetail } from './screens/PhaseDetail';
 import { Phases } from './screens/Phases';
-import { Dashboard } from './screens/Dashboard';
+import { Home } from './screens/Home';
+import { Groups } from './screens/Groups';
+import { GroupPage } from './screens/GroupPage';
 import { Projects } from './screens/Projects';
 import { Tokens } from './screens/Tokens';
 import { ProjectOverview } from './screens/ProjectOverview';
@@ -136,6 +138,8 @@ export function App() {
   return (
     <ThemeProvider>
       <SessionProvider session={state.session}>
+        {/* One polite live region for the console's toasts — the Undo after a move (17.06). */}
+        <ToastRegion label="Notifications">
         <Shell
           path={path}
           user={user}
@@ -146,6 +150,7 @@ export function App() {
         >
           <Screen path={path} search={search} />
         </Shell>
+        </ToastRegion>
       </SessionProvider>
     </ThemeProvider>
   );
@@ -157,7 +162,7 @@ function Screen({ path, search }: { path: string; search: string }) {
 
   switch (route.screen) {
     case 'dashboard':
-      return <Dashboard />;
+      return <Home />;
     case 'projects':
       return <Projects />;
     case 'project-ideas':
@@ -168,6 +173,11 @@ function Screen({ path, search }: { path: string; search: string }) {
       return <ProjectIdeaDetail key={route.humanId} humanId={route.humanId ?? ''} />;
     case 'guidelines':
       return <Guidelines />;
+    case 'groups':
+      return <Groups search={search} />;
+    case 'group':
+      // Keyed by the slug, so moving between two groups' pages starts each from its own state.
+      return <GroupPage key={route.humanId} slug={route.humanId ?? ''} />;
     case 'members':
       return <Members />;
     case 'project':

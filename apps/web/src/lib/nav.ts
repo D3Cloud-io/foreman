@@ -9,6 +9,7 @@ import {
   ListChecks,
   Search,
   Users,
+  UsersRound,
   type LucideIcon,
 } from 'lucide-react';
 import { projectCodeFor } from './project';
@@ -31,7 +32,8 @@ export interface NavContext {
 
 const owns = (prefix: string) => (path: string) => path === prefix || path.startsWith(`${prefix}/`);
 
-const DASHBOARD: NavItem = { to: '/', label: 'Dashboard', Icon: HomeIcon, current: (path) => path === '/' };
+// "Home" since FRM-T-17.3: it is the portfolio by family now, not a wall of charts.
+const DASHBOARD: NavItem = { to: '/', label: 'Home', Icon: HomeIcon, current: (path) => path === '/' };
 const PROJECTS: NavItem = { to: '/projects', label: 'Projects', Icon: FolderKanban, current: (path) => path === '/projects' };
 const FINDINGS: NavItem = { to: '/findings', label: 'Findings', Icon: ListChecks, current: owns('/findings') };
 const SEARCH: NavItem = { to: '/search', label: 'Search', Icon: Search, current: (path) => path === '/search' };
@@ -54,16 +56,29 @@ const MEMBERS: NavItem = { to: '/members', label: 'Members', Icon: Users, curren
  *
  * A fund board has submissions, not a portfolio. The ledger's screens are still reachable by URL —
  * the data is the same shape — but leading with them would describe a product nobody there uses.
+ *
+ * The order is the P17 board's: Home, Projects, Findings, Project ideas, Guidelines, Search.
  */
 export function navItems(ctx: NavContext): readonly NavItem[] {
   return [
     DASHBOARD,
     ...(ctx.board ? [] : [PROJECTS]),
+    FINDINGS,
     projectIdeas(ctx),
     ...(ctx.board ? [] : [{ to: '/guidelines', label: 'Guidelines', Icon: Compass, current: (path: string) => path === '/guidelines' }]),
     ...(ctx.board && ctx.admin ? [MEMBERS] : []),
-    FINDINGS,
     SEARCH,
+  ];
+}
+
+/**
+ * The Settings group, last in the sidebar and in the phone's drawer: how the console is arranged
+ * (Groups), whether it is well (Health), and what may reach it (API tokens). Groups order a
+ * portfolio, which a fund board does not have.
+ */
+export function settingsItems(ctx: NavContext): readonly NavItem[] {
+  return [
+    ...(ctx.board ? [] : [{ to: '/groups', label: 'Groups', Icon: UsersRound, current: owns('/groups') }]),
     { to: '/system', label: 'Health', Icon: ActivityIcon, current: (path) => path === '/system' },
     { to: '/tokens', label: 'API tokens', Icon: KeyRound, current: (path) => path === '/tokens' },
   ];

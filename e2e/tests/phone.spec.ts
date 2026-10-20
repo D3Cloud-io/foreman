@@ -38,7 +38,7 @@ test.describe('the tab bar', () => {
     const bar = page.getByRole('navigation', { name: 'Primary' });
     await expect(bar).toBeVisible();
     expect(await hrefsIn(page, 'Primary')).toEqual(['/', '/projects', '/findings', '/search', '/project-ideas']);
-    await expect(bar.getByRole('link', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page');
+    await expect(bar.getByRole('link', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
 
     // Inside a project the fifth tab is that project, so its overview is a tap from any section.
     await page.goto('/projects/EXMP/adrs');
@@ -121,6 +121,8 @@ test.describe('a thumb, not a cursor', () => {
     '/projects/EXMP',
     '/projects/EXMP/screens',
     '/findings',
+    '/projects',
+    '/groups',
   ];
 
   test('every control the console draws is at least 44 by 44', async ({ page }) => {
@@ -155,7 +157,7 @@ test.describe('a thumb, not a cursor', () => {
 test.describe('no sideways scroll at 390', () => {
   test.use({ viewport: PHONE });
 
-  for (const path of ['/', '/projects', '/projects/EXMP', '/projects/EXMP/requirements', '/findings', '/tokens']) {
+  for (const path of ['/', '/projects', '/projects/EXMP', '/projects/EXMP/requirements', '/findings', '/tokens', '/groups']) {
     test(path, async ({ page }) => {
       await signIn(page);
       await page.goto(path);

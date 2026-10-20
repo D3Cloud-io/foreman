@@ -61,6 +61,16 @@ export function useLocation(): Location {
     : { path: href.slice(0, index), search: href.slice(index) };
 }
 
+/**
+ * Go somewhere from code, the way a link click does: no reload, the back button works, and every
+ * `useLocation` hears it through the same `popstate` the browser sends for Back.
+ */
+export function navigate(to: string): void {
+  window.history.pushState({}, '', to);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+  window.scrollTo(0, 0);
+}
+
 /** The path alone, for the screens that do not care about the query. */
 export function usePath(): string {
   return useLocation().path;
@@ -73,6 +83,8 @@ export interface Route {
     | 'project-ideas'
     | 'project-idea'
     | 'guidelines'
+    | 'groups'
+    | 'group'
     | 'members'
     | 'project'
     | 'phases'
@@ -123,6 +135,11 @@ export function routeFor(path: string): Route {
   // Cross-project, like project ideas: a guideline applies to every project and belongs to none.
   if (parts[0] === 'guidelines' && parts[1] === undefined) return { screen: 'guidelines' };
   if (parts[0] === 'members' && parts[1] === undefined) return { screen: 'members' };
+  // Groups belong to no project either (FRM-ADR-024): the list, and one group by its slug.
+  if (parts[0] === 'groups') {
+    if (parts[1] === undefined) return { screen: 'groups' };
+    if (parts[2] === undefined) return { screen: 'group', humanId: decodeURIComponent(parts[1]) };
+  }
 
   if (parts[0] === 'projects' && parts[1] !== undefined) {
     const code = parts[1];

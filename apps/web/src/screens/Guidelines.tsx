@@ -3,12 +3,14 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Cluster,
   EmptyState,
   FormActions,
   FormField,
   Grid,
   Input,
+  Link,
   Modal,
   Page,
   PageHeader,
@@ -19,8 +21,12 @@ import {
   Textarea,
 } from '@d3cloud/ui';
 import { Markdown } from '../components/Markdown';
-import { foreman, type GuidelineInput, type GuidelineRow } from '../lib/api';
+import { Check } from 'lucide-react';
+import type { GroupListing } from '@foreman/shared';
+import { foreman, type GuidelineInput, type GuidelineRow, type GuidelineScope } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
+import { listJoin } from '../lib/groups';
+import { GroupChip } from '../ui/groups';
 import { Pill } from '../ui/viz';
 
 /**
@@ -43,6 +49,9 @@ const EMPTY: GuidelineInput = { title: '', area: '', decision: '', rationale: ''
 
 export function Guidelines() {
   const { state, reload } = useAsync(() => foreman.guidelines(), []);
+  // Which groups exist, for "Applies to" (FRM-REQ-235). A guideline still renders without them.
+  const groups = useAsync(() => foreman.groups(), []);
+  const listing = groups.state.status === 'ready' ? groups.state.value : null;
   const [view, setView] = useState<View>('active');
   const [open, setOpen] = useState<GuidelineRow | null>(null);
   const [editing, setEditing] = useState<GuidelineRow | 'new' | null>(null);
@@ -112,7 +121,7 @@ export function Guidelines() {
             <Section key={area} title={area} surface="plain">
               <Grid minItemWidth="md">
                 {rows.map((row) => (
-                  <GuidelineCard key={row.humanId} row={row} onOpen={() => { setOpen(row); }} />
+                  <GuidelineCard key={row.humanId} row={row} listing={listing} onOpen={() => { setOpen(row); }} />
                 ))}
               </Grid>
             </Section>
@@ -129,6 +138,7 @@ export function Guidelines() {
         {open !== null && (
           <GuidelineBody
             row={open}
+            listing={listing}
             onEdit={() => {
               setEditing(open);
               setOpen(null);
@@ -148,6 +158,7 @@ export function Guidelines() {
       <GuidelineForm
         editing={editing}
         areas={areas}
+        listing={listing}
         onClose={() => { setEditing(null); }}
         onSaved={saved}
       />
@@ -155,7 +166,32 @@ export function Guidelines() {
   );
 }
 
-function GuidelineCard({ row, onOpen }: { row: GuidelineRow; onOpen: () => void }) {
+/** Where a guideline applies, as the card and the dialog say it: every project, or its groups. */
+function Scope({ row, listing }: { row: GuidelineRow; listing: GroupListing | null }) {
+  if (row.appliesTo === 'all') return <Pill tone="neutral">All projects</Pill>;
+  return (
+    <Cluster gap="6" align="center">
+      {row.groups.map((id) => {
+        const group = listing?.items.find((candidate) => candidate.humanId === id);
+        return group === undefined ? (
+          <Pill key={id} tone="neutral">{id}</Pill>
+        ) : (
+          <GroupChip key={id} name={group.name} accent={group.accent} />
+        );
+      })}
+    </Cluster>
+  );
+}
+
+function GuidelineCard({
+  row,
+  listing,
+  onOpen,
+}: {
+  row: GuidelineRow;
+  listing: GroupListing | null;
+  onOpen: () => void;
+}) {
   return (
     <Card
       padding="md"
@@ -177,6 +213,7 @@ function GuidelineCard({ row, onOpen }: { row: GuidelineRow; onOpen: () => void 
         </Cluster>
         <span className="fm-card__title">{row.title}</span>
         <span className="fm-guideline__decision">{row.decision}</span>
+        <Scope row={row} listing={listing} />
       </Stack>
     </Card>
   );
@@ -184,11 +221,13 @@ function GuidelineCard({ row, onOpen }: { row: GuidelineRow; onOpen: () => void 
 
 function GuidelineBody({
   row,
+  listing,
   onEdit,
   onChanged,
   onDeleted,
 }: {
   row: GuidelineRow;
+  listing: GroupListing | null;
   onEdit: () => void;
   onChanged: (row: GuidelineRow) => void;
   onDeleted: () => void;
@@ -213,6 +252,11 @@ function GuidelineBody({
       <Cluster gap="8" align="center">
         <Pill tone="neutral">{row.area}</Pill>
         {retired && <Pill tone="warning">retired — no longer in any brief</Pill>}
+      </Cluster>
+
+      <Cluster gap="8" align="center">
+        <span className="fm-part__label">Applies to</span>
+        <Scope row={row} listing={listing} />
       </Cluster>
 
       <div className="fm-callout">
@@ -261,11 +305,13 @@ function GuidelineBody({
 function GuidelineForm({
   editing,
   areas,
+  listing,
   onClose,
   onSaved,
 }: {
   editing: GuidelineRow | 'new' | null;
   areas: readonly string[];
+  listing: GroupListing | null;
   onClose: () => void;
   onSaved: (row: GuidelineRow) => void;
 }) {
@@ -283,6 +329,7 @@ function GuidelineForm({
           key={editing === 'new' ? 'new' : editing.humanId}
           editing={editing}
           areas={areas}
+          listing={listing}
           onClose={onClose}
           onSaved={onSaved}
         />
@@ -294,11 +341,13 @@ function GuidelineForm({
 function FormBody({
   editing,
   areas,
+  listing,
   onClose,
   onSaved,
 }: {
   editing: GuidelineRow | 'new';
   areas: readonly string[];
+  listing: GroupListing | null;
   onClose: () => void;
   onSaved: (row: GuidelineRow) => void;
 }) {
@@ -313,6 +362,8 @@ function FormBody({
           guidance: editing.guidance ?? '',
         },
   );
+  const [appliesTo, setAppliesTo] = useState<GuidelineScope>(editing === 'new' ? 'all' : editing.appliesTo);
+  const [chosen, setChosen] = useState<readonly string[]>(editing === 'new' ? [] : editing.groups);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -320,15 +371,29 @@ function FormBody({
     setDraft((current) => ({ ...current, [key]: value }));
   };
 
+  const groups = listing?.items ?? [];
+  // In group order, whatever order they were ticked in: the order the API answers with.
+  const chosenInOrder = groups.map((group) => group.humanId).filter((id) => chosen.includes(id));
   const valid =
     draft.title.trim().length > 0 &&
     draft.area.trim().length > 0 &&
-    draft.decision.trim().length > 0;
+    draft.decision.trim().length > 0 &&
+    (appliesTo === 'all' || chosenInOrder.length > 0);
+  const reach = groups.filter((group) => chosenInOrder.includes(group.humanId));
+  const reachCount = reach.reduce((sum, group) => sum + group.counts.projects, 0);
+  const subject = editing === 'new' ? 'It' : editing.humanId;
 
   const submit = () => {
     setBusy(true);
     setError(null);
-    const body = { ...draft, title: draft.title.trim(), area: draft.area.trim() };
+    const body = {
+      ...draft,
+      title: draft.title.trim(),
+      area: draft.area.trim(),
+      ...(appliesTo === 'all'
+        ? { appliesTo: 'all' as const }
+        : { appliesTo: 'groups' as const, groups: chosenInOrder }),
+    };
     (editing === 'new'
       ? foreman.createGuideline(body)
       : foreman.updateGuideline(editing.humanId, body)
@@ -407,6 +472,56 @@ function FormBody({
           />
         </FormField>
 
+        <FormField as="group" label="Applies to">
+          <Stack gap="8">
+            <SegmentedControl
+              aria-label="Applies to"
+              size="sm"
+              items={[
+                { value: 'all', label: 'All projects' },
+                { value: 'groups', label: 'Chosen groups' },
+              ]}
+              value={appliesTo}
+              onValueChange={(next) => { setAppliesTo(next === 'groups' ? 'groups' : 'all'); }}
+            />
+            {appliesTo === 'groups' &&
+              (groups.length === 0 ? (
+                <span className="fm-muted">
+                  There are no groups yet. Make one on the <Link variant="inline" href="/groups">Groups</Link> screen first.
+                </span>
+              ) : (
+                <Stack gap="6">
+                  {groups.map((group) => (
+                    <Cluster key={group.humanId} gap="8" align="center">
+                      <Checkbox
+                        label={group.name}
+                        checkIcon={<Check />}
+                        checked={chosen.includes(group.humanId)}
+                        onCheckedChange={(next) => {
+                          setChosen((current) =>
+                            next === true
+                              ? [...current.filter((id) => id !== group.humanId), group.humanId]
+                              : current.filter((id) => id !== group.humanId),
+                          );
+                        }}
+                      />
+                      <span className="fm-muted">
+                        {group.counts.projects} {group.counts.projects === 1 ? 'project' : 'projects'}
+                      </span>
+                    </Cluster>
+                  ))}
+                </Stack>
+              ))}
+            <span className="fm-muted">
+              {appliesTo === 'all'
+                ? 'Every project, in every group and none.'
+                : reach.length === 0
+                  ? 'Choose at least one group — a guideline for no group applies to nothing.'
+                  : `${subject} will apply to the ${String(reachCount)} ${reachCount === 1 ? 'project' : 'projects'} in ${listJoin(reach.map((g) => g.name))}. Projects in no group get only all-project guidelines.`}
+            </span>
+          </Stack>
+        </FormField>
+
         {error !== null && <Alert tone="danger" title="It was not saved">{error}</Alert>}
 
         <FormActions>
@@ -414,7 +529,7 @@ function FormBody({
             Cancel
           </Button>
           <Button type="submit" variant="primary" disabled={busy || !valid}>
-            {busy ? 'Saving…' : editing === 'new' ? 'Add guideline' : 'Save'}
+            {busy ? 'Saving…' : editing === 'new' ? 'Add guideline' : 'Save guideline'}
           </Button>
         </FormActions>
       </Stack>
