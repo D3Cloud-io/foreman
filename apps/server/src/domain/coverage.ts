@@ -136,7 +136,9 @@ export async function coverageFor(db: Db, code: string): Promise<Coverage> {
 
 export interface GateFailure {
   readonly kind:
+    | 'no-exit-demo'
     | 'uncovered-must'
+    | 'no-acceptance-test'
     | 'unfinished-task'
     | 'open-critical'
     | 'screen-unreviewed'
@@ -158,6 +160,15 @@ export interface GateResult {
  * **Every failure names the requirement, task or finding responsible** (FRM-REQ-056). "The exit gate
  * failed" tells somebody to go looking; naming the three Musts with no task tells them what to do.
  *
+ * **This is the one gate.** Completing a phase by hand, the status rollup (ADR-018) and the drift
+ * engine's failed-exit-gate category all ask this function, so a phase cannot be refused by one
+ * and pass another. A rule added here is a rule all three enforce.
+ *
+ * FRM-REQ-056 asks for "a passing acceptance" on every Must. Foreman records an acceptance test
+ * but not whether it passed — there is no acceptance result to read — so until it stores results,
+ * **"passing acceptance" is read as "an acceptance test is recorded"** (FRM-T-026). A Must nobody
+ * can check is one nobody can say passed; the weaker reading still refuses that.
+ *
  * Takes a transaction as readily as the client: the status rollup asks it from inside the
  * transaction that closed the phase's last task.
  */
@@ -173,9 +184,20 @@ export async function exitGate(
 
   const failures: GateFailure[] = [];
 
-  // 1. Musts assigned to this phase that no task covers.
+  // 0. An exit demo (FRM-REQ-056). Without one, nothing states what finishing the phase meant, so
+  //    "complete" is a claim with nothing to check it against.
+  if (phase.exitDemo === null || phase.exitDemo.trim() === '') {
+    failures.push({
+      kind: 'no-exit-demo',
+      humanId: phase.humanId,
+      detail: 'no exit demo — nothing states what finishing this phase meant',
+    });
+  }
+
+  // 1. Musts assigned to this phase that no task covers, or that nothing can be checked against.
   const musts = await db.requirement.findMany({
     where: { phaseId: phase.id, deletedAt: null, priority: MUST },
+    orderBy: { seq: 'asc' },
     include: { tasks: { select: { task: { select: { deletedAt: true } } } } },
   });
   for (const must of musts) {
@@ -184,6 +206,14 @@ export async function exitGate(
         kind: 'uncovered-must',
         humanId: must.humanId,
         detail: `no task satisfies it — ${must.statement.slice(0, 90)}`,
+      });
+    }
+    // "A passing acceptance", read as "an acceptance test is recorded" — see the note above.
+    if (must.acceptanceTest === null || must.acceptanceTest.trim() === '') {
+      failures.push({
+        kind: 'no-acceptance-test',
+        humanId: must.humanId,
+        detail: `no acceptance test recorded — ${must.statement.slice(0, 90)}`,
       });
     }
   }

@@ -170,7 +170,13 @@ describe.skipIf(url === undefined)('screens in the gate and drift', () => {
     // A project per test, so one test's screens are never another's drift.
     await db.project.deleteMany({ where: { code: CODE } });
     expect((await post('/projects', { code: CODE, name: 'Screens Gate Test' })).status).toBe(201);
-    expect((await post(`/projects/${CODE}/phases`, { number: 1, name: 'Build the screens' })).status)
+    expect(
+      (await post(`/projects/${CODE}/phases`, {
+        number: 1,
+        name: 'Build the screens',
+        exitDemo: 'Every screen is captured and judged.',
+      })).status,
+    )
       .toBe(201);
     phaseId = (await db.phase.findFirstOrThrow({ where: { humanId: `${CODE}-P-1` } })).id;
   });

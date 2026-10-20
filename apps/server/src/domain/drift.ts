@@ -1,6 +1,6 @@
 import type { Db } from '../db.js';
 import { adrGraph } from './record.js';
-import { exitGate, screenStates } from './coverage.js';
+import { exitGate, screenStates, type GateFailure } from './coverage.js';
 import { findProject } from './projects.js';
 
 /**
@@ -53,6 +53,17 @@ export interface Drift {
  * and a threshold short enough to fire on a normal week is one that gets ignored.
  */
 const STALE_AFTER_DAYS = 14;
+
+/** A failed gate's reasons in a few words each, for a drift line that names them all. */
+const GATE_REASON: Record<GateFailure['kind'], string> = {
+  'no-exit-demo': 'no exit demo',
+  'uncovered-must': 'no task',
+  'no-acceptance-test': 'no acceptance test',
+  'unfinished-task': 'unfinished',
+  'open-critical': 'open finding',
+  'screen-unreviewed': 'capture unreviewed',
+  'screen-drifted': 'drifted-fix',
+};
 
 export async function driftFor(db: Db, code: string): Promise<Drift> {
   const project = await findProject(db, code);
@@ -154,32 +165,28 @@ export async function driftFor(db: Db, code: string): Promise<Drift> {
   //
   // A phase marked complete that would not pass its gate today. The gate refuses at the moment of
   // completion; this catches the ones that drifted *afterwards* — a Must added to a finished
-  // phase, or a task reopened.
+  // phase, a task reopened — and the ones completed before the gate asked what it asks now.
+  //
+  // **The gate is the only rule here** (FRM-T-026). This once checked the exit demo itself, beside
+  // the gate, and a phase could show as drift for a reason completing it never refused. One item
+  // per phase, naming every reason the gate gives.
   const complete = await db.phase.findMany({
     where: { projectId: project.id, deletedAt: null, status: 'complete' },
-    select: { humanId: true, name: true, exitDemo: true },
+    orderBy: { sortOrder: 'asc' },
+    select: { humanId: true, name: true },
   });
   for (const phase of complete) {
-    if (phase.exitDemo === null || phase.exitDemo.trim() === '') {
-      items.push({
-        category: 'failed-exit-gate',
-        humanId: phase.humanId,
-        title: phase.name,
-        detail: 'Marked complete with no exit demo — nothing states what finishing meant.',
-      });
-    }
-
     const gate = await exitGate(db, phase.humanId);
-    if (!gate.passed) {
-      items.push({
-        category: 'failed-exit-gate',
-        humanId: phase.humanId,
-        title: phase.name,
-        detail: `Complete, but would not pass its gate today: ${gate.failures
-          .map((f) => f.humanId)
-          .join(', ')}`,
-      });
-    }
+    if (gate.passed) continue;
+    items.push({
+      category: 'failed-exit-gate',
+      humanId: phase.humanId,
+      title: phase.name,
+      detail: `Complete, but would not pass its gate today: ${gate.failures
+        // The exit demo is the phase's own; every other reason names the thing in the way.
+        .map((f) => (f.humanId === phase.humanId ? GATE_REASON[f.kind] : `${f.humanId} (${GATE_REASON[f.kind]})`))
+        .join(', ')}`,
+    });
   }
 
   // ─── 5. Orphan ADRs (FRM-REQ-060) ────────────────────────────────────────

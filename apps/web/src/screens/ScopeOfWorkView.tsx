@@ -100,7 +100,8 @@ export function ScopeOfWorkView({ code }: { code: string }) {
 
               {phase.exitDemo === null ? (
                 <Alert tone="warning" title="No exit demo">
-                  Nothing states what would show this phase is finished.
+                  Nothing states what would show this phase is finished, and it cannot be completed
+                  until something does.
                 </Alert>
               ) : (
                 <div className="fm-muted">Exit demo: {phase.exitDemo}</div>

@@ -94,7 +94,11 @@ describe.skipIf(url === undefined)('an unconfirmed attribution is never truth', 
   beforeEach(async () => {
     await db.project.deleteMany({ where: { code: CODE } });
     await post('/projects', { code: CODE, name: 'Proposal Test' });
-    await post(`/projects/${CODE}/phases`, { number: 1, name: 'The phase' });
+    await post(`/projects/${CODE}/phases`, {
+      number: 1,
+      name: 'The phase',
+      exitDemo: 'The finished work is shown satisfying the requirement.',
+    });
 
     const project = await db.project.findFirstOrThrow({ where: { code: CODE } });
     const phase = await db.phase.findFirstOrThrow({ where: { humanId: `${CODE}-P-1` } });
@@ -104,6 +108,7 @@ describe.skipIf(url === undefined)('an unconfirmed attribution is never truth', 
       statement: 'Foreman shall be satisfied by finished work.',
       priority: 'M',
       phaseId: phase.id,
+      acceptanceTest: 'The work is done and confirmed.',
     });
     const { id: requirementId } = (await requirement.json()) as { id: string };
 

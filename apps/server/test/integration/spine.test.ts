@@ -670,7 +670,8 @@ describe.skipIf(url === undefined)('the spine', () => {
 
     it('stamps the dates a phase starting and finishing produce', async () => {
       await makeProject();
-      await post('/projects/SPN/phases', { number: 3, name: 'Three' });
+      // An exit demo, or the gate refuses the completion this test is about (FRM-REQ-056).
+      await post('/projects/SPN/phases', { number: 3, name: 'Three', exitDemo: 'Three is shown.' });
 
       await patch('/projects/SPN/phases/SPN-P-3', { status: 'active' });
       const started = await db.phase.findFirstOrThrow({ where: { humanId: 'SPN-P-3' } });
