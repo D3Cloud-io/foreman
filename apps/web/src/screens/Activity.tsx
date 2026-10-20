@@ -67,7 +67,7 @@ export function Activity({ code }: { code: string }) {
       failure: 'inline',
     })
       .then((outcome) => {
-        if (!outcome.ok) setFailure(outcome.message);
+        if (!outcome.ok && outcome.inFlight !== true) setFailure(outcome.message);
       })
       .finally(() => { setBusy(null); });
   };

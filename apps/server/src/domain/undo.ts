@@ -23,6 +23,7 @@ import {
   type LinkRows,
   type ResolvedLink,
 } from './links.js';
+import { afterSectionUndo } from './documents.js';
 import { rollupAfter } from './rollup.js';
 
 /**
@@ -393,6 +394,9 @@ async function undoEvent(
       before,
       after,
     });
+    // A section is read as part of its document: the document's version moves and a revision is
+    // written, as for any section write, or a reader holding the old ETag never sees the undo.
+    if (type === 'document_section') await afterSectionUndo(tx, actor, event.entityId);
     // Read back after `finishUndo`, so the reversal records where the row actually ended up.
     const restored = (await (table as { findUnique: (args: unknown) => Promise<unknown> }).findUnique(
       { where: { id: event.entityId } },

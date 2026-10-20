@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Select, Spinner } from '@d3cloud/ui';
 import { foreman, type StatusWrite, type TaskRow } from '../lib/api';
 import { statusWords, useMutate } from '../lib/mutate';
@@ -38,6 +38,12 @@ export function statusMessage(humanId: string, status: string): string {
   return `${humanId} marked ${statusLabel(status)}`;
 }
 
+/** One status choice, with the reason a blocked one was given. */
+interface Choice {
+  readonly status: string;
+  readonly reason: string | null;
+}
+
 export interface StatusControlProps {
   task: Pick<TaskRow, 'humanId' | 'status' | 'blockedReason'>;
   code: string;
@@ -58,9 +64,56 @@ export function StatusControl({ task, code, onChanged }: StatusControlProps) {
     setHeld(null);
   }, [task.status]);
 
+  // The status as last confirmed — by the server's answer, or by the screen — which a queued
+  // choice is compared against and an Undo returns to.
+  const settled = useRef(task.status);
+  useEffect(() => {
+    settled.current = task.status;
+  }, [task.status]);
+  // A write in flight, and the choice made while it was: sent when the first lands, not dropped.
+  const sending = useRef(false);
+  const queued = useRef<Choice | null>(null);
+
+  const send = (choice: Choice) => {
+    const from = settled.current;
+    if (choice.status === from) {
+      setAsked(null);
+      return;
+    }
+    sending.current = true;
+    setAsked(choice.status);
+    void mutate({
+      subject: task.humanId,
+      run: () =>
+        foreman.updateTask(code, task.humanId, {
+          status: choice.status,
+          ...(choice.reason === null ? {} : { blockedReason: choice.reason }),
+        }),
+      message: (result) => statusMessage(result.humanId, result.status),
+      apply: (result) => {
+        settled.current = result.status;
+        if (result.status !== task.status) setHeld(result.status);
+        onChanged(result);
+      },
+      undone: `Undone — ${task.humanId} is ${statusLabel(from)} again`,
+      onUndone: () => {
+        setHeld(null);
+        onChanged();
+      },
+    }).finally(() => {
+      sending.current = false;
+      const next = queued.current;
+      queued.current = null;
+      if (next === null) setAsked(null);
+      else send(next);
+    });
+  };
+
   const change = (status: string) => {
-    // Not disabled while pending: a disabled control drops focus. A second choice simply waits.
-    if (pending || status === task.status) return;
+    // Never compared with `task.status` alone: a choice made while one is in flight is measured
+    // against what that one will leave, and the latest choice is the one that counts.
+    const target = queued.current?.status ?? (sending.current ? asked : null) ?? settled.current;
+    if (status === target) return;
 
     // Blocked without a reason is refused by the server, and asking here is kinder than showing
     // that refusal — the reason is the whole value of recording that something is stuck.
@@ -70,27 +123,14 @@ export function StatusControl({ task, code, onChanged }: StatusControlProps) {
       if (reason === null || reason.trim().length === 0) return;
     }
 
-    setAsked(status);
-    void mutate({
-      subject: task.humanId,
-      run: () =>
-        foreman.updateTask(code, task.humanId, {
-          status,
-          ...(reason === null ? {} : { blockedReason: reason }),
-        }),
-      message: (result) => statusMessage(result.humanId, result.status),
-      apply: (result) => {
-        if (result.status !== task.status) setHeld(result.status);
-        onChanged(result);
-      },
-      undone: `Undone — ${task.humanId} is ${statusLabel(task.status)} again`,
-      onUndone: () => {
-        setHeld(null);
-        onChanged();
-      },
-    }).finally(() => {
-      setAsked(null);
-    });
+    // Not disabled while pending — a disabled control drops focus. A second choice waits for the
+    // first to land, shown in the control as the one that will be sent, and then goes.
+    if (sending.current) {
+      queued.current = { status, reason };
+      setAsked(status);
+      return;
+    }
+    send({ status, reason });
   };
 
   const shown = asked ?? held ?? task.status;

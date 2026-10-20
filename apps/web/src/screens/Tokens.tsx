@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -226,7 +226,7 @@ function IssueDialog({
     })
       .then((outcome) => {
         if (!outcome.ok) {
-          setError(outcome.message);
+          if (outcome.inFlight !== true) setError(outcome.message);
           return;
         }
         setName('');
@@ -305,6 +305,18 @@ function RevokeDialog({
 }) {
   const { mutate, pending } = useMutate();
   const [error, setError] = useState<string | null>(null);
+  // Keep token, not the dialog: `destructive` keeps focus off the danger button by focusing the
+  // dialog itself, and Enter on the safe choice is the point. Moved after Radix has placed it.
+  const keep = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (row === null) return undefined;
+    const frame = requestAnimationFrame(() => {
+      keep.current?.focus();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [row]);
 
   const revoke = (target: TokenRow) => {
     setError(null);
@@ -315,10 +327,11 @@ function RevokeDialog({
       refresh: onRevoked,
       // The server cannot put a token back, so the toast offers nothing to press.
       undoable: false,
-      failure: 'inline',
+      // A refusal goes in a toast as well as here, so closing the dialog mid-request loses nothing.
+      failure: 'toast',
     }).then((outcome) => {
       if (outcome.ok) onClose();
-      else setError(outcome.message);
+      else if (outcome.inFlight !== true) setError(outcome.message);
     });
   };
 
@@ -337,7 +350,9 @@ function RevokeDialog({
       footer={
         row === null ? undefined : (
           <>
-            <Button onClick={onClose}>Keep token</Button>
+            <Button ref={keep} onClick={onClose}>
+              Keep token
+            </Button>
             <Button
               variant="danger"
               loading={pending}

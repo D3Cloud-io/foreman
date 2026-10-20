@@ -7,8 +7,10 @@ import {
   draftSize,
   eventIdsOf,
   failureMessage,
+  oneAtATime,
   rolledUpOf,
   runMutation,
+  STILL_SAVING,
   undoOutcome,
   withRollups,
 } from './mutate';
@@ -194,6 +196,39 @@ describe('runMutation', () => {
 
     await runMutation({ subject: 'BND-T-9.4', run: () => Promise.reject(refused), message: () => 'never' }, toast);
     expect(shown[0]?.message).toBe('BND-T-9.4: title is required');
+  });
+});
+
+describe('oneAtATime', () => {
+  it('refuses a second write while the first is with the server, and says so', async () => {
+    const { shown, toast } = recorder();
+    const busy: boolean[] = [];
+    const mutate = oneAtATime(toast, (b) => busy.push(b));
+    let sent = 0;
+    let land: () => void = () => undefined;
+    const slow = () => {
+      sent += 1;
+      return new Promise<{ auditEventIds: string[] }>((resolve) => {
+        land = () => { resolve({ auditEventIds: [] }); };
+      });
+    };
+
+    // Two presses in the same tick, before anything renders.
+    const first = mutate({ subject: 'PI-007', run: slow, message: () => 'Thought added' });
+    const second = await mutate({ subject: 'PI-007', run: slow, message: () => 'Thought added' });
+    expect(second).toEqual({ ok: false, error: null, message: STILL_SAVING, inFlight: true });
+    expect(sent).toBe(1);
+    expect(shown[0]?.message).toBe(STILL_SAVING);
+
+    land();
+    expect((await first).ok).toBe(true);
+    expect(busy).toEqual([true, false]);
+
+    // Once it has landed, the next one goes.
+    const third = mutate({ subject: 'PI-007', run: slow, message: () => 'Thought added' });
+    land();
+    expect((await third).ok).toBe(true);
+    expect(sent).toBe(2);
   });
 });
 

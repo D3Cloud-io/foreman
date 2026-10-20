@@ -71,7 +71,7 @@ function CiLine({ ci }: { ci: Brief['ci'] }) {
 }
 
 export function ProjectOverview({ code }: { code: string }) {
-  const { state, reload } = useAsync(() => foreman.brief(code), [code]);
+  const { state, refresh } = useAsync(() => foreman.brief(code), [code]);
   // The brief does not carry the group (FRM-T-17.2 adds scope to it); the project row does.
   const project = useAsync(() => foreman.project(code), [code]);
   const groups = useAsync(() => foreman.groups(), []);
@@ -199,7 +199,7 @@ export function ProjectOverview({ code }: { code: string }) {
               // The sidebar and the breadcrumb read a cached brief. Without this they keep showing
               // the old name until a reload, on the one screen where you just changed it.
               forgetBrief(code);
-              reload();
+              refresh();
             }}
             initial={{
               name: brief.project.name,

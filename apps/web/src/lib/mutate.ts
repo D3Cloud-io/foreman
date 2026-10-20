@@ -49,7 +49,19 @@ export interface MutationSpec<R> {
 
 export type MutationOutcome<R> =
   | { readonly ok: true; readonly value: R }
-  | { readonly ok: false; readonly error: unknown; readonly message: string };
+  | {
+      readonly ok: false;
+      readonly error: unknown;
+      readonly message: string;
+      /**
+       * Refused before it was sent, because this hook's last write has not landed. Said in a toast
+       * already, so a form shows nothing more for it.
+       */
+      readonly inFlight?: true;
+    };
+
+/** What a second write is told while the first is still with the server. */
+export const STILL_SAVING = 'Still saving the last change — this one was not sent twice.';
 
 /** The events a write's answer carries — the record's own first, its roll-ups after. */
 export function eventIdsOf(result: unknown): readonly string[] {
@@ -167,15 +179,40 @@ export async function undoMutation<R>(
 }
 
 /**
+ * One write at a time (FRM-T-18.4). A second call while the first is with the server is refused
+ * before it is sent, and says so: a double ⌘↵ or a double click must not store a thing twice. The
+ * flag is plain state outside React, so two calls in the same tick — before any render — are
+ * still one.
+ */
+export function oneAtATime(toast: Toaster, onBusy: (busy: boolean) => void = () => undefined) {
+  let sending = false;
+  return async <R>(spec: MutationSpec<R>): Promise<MutationOutcome<R>> => {
+    if (sending) {
+      toast.show({ message: STILL_SAVING });
+      return { ok: false, error: null, message: STILL_SAVING, inFlight: true };
+    }
+    sending = true;
+    onBusy(true);
+    try {
+      return await runMutation(spec, toast);
+    } finally {
+      sending = false;
+      onBusy(false);
+    }
+  };
+}
+
+/**
  * Run writes the one way. Each hook instance knows whether its own write is in flight, so a
- * control can show that it is waiting without the screen around it doing anything.
+ * control can show that it is waiting without the screen around it doing anything — and refuses a
+ * second write until the first has landed (`oneAtATime`).
  */
 export function useMutate(): {
   mutate: <R>(spec: MutationSpec<R>) => Promise<MutationOutcome<R>>;
   pending: boolean;
 } {
   const toast = useToast();
-  const [inFlight, setInFlight] = useState(0);
+  const [pending, setPending] = useState(false);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -184,19 +221,21 @@ export function useMutate(): {
     };
   }, []);
 
-  const mutate = useCallback(
-    async <R>(spec: MutationSpec<R>): Promise<MutationOutcome<R>> => {
-      setInFlight((n) => n + 1);
-      try {
-        return await runMutation(spec, toast);
-      } finally {
-        if (mounted.current) setInFlight((n) => Math.max(0, n - 1));
-      }
-    },
-    [toast],
+  // Made once per hook instance: the in-flight flag must survive every render, including the one
+  // its own `setPending` causes. The toast is read through a ref so a new `useToast()` object
+  // never makes a second mutator with a fresh flag.
+  const latestToast = useRef(toast);
+  latestToast.current = toast;
+  const [mutate] = useState(() =>
+    oneAtATime(
+      { show: (options) => latestToast.current.show(options) },
+      (busy) => {
+        if (mounted.current) setPending(busy);
+      },
+    ),
   );
 
-  return { mutate, pending: inFlight > 0 };
+  return { mutate, pending };
 }
 
 // ─── Drafts ──────────────────────────────────────────────────────────────────

@@ -128,6 +128,7 @@ export function EditForm({
           onSaved();
           return;
         }
+        if (outcome.inFlight === true) return;
         const caught = outcome.error;
         if (caught instanceof ApiError) {
           const body = caught.body as
