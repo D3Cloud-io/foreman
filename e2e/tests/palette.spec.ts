@@ -84,7 +84,8 @@ test.describe('on a laptop', () => {
       ['EXMP-CR-001', /\/findings\/EXMP-CR-001$/],
       ['PI-001', /\/project-ideas\/PI-001$/],
     ] as const) {
-      await page.keyboard.press('/');
+      // Each jump lands on a new page: wait for its shell to listen before pressing '/'.
+      await openWithSlash(page);
       const input = paletteOf(page).getByRole('combobox');
       await input.fill(id);
       await input.press('Enter');
@@ -94,7 +95,7 @@ test.describe('on a laptop', () => {
 
   test('a word lists Go to first, and Enter on a screen goes there', async ({ page }) => {
     await signIn(page);
-    await page.keyboard.press('/');
+    await openWithSlash(page);
     const palette = paletteOf(page);
     await expect(palette).toBeVisible();
     // With no query, the screens alone.
