@@ -756,7 +756,13 @@ export interface RegressionFlag {
 }
 
 export interface DriftItem {
-  category: 'coverage-hole' | 'stale-task' | 'fired-tripwire' | 'failed-exit-gate' | 'orphan-adr';
+  category:
+    | 'coverage-hole'
+    | 'stale-task'
+    | 'fired-tripwire'
+    | 'failed-exit-gate'
+    | 'orphan-adr'
+    | 'screen-drift';
   humanId: string;
   title: string;
   detail: string;
