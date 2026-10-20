@@ -36,12 +36,17 @@ test.describe('the exit gate, from the console (FRM-REQ-056)', () => {
     const api = page.request;
 
     // A phase number nothing else uses, so reruns never collide with the seed or with each other.
-    const number = 9000 + (Date.now() % 900_000);
-    const created = await api.post(`/api/projects/${CODE}/phases`, {
-      data: { number, name: `Exit gate e2e ${String(number)}`, exitDemo: 'Nothing, yet.' },
-    });
-    expect(created.status(), await created.text()).toBe(201);
-    const phase = (await created.json()) as PhaseRow;
+    // The column is numeric(6,2), so four digits at most; a taken number is tried again.
+    let number = 0;
+    let created = null;
+    for (let attempt = 0; attempt < 5 && created?.status() !== 201; attempt += 1) {
+      number = 1000 + Math.floor(Math.random() * 9000);
+      created = await api.post(`/api/projects/${CODE}/phases`, {
+        data: { number, name: `Exit gate e2e ${String(number)}`, exitDemo: 'Nothing, yet.' },
+      });
+    }
+    expect(created?.status(), await created?.text()).toBe(201);
+    const phase = (await created?.json()) as PhaseRow;
 
     const must = await api.post(`/api/projects/${CODE}/requirements`, {
       data: {
