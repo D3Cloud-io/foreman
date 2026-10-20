@@ -34,7 +34,7 @@ export function createServer({ client, name, version }: ServerOptions): McpServe
       instructions:
         'Foreman holds the plan-of-record for every D3 Cloud project: requirements, phases, ' +
         'tasks, ADRs, findings. Call foreman_brief before starting work on a project. Its ' +
-        '`guidelines` are standing decisions for every project (GL-<SEQ>): follow them, and read ' +
+        '`guidelines` are the standing decisions that apply to it (GL-<SEQ>): follow them, and read ' +
         'one in full with foreman_get, or all of them at foreman://guidelines.',
     },
   );

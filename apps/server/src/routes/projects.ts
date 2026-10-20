@@ -141,9 +141,20 @@ export function projectRoutes(db: Db): Router {
         where: { deletedAt: null, ...(after === null ? {} : { code: { gt: after } }) },
         orderBy: { code: 'asc' },
         take: query.limit + 1,
+        // The family each belongs to, by the names a link uses, as `GET /:code` gives it
+        // (FRM-ADR-024). Still sorted by code for the keyset; group order is `/api/groups`'.
+        include: {
+          group: { select: { humanId: true, name: true, slug: true, accent: true, deletedAt: true } },
+        },
       });
 
-      const items = projects.slice(0, query.limit);
+      const items = projects.slice(0, query.limit).map(({ group, ...project }) => ({
+        ...project,
+        group:
+          group === null || group.deletedAt !== null
+            ? null
+            : { humanId: group.humanId, name: group.name, slug: group.slug, accent: group.accent },
+      }));
       const hasMore = projects.length > query.limit;
       res.json({
         items,

@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import { Priority, Size } from '../enums.js';
+import { GroupAccent, Priority, Size } from '../enums.js';
 import { AnyId, HumanId, parseAnyId, ProjectCode } from '../ids.js';
+import { GroupArg } from './groups.js';
 import { IdeaFieldKey } from './record.js';
 import { TASK_BODY_MAX, TaskFiles } from './spine.js';
 
@@ -26,6 +27,9 @@ import { TASK_BODY_MAX, TaskFiles } from './spine.js';
  * `screen` is here because a screen is a name and a route (FRM-REQ-189); its proposals, captures
  * and components arrive through the API with a write token, from the Figma import and CI.
  *
+ * `group` is here because a group is a name and three optional lines (FRM-REQ-238, FRM-ADR-024):
+ * the ceiling is full, so the family a project belongs to is made by the verb that makes projects.
+ *
  * ADRs, risks, decisions and terms are deliberately still absent. Each is a record with a body —
  * context, decision and consequences on an ADR; likelihood, impact and a tripwire on a risk — and
  * `foreman_update` cannot write any of those fields. Creating one over MCP would make a titled
@@ -39,6 +43,7 @@ export const CreatableKind = z.enum([
   'idea',
   'project_idea',
   'screen',
+  'group',
 ]);
 export type CreatableKind = z.infer<typeof CreatableKind>;
 
@@ -69,13 +74,25 @@ function fromJsonText(value: unknown): unknown {
  * refinement below enforces it; adding a column to a kind means adding its field here.
  */
 export const CREATE_FIELDS: Readonly<Record<CreatableKind, readonly string[]>> = {
-  project: ['pitch'],
+  project: ['pitch', 'group'],
   project_idea: ['pitch', 'canvas'],
   requirement: ['priority', 'phase'],
   task: ['body', 'doneWhen', 'size', 'phase', 'satisfies'],
   phase: ['number', 'size'],
   idea: ['body'],
   screen: ['route'],
+  // `text` is its name and `pitch` its one-line description: a group's line, like a project's.
+  group: ['pitch', 'siteUrl', 'accent'],
+};
+
+/** The kinds that belong to no project, so a `project` code given for one is refused. */
+const PROJECTLESS: Readonly<Partial<Record<CreatableKind, string>>> = {
+  project_idea:
+    'a project idea belongs to no project — it is a candidate for one. Convert it from ' +
+    'the console when it becomes real, which is when the code is decided',
+  group:
+    'a group belongs to no project — projects belong to it. Give a project its group with ' +
+    'foreman_create kind project or foreman_update on the project',
 };
 
 const ALWAYS_CREATE = new Set(['project', 'kind', 'text']);
@@ -87,12 +104,12 @@ export const CreateInput = z.strictObject({
    * says which kind needed it rather than "expected string".
    */
   project: ProjectCode.optional().describe(
-    'The project code, e.g. BND — or the new code, creating one. Omit for a project idea',
+    'The project code, e.g. BND, or the new one for kind project. Omit for a project idea or group',
   ),
   kind: CreatableKind,
   /** What the entity says. A requirement's statement, a task's, phase's or project's name. */
   text: z.string().min(1).max(4000).describe('The statement, title or name'),
-  /** Project only. Its one-line pitch. */
+  /** A project's one-line pitch, a project idea's, or a group's one-line description. */
   pitch: z.string().max(2000).optional(),
   /**
    * Markdown. A task's body — its context, in the owner's words — or an idea's line of what it
@@ -109,6 +126,15 @@ export const CreateInput = z.strictObject({
   route: z.string().max(500).optional(),
   /** Requirements this task satisfies. */
   satisfies: z.array(HumanId).optional(),
+  /**
+   * Project only: the group it joins, at the end of that group's order — `GRP-001` or a slug
+   * (FRM-REQ-238). Absent leaves it ungrouped. Undescribed, like `route`: the budget is spent.
+   */
+  group: GroupArg.optional(),
+  /** Group only: its site, an absolute https URL; the API refuses anything else. */
+  siteUrl: z.string().max(2000).optional(),
+  /** Group only: one of the design system's product accents. Absent is `neutral`. */
+  accent: GroupAccent.optional(),
   /**
    * Project idea only: its whole canvas, so one call records an idea rather than seven
    * (FRM-ADR-017). Sections are Markdown; lists are plain items — the shim gives each checklist item
@@ -142,15 +168,10 @@ export const CreateInput = z.strictObject({
     });
   }
 
-  if (value.kind === 'project_idea') {
+  const projectless = PROJECTLESS[value.kind];
+  if (projectless !== undefined) {
     if (value.project !== undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['project'],
-        message:
-          'a project idea belongs to no project — it is a candidate for one. Convert it from ' +
-          'the console when it becomes real, which is when the code is decided',
-      });
+      ctx.addIssue({ code: 'custom', path: ['project'], message: projectless });
     }
     return;
   }
@@ -173,6 +194,8 @@ export type CreateInput = z.infer<typeof CreateInput>;
  * as a `title` a phase does not have) all reported success and changed nothing.
  */
 const FINDING_FIELDS = ['text', 'fixedCommitSha'] as const;
+/** Not a human ID's type segment: what a bare project code is keyed by in the tables below. */
+export const PROJECT_ID_TYPE = 'PROJECT';
 export const UPDATE_FIELDS: Readonly<Record<string, readonly string[]>> = {
   REQ: ['text', 'priority', 'phase'],
   T: ['text', 'size', 'doneWhen', 'body', 'phase', 'files'],
@@ -183,6 +206,9 @@ export const UPDATE_FIELDS: Readonly<Record<string, readonly string[]>> = {
   API: FINDING_FIELDS,
   IDEA: ['text', 'body', 'reason'],
   PI: ['text', 'body', 'reason', 'section'],
+  // A project, addressed by its bare code (FRM-REQ-238): `text` is its name, `body` its pitch,
+  // and `group` moves it — to the end of that group's order, or with null out of every group.
+  [PROJECT_ID_TYPE]: ['text', 'body', 'group'],
 };
 
 const KIND_NAMES: Readonly<Record<string, string>> = {
@@ -195,10 +221,29 @@ const KIND_NAMES: Readonly<Record<string, string>> = {
   API: 'finding',
   IDEA: 'idea',
   PI: 'project idea',
+  [PROJECT_ID_TYPE]: 'project',
 };
 
+/**
+ * What `foreman_update` can address: any ID Foreman issues, or a project by its bare code — the
+ * one entity whose identifier is not a human ID, and the one a move between groups changes.
+ */
+export const UpdateTarget = z
+  .string()
+  .refine(
+    (value) => parseAnyId(value) !== null || ProjectCode.safeParse(value).success,
+    'expected <CODE>-<TYPE>-<SEQ>, PI-<SEQ>, or a project code',
+  );
+
+/** The type segment of an `UpdateTarget`: an ID's own, or `PROJECT` for a bare project code. */
+export function updateTargetType(value: string): string | undefined {
+  const parsed = parseAnyId(value);
+  if (parsed !== null) return parsed.type;
+  return ProjectCode.safeParse(value).success ? PROJECT_ID_TYPE : undefined;
+}
+
 export const UpdateInput = z.strictObject({
-  id: AnyId.describe('The entity to change, e.g. BND-T-0.3 or PI-007'),
+  id: UpdateTarget.describe('The entity to change, e.g. BND-T-0.3, PI-007, or a project code'),
   text: z.string().min(1).max(4000).optional().describe('Replaces the statement, title or name'),
   priority: Priority.optional(),
   size: Size.optional(),
@@ -220,7 +265,7 @@ export const UpdateInput = z.strictObject({
    * have it land in the right place on the canvas — the section list itself lives in shared.
    */
   section: IdeaFieldKey.optional().describe(
-    'Project idea only: the canvas field text writes. Lists take one item per line, replacing the list',
+    'Project idea only: the canvas field text writes; a list takes one item per line',
   ),
   phase: HumanId.nullish().describe('Move to this phase, or null for the backlog'),
   /**
@@ -239,10 +284,12 @@ export const UpdateInput = z.strictObject({
    * every other kind, the same shape as `phase` is refused for anything but a task or requirement.
    */
   files: TaskFiles.optional().describe(
-    'Task only: replaces its declared files/globs wholesale. Repo-relative, no leading / or .. segment, max 100',
+    'Task only: replaces its declared files/globs; repo-relative',
   ),
+  /** Project only: move it to this group (`GRP-001` or a slug), or null for none (FRM-REQ-238). */
+  group: GroupArg.nullish().describe('GRP-n or slug; null ungroups'),
 }).superRefine((value, ctx) => {
-  const type = parseAnyId(value.id)?.type;
+  const type = updateTargetType(value.id);
   const takes = type === undefined ? undefined : UPDATE_FIELDS[type];
   // An ID this tool cannot change at all is refused by the tool, with its own message.
   if (type === undefined || takes === undefined) return;

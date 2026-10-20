@@ -3,8 +3,10 @@ import {
   type GuidelineCreate,
   type GuidelineScope,
   type GuidelineStatus,
+  type BriefGuideline,
   type GuidelineSummary,
   type GuidelineUpdate,
+  type ScopedGuidelineSummary,
 } from '@foreman/shared';
 import type { Db } from '../db.js';
 import { record, type Actor, type TransactionClient } from './audit.js';
@@ -128,6 +130,70 @@ export async function activeGuidelineSummaries(db: Db): Promise<GuidelineSummary
     orderBy: [{ area: 'asc' }, { seq: 'asc' }],
     select: { humanId: true, title: true, decision: true },
   });
+}
+
+/**
+ * The active guidelines that apply to one group's projects, as a brief carries them
+ * (FRM-REQ-236): every `all` one, and those scoped to this group. `null` is the ungrouped, which
+ * get only the `all` ones — a guideline scoped to groups names groups, and the ungrouped are in
+ * none. A scoped one says so, so a session can tell a family's rule from the ecosystem's.
+ */
+export async function guidelinesForGroup(
+  db: Db,
+  groupId: string | null,
+): Promise<BriefGuideline[]> {
+  const rows = await db.guideline.findMany({
+    where: {
+      deletedAt: null,
+      status: 'active',
+      OR: [
+        { appliesTo: 'all' },
+        ...(groupId === null
+          ? []
+          : [{ appliesTo: 'groups' as const, groups: { some: { groupId } } }]),
+      ],
+    },
+    orderBy: [{ area: 'asc' }, { seq: 'asc' }],
+    select: { humanId: true, title: true, decision: true, appliesTo: true },
+  });
+  return rows.map(({ appliesTo, ...summary }) =>
+    appliesTo === 'groups' ? { ...summary, appliesTo } : summary,
+  );
+}
+
+/**
+ * Every active guideline with where it applies, as the portfolio carries them (FRM-REQ-237).
+ * Narrowed to a group — or to the ungrouped, with `null` — it is the ones that apply there.
+ */
+export async function scopedGuidelineSummaries(
+  db: Db,
+  narrow?: { groupId: string | null },
+): Promise<ScopedGuidelineSummary[]> {
+  const rows = await db.guideline.findMany({
+    where: {
+      deletedAt: null,
+      status: 'active',
+      ...(narrow === undefined
+        ? {}
+        : {
+            OR: [
+              { appliesTo: 'all' as const },
+              ...(narrow.groupId === null
+                ? []
+                : [{ appliesTo: 'groups' as const, groups: { some: { groupId: narrow.groupId } } }]),
+            ],
+          }),
+    },
+    orderBy: [{ area: 'asc' }, { seq: 'asc' }],
+    select: {
+      humanId: true,
+      title: true,
+      decision: true,
+      appliesTo: true,
+      groups: SELECT.groups,
+    },
+  });
+  return rows.map((row) => ({ ...row, groups: row.groups.map((g) => g.group.humanId) }));
 }
 
 export async function findGuideline(db: Db, humanId: string) {

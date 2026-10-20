@@ -4,6 +4,7 @@ import {
   CACHE,
   CoverageInput,
   CreatableKind,
+  CreateInput,
   FindingsInput,
   gateForDelete,
   gateForLink,
@@ -13,6 +14,7 @@ import {
   PortfolioInput,
   SEARCHABLE_TYPES,
   SearchInput,
+  UpdateInput,
 } from '@foreman/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -129,6 +131,19 @@ describe('listings carry cache metadata', () => {
 
 describe('the tools call the API they claim to', () => {
   const clientWith = (get: ReturnType<typeof vi.fn>) => ({ get }) as never;
+
+  it('foreman_portfolio narrows to a group, and returns the grouped sections without the flat copy', async () => {
+    const get = vi
+      .fn()
+      .mockResolvedValue({ items: [{ code: 'KURO' }], groups: [], ungrouped: null, guidelines: [] });
+    const tool = READ_TOOLS.find((t) => t.name === 'foreman_portfolio');
+    const result = await tool?.run(clientWith(get), { group: 'dormice' });
+    expect(get).toHaveBeenCalledWith('/api/portfolio', { group: 'dormice' });
+    expect(result).toEqual({ groups: [], ungrouped: null, guidelines: [] });
+
+    await tool?.run(clientWith(get), {});
+    expect(get).toHaveBeenLastCalledWith('/api/portfolio');
+  });
 
   it('foreman_brief asks for that project’s brief', async () => {
     const get = vi.fn().mockResolvedValue({ project: { code: 'BND' } });
@@ -401,7 +416,8 @@ describe('the gate in front of the write tools (T-2.9, FRM-REQ-090, FRM-REQ-091)
     // than offered broken — and this is the assertion that keeps that decision deliberate.
     // An idea qualifies on exactly that test: its whole body is a title and a paragraph, and
     // `foreman_update` writes both. So does a project idea, whose pitch is the same shape. A
-    // screen is a name and a route; its images arrive through the API (FRM-REQ-189).
+    // screen is a name and a route; its images arrive through the API (FRM-REQ-189). A group is
+    // a name, a line, a site and an accent, and every one of them is a create field (FRM-REQ-238).
     expect(CreatableKind.options).toEqual([
       'project',
       'requirement',
@@ -410,7 +426,73 @@ describe('the gate in front of the write tools (T-2.9, FRM-REQ-090, FRM-REQ-091)
       'idea',
       'project_idea',
       'screen',
+      'group',
     ]);
+  });
+
+  it('creates a group with no project, its line as the description (FRM-REQ-238)', async () => {
+    const post = vi.fn().mockResolvedValue({});
+    const create = WRITE_TOOLS.find((t) => t.name === 'foreman_create');
+    await create?.run({ post } as never, {
+      kind: 'group',
+      text: 'Dormice',
+      pitch: 'The theme is that there is no theme.',
+      siteUrl: 'https://dormice.ai',
+      accent: 'neutral',
+    });
+    expect(post).toHaveBeenCalledWith('/api/groups', {
+      name: 'Dormice',
+      description: 'The theme is that there is no theme.',
+      siteUrl: 'https://dormice.ai',
+      accent: 'neutral',
+    });
+  });
+
+  it('refuses a group filed under a project, and a group field on any kind but a project', () => {
+    const asGroup = CreateInput.safeParse({ project: 'BND', kind: 'group', text: 'Dormice' });
+    expect(asGroup.success).toBe(false);
+    expect(asGroup.error?.issues.map((i) => i.path.join('.'))).toEqual(['project']);
+
+    const onTask = CreateInput.safeParse({ project: 'BND', kind: 'task', text: 'x', group: 'dormice' });
+    expect(onTask.error?.issues[0]?.message).toMatch(/a task has no group/);
+
+    const accentOnProject = CreateInput.safeParse({
+      project: 'BND',
+      kind: 'project',
+      text: 'x',
+      accent: 'bindery',
+    });
+    expect(accentOnProject.error?.issues[0]?.message).toMatch(/a project has no accent/);
+  });
+
+  it('creates a project in a group', async () => {
+    const post = vi.fn().mockResolvedValue({});
+    const create = WRITE_TOOLS.find((t) => t.name === 'foreman_create');
+    await create?.run({ post } as never, { project: 'KURO', kind: 'project', text: 'Kurō', group: 'GRP-002' });
+    expect(post).toHaveBeenCalledWith('/api/projects', { code: 'KURO', name: 'Kurō', group: 'GRP-002' });
+  });
+
+  it('moves a project between groups by its code, and null ungroups it', async () => {
+    const patch = vi.fn().mockResolvedValue({});
+    const update = WRITE_TOOLS.find((t) => t.name === 'foreman_update');
+    await update?.run({ patch } as never, { id: 'KURO', group: 'dormice' });
+    expect(patch).toHaveBeenLastCalledWith('/api/projects/KURO', { group: 'dormice' });
+    await update?.run({ patch } as never, { id: 'KURO', group: null, text: 'Kurō', body: 'Anime.' });
+    expect(patch).toHaveBeenLastCalledWith('/api/projects/KURO', {
+      name: 'Kurō',
+      pitch: 'Anime.',
+      group: null,
+    });
+  });
+
+  it('refuses a group on anything but a project, and a project field it does not store', () => {
+    expect(UpdateInput.safeParse({ id: 'BND-T-0.3', group: 'dormice' }).error?.issues[0]?.message).toMatch(
+      /is a task, which has no group/,
+    );
+    expect(UpdateInput.safeParse({ id: 'KURO', size: 'M' }).error?.issues[0]?.message).toMatch(
+      /KURO is a project, which has no size/,
+    );
+    expect(UpdateInput.safeParse({ id: 'not a code' }).success).toBe(false);
   });
 
   it('creates a screen inside its project, from a name and a route', async () => {

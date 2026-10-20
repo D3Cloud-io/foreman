@@ -88,6 +88,13 @@ export type GroupUpdate = z.infer<typeof GroupUpdate>;
 export const GroupRef = z.string().trim().min(1).max(80);
 export type GroupRef = z.infer<typeof GroupRef>;
 
+/**
+ * A group as an MCP argument names it: unbounded, because the route it reaches parses it as a
+ * `GroupRef` — and `minLength`/`maxLength` here would be paid on every turn by every session, for
+ * a limit the API already enforces and names in its refusal (the tool-definition budget is full).
+ */
+export const GroupArg = z.string();
+
 function noDuplicates(values: readonly string[]): boolean {
   return new Set(values).size === values.length;
 }

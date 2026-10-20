@@ -13,9 +13,11 @@ import {
   parseAnyId,
   parseHumanId,
   parseIdeaList,
+  PROJECT_ID_TYPE,
   type IdeaListKey,
   SetStatusInput,
   UpdateInput,
+  updateTargetType,
   type GateDecision,
 } from '@foreman/shared';
 import type { ForemanClient } from '../client.js';
@@ -75,7 +77,8 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
     name: 'foreman_create',
     title: 'Create',
     description:
-      'Add a project, a project idea, or a requirement, task, phase, idea or screen inside a project.',
+      'Add a project, a project idea, a group, or a requirement, task, phase, idea or screen inside ' +
+      'a project.',
     inputSchema: CreateInput,
     // Creating loses nothing, so it is never gated.
     gate: () => Promise.resolve({ gated: false }),
@@ -94,12 +97,23 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
             ...canvasBody(args.canvas),
           });
         case 'project':
-          // The only kind that is not created *inside* a project, so it posts to a different
-          // path: `project` is the code to give it rather than the code to file it under.
+          // Not created *inside* a project, so it posts to a different path: `project` is the
+          // code to give it rather than the code to file it under. `group` puts it at the end of
+          // that group's order (FRM-REQ-238).
           return client.post('/api/projects', {
             code: args.project ?? '',
             name: args.text,
             ...(args.pitch === undefined ? {} : { pitch: args.pitch }),
+            ...(args.group === undefined ? {} : { group: args.group }),
+          });
+        case 'group':
+          // A family of projects (FRM-ADR-024): no project of its own, so no project path. It
+          // joins the end of the group order; reordering is the console's.
+          return client.post('/api/groups', {
+            name: args.text,
+            ...(args.pitch === undefined ? {} : { description: args.pitch }),
+            ...(args.siteUrl === undefined ? {} : { siteUrl: args.siteUrl }),
+            ...(args.accent === undefined ? {} : { accent: args.accent }),
           });
         case 'idea':
           body['title'] = args.text;
@@ -141,8 +155,8 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
     name: 'foreman_update',
     title: 'Update',
     description:
-      'Change an entity’s text, body, priority, size, phase or (a task) its declared files. A field ' +
-      'its kind does not store is refused.',
+      'Change an entity’s text, body, priority, size, phase, a task’s declared files or a ' +
+      'project’s group. A field its kind does not store is refused.',
     inputSchema: UpdateInput,
     gate: (_client, input) => {
       const args = UpdateInput.parse(input);
@@ -153,6 +167,15 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
       const args = UpdateInput.parse(input);
       const kind = kindOf(args.id);
       const body: Record<string, unknown> = {};
+      if (kind === 'projects') {
+        // A project by its bare code: its name, its pitch, and its group — a move to the end of
+        // that group's order, or with null out of every group (FRM-REQ-238). Everything else was
+        // refused by `UpdateInput` (UPDATE_FIELDS).
+        if (args.text !== undefined) body['name'] = args.text;
+        if (args.body !== undefined) body['pitch'] = args.body;
+        if (args.group !== undefined) body['group'] = args.group;
+        return client.patch(`/api/projects/${args.id}`, body);
+      }
       if (kind === 'project-ideas') {
         // `text` is the title unless a canvas field is named, in which case it is that field — a
         // section's Markdown, or a list written one item per line. `body` is the pitch. No project
@@ -206,7 +229,7 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
     name: 'foreman_set_status',
     title: 'Set status',
     description:
-      'Move a task, phase or finding to a new status. Blocked needs a reason; going backwards, ' +
+      'Move a task, phase or finding to a new status. Blocked needs a reason; regressing, ' +
       'cancelling and completing a phase are confirmed first.',
     inputSchema: SetStatusInput,
     gate: async (client, input) => {
@@ -240,8 +263,8 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
     name: 'foreman_delete',
     title: 'Delete an idea',
     description:
-      'Drop an idea from the list. Ideas only — everything else is cited by something and is ' +
-      'deleted from the console. Soft, undoable, and always confirmed first.',
+      'Delete an idea or project idea. Anything else is cited by something, so is deleted from the ' +
+      'console. Soft, undoable, confirmed first.',
     inputSchema: DeleteInput,
     // Always gated, even though an idea is the cheapest thing here to lose. A gate that applies
     // only to expensive deletions teaches that an ungated one is safe, and this is the verb whose
@@ -262,7 +285,7 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
     title: 'Link',
     description:
       'Cite one entity from another: a task satisfies a requirement, a finding violates one, an ' +
-      'ADR supersedes another, a task depends_on a task it cannot start before. Unlinking is ' +
+      'ADR supersedes another, a task depends_on one it cannot start before. Unlinking is ' +
       'confirmed first.',
     inputSchema: LinkInput,
     gate: (_client, input) => Promise.resolve(gateForLink(LinkInput.parse(input).remove)),
@@ -275,8 +298,8 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
     name: 'foreman_attribute',
     title: 'Attribute a commit',
     description:
-      'Say which task a commit was work on. This is the strongest signal — the other two guess ' +
-      'from the message or the files — so a declaration is recorded as confirmed.',
+      'Declare which task a commit was work on. Recorded as confirmed, unlike the guesses from its ' +
+      'message or files.',
     inputSchema: AttributeInput,
     gate: (_client, input) => Promise.resolve(gateForAttribute(AttributeInput.parse(input).remove)),
     run: async (client, input) => {
@@ -330,10 +353,13 @@ function canvasBody(canvas: CreateInput['canvas']): Record<string, unknown> {
   };
 }
 
-/** The path segment for an entity's kind, from its human ID. */
+/** The path segment for an entity's kind, from its human ID — or a project's bare code. */
 function kindOf(humanId: string): string {
-  const parsed = parseAnyId(humanId);
-  switch (parsed?.type) {
+  switch (updateTargetType(humanId)) {
+    // A project is addressed by its code, which is not a human ID; only `foreman_update` takes one,
+    // and `/api/projects/:code` is its path whole.
+    case PROJECT_ID_TYPE:
+      return 'projects';
     case 'REQ':
       return 'requirements';
     case 'T':

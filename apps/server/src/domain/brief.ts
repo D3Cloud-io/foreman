@@ -1,8 +1,8 @@
-import type { GuidelineSummary } from '@foreman/shared';
+import type { BriefGuideline } from '@foreman/shared';
 import type { Db, Prisma } from '../db.js';
 import { driftFor, type DriftCategory } from './drift.js';
 import { NotFound } from './errors.js';
-import { activeGuidelineSummaries } from './guidelines.js';
+import { guidelinesForGroup } from './guidelines.js';
 import { phaseInFlight } from './wherewestand.js';
 
 /**
@@ -44,6 +44,8 @@ export interface Brief {
     readonly name: string;
     readonly lifecycle: string;
     readonly pitch: string | null;
+    /** The family it belongs to (FRM-ADR-024), or null for none. Its guidelines follow from it. */
+    readonly group: { readonly humanId: string; readonly name: string; readonly slug: string } | null;
   };
   readonly activePhase: {
     readonly humanId: string;
@@ -124,12 +126,14 @@ export interface Brief {
     readonly at: string;
   }[];
   /**
-   * The ecosystem's standing decisions (FRM-REQ-187): every active guideline, as its ID, title and
-   * decision. Here so that the one call a session starts with also tells it the house rules —
-   * `foreman_get GL-004` has the reasoning. Identical in every project's brief, and budgeted on its
-   * own (`GUIDELINES_TOKEN_BUDGET`) rather than against the project's state.
+   * The standing decisions that apply to this project (FRM-REQ-187, FRM-REQ-236): every active
+   * guideline for all projects, and those scoped to its group — marked `appliesTo: 'groups'` — as
+   * ID, title and decision. Here so that the one call a session starts with also tells it the house
+   * rules — `foreman_get GL-004` has the reasoning. A Dormice project is not told to plan its UI on
+   * the D3 Design Language board. The same in every brief of one group, and budgeted on its own
+   * (`GUIDELINES_TOKEN_BUDGET`) rather than against the project's state.
    */
-  readonly guidelines: readonly GuidelineSummary[];
+  readonly guidelines: readonly BriefGuideline[];
 }
 
 export async function buildBrief(db: Db, code: string): Promise<Brief> {
@@ -138,6 +142,14 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
 
   // One definition, shared with the portfolio. See `wherewestand.ts` for why it is not inline.
   const activePhase = await phaseInFlight(db, project.id);
+  // A group that is gone is no group: the delete refuses while it holds projects, so this guards.
+  const group =
+    project.groupId === null
+      ? null
+      : await db.projectGroup.findFirst({
+          where: { id: project.groupId, deletedAt: null },
+          select: { id: true, humanId: true, name: true, slug: true },
+        });
 
   const [nextTasks, waiting, blocked, criticals, latestCheck, unconfirmed, drift, commits] =
     await Promise.all([
@@ -225,6 +237,7 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
       name: project.name,
       lifecycle: project.lifecycle,
       pitch: project.pitch,
+      group: group === null ? null : { humanId: group.humanId, name: group.name, slug: group.slug },
     },
     activePhase:
       activePhase === null
@@ -274,7 +287,7 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
       message: commit.message.split('\n')[0] ?? '',
       at: commit.committedAt.toISOString(),
     })),
-    guidelines: await activeGuidelineSummaries(db),
+    guidelines: await guidelinesForGroup(db, group?.id ?? null),
   };
 }
 
