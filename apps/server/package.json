@@ -44,6 +44,7 @@
     "seed:example": "pnpm --filter @foreman/shared build && node --env-file-if-exists=../../.env --import tsx src/cli/seed-example.ts",
     "import": "pnpm --filter @foreman/shared build && node --env-file-if-exists=../../.env --import tsx src/cli/import.ts",
     "relint": "pnpm --filter @foreman/shared build && node --env-file-if-exists=../../.env --import tsx src/cli/relint.ts",
+    "clean-markup": "pnpm --filter @foreman/shared build && node --env-file-if-exists=../../.env --import tsx src/cli/clean-markup.ts",
     "import-figma": "pnpm --filter @foreman/shared build && node --env-file-if-exists=../../.env --import tsx src/cli/import-figma.ts",
     "reconcile-status": "pnpm --filter @foreman/shared build && node --env-file-if-exists=../../.env --import tsx src/cli/reconcile-status.ts",
     "reconcile-coverage": "pnpm --filter @foreman/shared build && node --env-file-if-exists=../../.env --import tsx src/cli/reconcile-coverage.ts",
