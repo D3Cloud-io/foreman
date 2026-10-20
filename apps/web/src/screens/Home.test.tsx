@@ -71,8 +71,20 @@ describe('the portfolio figures (FRM-REQ-241)', () => {
     const html = renderToStaticMarkup(
       <PortfolioStats rows={[row('A'), row('PW', { phase: null, tasks: empty })]} projectsDetail="" />,
     );
-    expect(html).toContain('1 project has no plan yet: PW');
+    expect(html).toContain('1 project has no plan yet, so drift is not measured there');
     expect(html).not.toContain('Plan and reality agree');
+    // The figure is a dash, not a 0 beside "not measurable yet"; the code is said outside the card.
+    expect(html).toMatch(/fm-stat__value fm-stat__value--muted">—<\/span>/);
+    expect(html).toContain('No plan yet: PW');
+    expect(html).not.toMatch(/<a[^>]*>(?:(?!<\/a>).)*PW(?:(?!<\/a>).)*<\/a>/);
+  });
+
+  it('shows Blocked tasks as a dash, not 0, while a project has no tasks, and does not say nothing is waiting', () => {
+    const html = renderToStaticMarkup(
+      <PortfolioStats rows={[row('A'), row('PW', { phase: null, tasks: empty })]} projectsDetail="" />,
+    );
+    expect(html).not.toContain('No task is waiting on another');
+    expect(html).toContain('no tasks yet, so this is not measured there');
   });
 
   it('gives drift a breakdown by check and links it filtered', () => {

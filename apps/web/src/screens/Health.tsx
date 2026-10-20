@@ -30,7 +30,7 @@ const when = (iso: string | null): string =>
 function Problems({ report }: { report: HealthReport }) {
   if (report.ok) {
     return (
-      <Alert tone="success" title="Everything is running">
+      <Alert tone="info" title="Everything is running">
         The queue is moving, the nightly dump is current, and the restore drill has been performed.
       </Alert>
     );
@@ -123,7 +123,7 @@ export function Health() {
               <StatCard
                 label="Failed"
                 value={health.state.value.queue.failed}
-                tone={health.state.value.queue.failed === 0 ? 'success' : 'danger'}
+                tone={health.state.value.queue.failed === 0 ? 'neutral' : 'danger'}
                 detail={
                   health.state.value.queue.failed === 0
                     ? 'Nothing dead-lettered'
@@ -134,7 +134,7 @@ export function Health() {
                 label="Restore drill"
                 // The one that matters: an untested backup is not a backup (R-04).
                 value={relativeDay(health.state.value.lastRestoreDrill)}
-                tone={health.state.value.lastRestoreDrill === null ? 'danger' : 'success'}
+                tone={health.state.value.lastRestoreDrill === null ? 'danger' : 'neutral'}
                 detail={
                   health.state.value.lastRestoreDrill === null
                     ? 'Never performed'

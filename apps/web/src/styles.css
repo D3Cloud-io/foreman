@@ -600,6 +600,10 @@ dd a {
   background: currentColor;
   flex: none;
 }
+.fm-stat-notes {
+  margin: 0;
+  font-size: var(--text-12);
+}
 .fm-donut-with-legend {
   display: flex;
   align-items: center;

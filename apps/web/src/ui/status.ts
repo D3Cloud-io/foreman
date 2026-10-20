@@ -112,6 +112,26 @@ export function measurable(counts: PlanCounts): {
 }
 
 /**
+ * Could one drift check run, given what the project records? A check that could not run reads "not
+ * measurable yet" however many it found (none). Counts the console has: phases, requirements and
+ * tasks; the checks that need risks, decisions or screens are taken as able to run once there is a
+ * plan, and the copy never claims more than that.
+ */
+export function checkMeasurable(category: string, counts: PlanCounts): boolean {
+  const can = measurable(counts);
+  switch (category) {
+    case 'coverage-hole':
+      return can.coverage;
+    case 'stale-task':
+      return can.blocked;
+    case 'failed-exit-gate':
+      return counts.phases > 0;
+    default:
+      return can.hasPlan;
+  }
+}
+
+/**
  * Is a portfolio row's project planned — an active phase, or any task. The portfolio carries no
  * requirement count, so this is the plan as far as that row can say.
  */

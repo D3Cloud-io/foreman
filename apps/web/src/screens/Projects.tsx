@@ -20,6 +20,7 @@ import { useAsync } from '../lib/useAsync';
 import { descriptionsOf, portfolioSections, sectionSummary } from '../lib/groups';
 import { AccentDot, MoveToGroupDialog, useMoveToast } from '../ui/groups';
 import { Pill } from '../ui/viz';
+import { rowPlanned } from '../ui/status';
 import { ciTone, lifecycleTone } from '../ui/tone';
 
 /**
@@ -292,7 +293,16 @@ export function Projects({ search }: { search: string }) {
                           <Pill tone={lifecycleTone(row.lifecycle)}>{row.lifecycle}</Pill>
                         </td>
                         <td className="fm-gtable__wide">{phaseLabel(row)}</td>
-                        <td className="fm-gtable__wide fm-gtable__num">{row.drift.total}</td>
+                        <td className="fm-gtable__wide fm-gtable__num">
+                          {/* A project with no plan has nothing to drift from: "0" would read as clean. */}
+                          {row.drift.total === 0 && !rowPlanned(row) ? (
+                            <span className="fm-muted" title="Not measurable yet: no plan">
+                              —<span className="fm-visually-hidden"> not measurable yet</span>
+                            </span>
+                          ) : (
+                            row.drift.total
+                          )}
+                        </td>
                         <td>
                           <Pill tone={ciTone(row.ci.conclusion, row.ci.unknown)} dot>
                             {ciLabel(row)}

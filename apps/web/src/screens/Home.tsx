@@ -42,6 +42,7 @@ import {
   plural,
   readAcross,
   readCi,
+  readValue,
   rowPlanned,
 } from '../ui/status';
 import { SERIES } from '../ui/tone';
@@ -109,6 +110,31 @@ export function ProjectTile({ row }: { row: PortfolioRow }) {
   );
 }
 
+/** The CI tile's detail without project codes — those go in the notes line beneath the grid. */
+function ciDetail(ci: ReturnType<typeof readCi>): string {
+  const parts: string[] = [];
+  if (ci.failing.length > 0) parts.push(`${plural(ci.failing.length, 'project is', 'projects are')} failing`);
+  if (ci.silent.length > 0) parts.push(`${plural(ci.silent.length, 'project has', 'projects have')} never sent a CI result`);
+  if (parts.length === 0) parts.push(ci.total === 0 ? 'No projects to report.' : 'Every project reports, none failing.');
+  return parts.join(' · ');
+}
+
+/**
+ * Open findings by severity for a scope, for the breakdown under Critical + high ("1 critical · 2
+ * high"). `limit=1` because the counts describe the whole open set, not the page. The figure itself
+ * comes from the portfolio, so it never waits on this.
+ */
+export function useOpenSeverities(scope: string | null): FindingsPage['counts'] | null {
+  const findings = useAsync(
+    () =>
+      api.get<FindingsPage>(
+        `/api/findings?limit=1&status=open${scope === null ? '' : `&group=${encodeURIComponent(scope)}`}`,
+      ),
+    [scope],
+  );
+  return findings.state.status === 'ready' ? findings.state.value.counts : null;
+}
+
 function taskTotal(row: PortfolioRow): number {
   return row.tasks.open + row.tasks.blocked + row.tasks.done + row.tasks.cancelled;
 }
@@ -157,6 +183,23 @@ export function PortfolioStats({
     one: category.label.toLowerCase(),
   }));
 
+  const blockedSignal = readAcross(blocked, {
+    unmeasured: rows.filter((row) => taskTotal(row) === 0).map((row) => row.code),
+    total: rows.length,
+  });
+  const driftSignal = readAcross(drift, { unmeasured: unplanned, total: rows.length });
+  const noTasks = rows.filter((row) => taskTotal(row) === 0);
+
+  // Codes never go inside a card: a card is one link, and its accessible name is all of its text.
+  // They are said once, beneath the grid, as plain text (see `notes`).
+  const notes = [
+    building.length === 0 ? null : `Building: ${building.map((row) => row.code).join(', ')}`,
+    blockedIn.length === 0 ? null : `Blocked in: ${blockedIn.map((row) => `${row.code} (${String(row.tasks.blocked)})`).join(', ')}`,
+    unplanned.length === 0 ? null : `No plan yet: ${unplanned.join(', ')}`,
+    ci.silent.length === 0 ? null : `Never sent a CI result: ${ci.silent.join(', ')}`,
+    ci.failing.length === 0 ? null : `CI failing: ${ci.failing.join(', ')}`,
+  ].filter((line): line is string => line !== null);
+
   return (
     <Stack gap="24">
       <Grid minItemWidth="sm">
@@ -176,7 +219,7 @@ export function PortfolioStats({
         <StatCard
           label="Building"
           value={building.length}
-          detail={building.length === 0 ? 'Nothing in progress' : building.map((row) => row.code).join(', ')}
+          detail={building.length === 0 ? 'Nothing in progress' : `${plural(building.length, 'project', 'projects')} building`}
           href={scopedHref('/projects', scope)}
           action="Open projects"
         />
@@ -188,13 +231,13 @@ export function PortfolioStats({
             criticals === 0
               ? 'No open critical or high findings'
               : severities === null
-                ? 'Open, across these projects'
+                ? `${String(criticals)} open, across these projects`
                 : breakdown(
                     [
                       { n: severities.critical, one: 'critical' },
                       { n: severities.high, one: 'high' },
                     ],
-                    'Open, across these projects',
+                    `${String(criticals)} open, across these projects`,
                   )
           }
           href={scopedHref('/findings', scope)}
@@ -202,29 +245,32 @@ export function PortfolioStats({
         />
         <StatCard
           label="Blocked tasks"
-          value={blocked}
-          signal={readAcross(blocked, {
-            unmeasured: rows.filter((row) => taskTotal(row) === 0).map((row) => row.code),
-            total: rows.length,
-          })}
+          value={readValue(blockedSignal, blocked)}
+          signal={blockedSignal}
           detail={
-            blocked === 0
-              ? 'No task is waiting on another'
-              : blockedIn.map((row) => `${String(row.tasks.blocked)} in ${row.code}`).join(' · ')
+            blocked > 0
+              ? `${plural(blocked, 'task', 'tasks')} in ${plural(blockedIn.length, 'project', 'projects')}`
+              : blockedSignal.state === 'clean'
+                ? 'No task is waiting on another'
+                : `${plural(noTasks.length, 'project has', 'projects have')} no tasks yet, so this is not measured there`
           }
-          href={blockedIn.length === 1 && blockedIn[0] !== undefined ? `/projects/${blockedIn[0].code}` : scopedHref('/projects', scope)}
-          action={blockedIn.length === 1 ? `Open ${blockedIn[0]?.code ?? ''}` : 'Open projects'}
+          href={
+            blockedIn.length === 1 && blockedIn[0] !== undefined
+              ? `/projects/${blockedIn[0].code}`
+              : scopedHref('/projects', scope)
+          }
+          action={blockedIn.length === 1 ? 'Open the project' : 'Open projects'}
         />
         <StatCard
           label="Drift"
-          value={drift}
-          signal={readAcross(drift, { unmeasured: unplanned, total: rows.length })}
+          value={readValue(driftSignal, drift)}
+          signal={driftSignal}
           detail={
             drift > 0
               ? breakdown(driftBreakdown, 'Plan and reality apart')
               : unplanned.length === 0
                 ? 'Plan and reality agree'
-                : `${plural(unplanned.length, 'project has', 'projects have')} no plan yet: ${unplanned.join(', ')}`
+                : `${plural(unplanned.length, 'project has', 'projects have')} no plan yet, so drift is not measured there`
           }
           href={scopedHref('/drift', scope)}
           action="Open drift"
@@ -233,11 +279,12 @@ export function PortfolioStats({
           label="CI · reporting"
           value={ci.value}
           signal={ci.signal}
-          detail={ci.detail}
+          detail={ciDetail(ci)}
           href={scopedHref('/projects', scope)}
           action={ci.silent.length > 0 ? `See the ${String(ci.silent.length)} not reporting` : 'Open projects'}
         />
       </Grid>
+      {notes.length > 0 && <p className="fm-muted fm-stat-notes">{notes.join(' · ')}</p>}
 
       <Panel title="Work across the portfolio" surface="card">
         <Stack gap="8">
@@ -385,16 +432,7 @@ export function Home({ search }: { search: string }) {
   const { phrase } = useScopeView();
   const portfolio = useAsync(() => foreman.portfolio(scope), [scope]);
   const groups = useAsync(() => foreman.groups(), []);
-  // Only for the breakdown under Critical + high ("1 critical · 2 high"): `limit=1` because the
-  // counts describe the whole open set, not the page. The tile's figure itself comes from the
-  // portfolio, so it never waits on this.
-  const findings = useAsync(
-    () =>
-      api.get<FindingsPage>(
-        `/api/findings?limit=1&status=open${scope === null ? '' : `&group=${encodeURIComponent(scope)}`}`,
-      ),
-    [scope],
-  );
+  const severities = useOpenSeverities(scope);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [introDismissed, setIntroDismissed] = useState(readIntroDismissed);
 
@@ -430,7 +468,6 @@ export function Home({ search }: { search: string }) {
   // Only the descriptions come from here: the portfolio's sections carry none. Home renders
   // without them rather than waiting on a second read.
   const listing = groups.state.status === 'ready' ? groups.state.value : null;
-  const severities = findings.state.status === 'ready' ? findings.state.value.counts : null;
   const isCollapsed = (key: string) => collapsed[key] ?? readCollapsed(key);
   const toggle = (key: string) => {
     const next = !isCollapsed(key);

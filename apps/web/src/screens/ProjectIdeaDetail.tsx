@@ -284,7 +284,7 @@ function blankSections(idea: Detail): string[] {
 function Outcome({ idea, money }: { idea: Detail; money: (cents: number | null) => string }) {
   if (idea.project !== null) {
     return (
-      <Alert tone="success" title={`Became ${idea.project.code} — ${idea.project.name}`}>
+      <Alert tone="info" title={`Became ${idea.project.code} — ${idea.project.name}`}>
         <Cluster gap="8" align="center">
           <span>
             Converted {relativeDay(idea.convertedAt)}. This canvas is the project’s discovery
@@ -297,7 +297,7 @@ function Outcome({ idea, money }: { idea: Detail; money: (cents: number | null) 
   }
   if (idea.status === 'funded') {
     return (
-      <Alert tone="success" title={`Funded — ${money(idea.fundedAmountCents)}`}>
+      <Alert tone="info" title={`Funded — ${money(idea.fundedAmountCents)}`}>
         {idea.reason}
       </Alert>
     );

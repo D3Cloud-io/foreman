@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   breakdown,
+  checkMeasurable,
   ciTone,
   ciWord,
   CLEAN,
@@ -149,5 +150,16 @@ describe('words', () => {
     expect(breakdown([{ n: 1, one: 'critical' }, { n: 2, one: 'high' }], 'none')).toBe('1 critical · 2 high');
     expect(breakdown([{ n: 0, one: 'critical' }], 'none')).toBe('none');
     expect(breakdown([{ n: 2, one: 'task', other: 'tasks' }], 'none')).toBe('2 tasks');
+  });
+});
+
+describe('which drift checks could run', () => {
+  it('needs the right part of the plan for each check', () => {
+    const onlyTask = { phases: 0, requirements: 0, tasks: 1 };
+    expect(checkMeasurable('stale-task', onlyTask)).toBe(true);
+    expect(checkMeasurable('failed-exit-gate', onlyTask)).toBe(false);
+    expect(checkMeasurable('coverage-hole', { phases: 1, requirements: 0, tasks: 0 })).toBe(false);
+    expect(checkMeasurable('orphan-adr', { phases: 0, requirements: 0, tasks: 0 })).toBe(false);
+    expect(checkMeasurable('orphan-adr', onlyTask)).toBe(true);
   });
 });

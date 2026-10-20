@@ -20,7 +20,7 @@ import { accentLabel, listJoin, moveBy, siteLabel } from '../lib/groups';
 import { AccentDot, MoveToGroupDialog, useMoveToast, type MovingProject } from '../ui/groups';
 import { useUndoToast } from '../lib/undo';
 import { GroupEditor, useGroupListing, useReorderFocus } from './Groups';
-import { PortfolioStats } from './Home';
+import { PortfolioStats, useOpenSeverities } from './Home';
 
 /**
  * One group's page (17.10): what it is, how its projects are doing, the order they sit in inside
@@ -53,6 +53,7 @@ export function GroupPage({ slug }: { slug: string }) {
   const { listing, refresh: refreshListing } = useGroupListing();
   const portfolio = useAsync(() => foreman.portfolio(), []);
   const guidelines = useAsync(() => foreman.guidelines(), []);
+  const severities = useOpenSeverities(slug);
   const [editing, setEditing] = useState(false);
   const [moving, setMoving] = useState<MovingProject | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -185,9 +186,10 @@ export function GroupPage({ slug }: { slug: string }) {
         {portfolio.state.status === 'ready' && (
           <PortfolioStats
             rows={rows}
-            projectsDetail={rows.length === 0 ? 'None yet' : rows.map((row) => row.code).join(', ')}
+            projectsDetail={rows.length === 0 ? 'None yet' : `In ${detail.name}`}
             // Its criticals and drift open scoped to this group (FRM-T-17.4).
             scope={detail.slug}
+            severities={severities}
           />
         )}
 

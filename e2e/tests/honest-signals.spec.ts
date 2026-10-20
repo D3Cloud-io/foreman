@@ -72,6 +72,14 @@ test.describe('honest signals', () => {
     }
   });
 
+  test('Home keeps project codes out of the stat links, so each project is one link', async ({ page }) => {
+    await page.goto('/');
+    const main = page.getByRole('main');
+    // Only the project's own tile is a link that names it; the tiles list codes in a plain line.
+    await expect(main.getByRole('link', { name: new RegExp(UNPLANNED) })).toHaveCount(1);
+    await expect(main.getByText(new RegExp(`No plan yet:.*${UNPLANNED}`))).toBeVisible();
+  });
+
   test('Home draws Cancelled once in the work chart legend', async ({ page }) => {
     await page.goto('/');
     const legend = page.getByRole('main').locator('.fm-legend');
@@ -109,7 +117,8 @@ test.describe('honest signals', () => {
     const chip = main.getByRole('link', { name: 'no exit demo' });
     await expect(chip).toBeVisible();
     await expect(chip).toHaveAttribute('href', `/projects/${PLANNED}/drift`);
-    await expect(main.getByText('planned', { exact: true })).toBeVisible();
+    // The project header has a "planned" lifecycle badge too; the phase's is the last on the page.
+    await expect(main.getByText('planned', { exact: true }).last()).toBeVisible();
 
     await chip.click();
     await expect(page).toHaveURL(new RegExp(`/projects/${PLANNED}/drift$`));

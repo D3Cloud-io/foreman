@@ -3,7 +3,7 @@ import { foreman } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { Donut, StatCard } from '../ui/viz';
 import { SERIES } from '../ui/tone';
-import { plural, readCount } from '../ui/status';
+import { plural, readCount, readValue } from '../ui/status';
 
 /**
  * The state of a project's register, above its register.
@@ -19,6 +19,9 @@ import { plural, readCount } from '../ui/status';
  */
 export function CoverageSummary({ code }: { code: string }) {
   const { state } = useAsync(() => foreman.coverage(code), [code]);
+  // Whether there are tasks at all: "tasks citing nothing: 0" over no tasks is not a clean result.
+  const project = useAsync(() => foreman.project(code), [code]);
+  const taskCount = project.state.status === 'ready' ? project.state.value.counts.tasks : null;
 
   if (state.status === 'loading') return <Skeleton lines={3} />;
   // Informational: the register below is usable whether or not this resolves, so a failure here
@@ -34,6 +37,7 @@ export function CoverageSummary({ code }: { code: string }) {
       ? null
       : Math.round((requirements.mustsCovered / requirements.musts) * 100);
   const register = `/projects/${code}/requirements`;
+  const citing = readCount(tasksWithoutRequirements.length, { measured: taskCount !== null && taskCount > 0 });
   const noun = (n: number) => plural(n, 'requirement', 'requirements');
 
   return (
@@ -81,6 +85,8 @@ export function CoverageSummary({ code }: { code: string }) {
               value={withoutAcceptanceTest.length}
               signal={readCount(withoutAcceptanceTest.length, { measured: true })}
               detail={`Of ${noun(requirements.total)}, nothing says what done means`}
+              href={`/projects/${code}/register`}
+              action="Open the register"
             />
             <StatCard
               label="EARS warnings"
@@ -92,9 +98,17 @@ export function CoverageSummary({ code }: { code: string }) {
             />
             <StatCard
               label="Tasks citing nothing"
-              value={tasksWithoutRequirements.length}
-              signal={readCount(tasksWithoutRequirements.length, { measured: true })}
-              detail="Tasks that satisfy no requirement"
+              value={readValue(citing, tasksWithoutRequirements.length)}
+              signal={citing}
+              detail={
+                taskCount === 0
+                  ? 'No tasks recorded yet'
+                  : taskCount === null
+                    ? 'The number of tasks could not be read, so this is not measured'
+                    : `Of ${plural(taskCount, 'task', 'tasks')}, ${String(tasksWithoutRequirements.length)} satisfy no requirement`
+              }
+              href={`/projects/${code}/drift`}
+              action="Open drift"
             />
           </Grid>
         </Cluster>
