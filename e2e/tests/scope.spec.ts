@@ -314,6 +314,29 @@ test.describe('the group scope', () => {
     await expect(page).toHaveURL(new RegExp(`/\\?group=${cloud.slug}$`));
   });
 
+  test('on the collapsed rail the scope button says its scope in a tooltip, on hover and on focus', async ({ page }) => {
+    await page.goto(`/findings?group=${dormice.slug}`);
+    await page.getByRole('button', { name: 'Collapse sidebar' }).click();
+    const button = page.getByRole('button', { name: `Scope: ${DORMICE}. Change scope` });
+    try {
+      await button.hover();
+      await expect(page.getByRole('tooltip', { name: `Scope: ${DORMICE}` })).toBeVisible();
+
+      // Keyboard focus alone, on a fresh page (the rail is remembered): no hover to lean on.
+      await page.reload();
+      await expect(page.getByRole('tooltip', { name: `Scope: ${DORMICE}` })).toHaveCount(0);
+      await button.focus();
+      await expect(page.getByRole('tooltip', { name: `Scope: ${DORMICE}` })).toBeVisible();
+      // Still the Menu's trigger: it opens on the checked scope.
+      await button.press('Enter');
+      await expect(page.getByRole('menu').getByRole('menuitemradio', { name: new RegExp(`^${DORMICE}`) })).toBeFocused();
+      await page.keyboard.press('Escape');
+    } finally {
+      // The choice is remembered per browser; leave the sidebar as the other tests expect it.
+      await page.getByRole('button', { name: 'Expand sidebar' }).click();
+    }
+  });
+
   test('on a phone the tab bar keeps the scope, and the drawer has the switcher too', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`/?group=${dormice.slug}`);

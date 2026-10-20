@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useRef, useState, type ButtonHTMLAttributes } from 'react';
 import {
   EmptyState,
   Link,
@@ -85,6 +85,22 @@ export function useScopeView() {
     phrase: scopePhrase(state.scope, current),
   };
 }
+
+/**
+ * The rail's button: one `<button>` that is both the Menu's trigger and the Tooltip's. Both slot
+ * their props onto their child, and a wrapper component in between drops them — a Tooltip around
+ * `MenuTrigger` never reached the button, so the rail showed no tooltip. This takes the Menu's
+ * props and ref and hands them, with its own, to the button the Tooltip slots onto.
+ */
+const RailButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & { tip: string }>(
+  function RailButton({ tip, ...props }, ref) {
+    return (
+      <Tooltip content={tip} side="right">
+        <button ref={ref} type="button" {...props} />
+      </Tooltip>
+    );
+  },
+);
 
 export function ScopeSwitcher({ presentation }: { presentation: 'menu' | 'sheet' }) {
   const { hrefFor, groups, options, current, name } = useScopeView();
@@ -175,10 +191,10 @@ export function ScopeSwitcher({ presentation }: { presentation: 'menu' | 'sheet'
   // The sidebar collapsed to its 64px rail has no room for a name, so the button is an icon with
   // the scope said by its tooltip and its accessible name — never a bare accent dot.
   const trigger = rail ? (
-    <button type="button" className="fm-scope__button fm-scope__button--rail" aria-label={label}>
+    <RailButton tip={`Scope: ${name}`} className="fm-scope__button fm-scope__button--rail" aria-label={label}>
       <Layers aria-hidden="true" className="fm-icon-sm" />
       {dot}
-    </button>
+    </RailButton>
   ) : (
     <button type="button" className="fm-scope__button" aria-label={label}>
       {dot}
@@ -196,13 +212,7 @@ export function ScopeSwitcher({ presentation }: { presentation: 'menu' | 'sheet'
         </span>
       )}
       <Menu>
-        {rail ? (
-          <Tooltip content={`Scope: ${name}`} side="right">
-            <MenuTrigger>{trigger}</MenuTrigger>
-          </Tooltip>
-        ) : (
-          <MenuTrigger>{trigger}</MenuTrigger>
-        )}
+        <MenuTrigger>{trigger}</MenuTrigger>
         <MenuContent className="fm-scope__menu" side={rail ? 'right' : 'bottom'} {...openOnCurrent}>
           {options.map((option) => (
             <MenuItem key={option.key} asChild>
