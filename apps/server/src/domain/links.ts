@@ -92,13 +92,30 @@ export interface LinkResult {
   readonly created: boolean;
 }
 
-export async function link(
+export type LinkKind = ReferenceKind | 'extends';
+
+/** A link with both ends looked up: what every write below needs, resolved outside the transaction. */
+export interface ResolvedLink {
+  readonly from: string;
+  readonly to: string;
+  readonly kind: LinkKind;
+  readonly fromType: EntityType;
+  readonly toType: EntityType;
+  readonly fromId: string;
+  readonly toId: string;
+  /** Kept for the depends_on check, which only a write makes: removing a bad edge is never refused. */
+  readonly fromProjectId: unknown;
+  readonly toProjectId: unknown;
+  /** `extends` is an ADR relation and not a reference kind; every other kind is both. */
+  readonly referenceKind: ReferenceKind;
+}
+
+export async function resolveLink(
   db: Db,
-  actor: Actor,
   from: string,
   to: string,
-  kind: ReferenceKind | 'extends',
-): Promise<LinkResult> {
+  kind: LinkKind,
+): Promise<ResolvedLink> {
   const fromType = typeOf(from);
   const toType = typeOf(to);
 
@@ -107,99 +124,204 @@ export async function link(
     getByHumanId(db, from, { backlinks: false }),
     getByHumanId(db, to, { backlinks: false }),
   ]);
-  const fromId = String(source.entity['id']);
-  const toId = String(target.entity['id']);
+
+  return {
+    from,
+    to,
+    kind,
+    fromType,
+    toType,
+    fromId: String(source.entity['id']),
+    toId: String(target.entity['id']),
+    fromProjectId: source.entity['projectId'],
+    toProjectId: target.entity['projectId'],
+    referenceKind: kind === 'extends' ? 'relates' : kind,
+  };
+}
+
+/** Refuse a depends_on edge the brief could never honour: not task to task, to itself, or across projects. */
+function assertDependable(r: ResolvedLink): void {
+  const { from, to } = r;
+  if (r.fromType !== 'task' || r.toType !== 'task') {
+    throw new Invalid(`depends_on links a task to a task; ${from} → ${to} is not that`);
+  }
+  if (r.fromId === r.toId) throw new Invalid(`${from} cannot depend on itself`);
+  if (r.fromProjectId !== r.toProjectId) {
+    throw new Invalid(
+      `${from} and ${to} are in different projects; a dependency stays inside one, because ` +
+        'the brief that honours it is per project',
+    );
+  }
+}
+
+/**
+ * Whether the link exists now: its reference row, or the row a kind keeps beside it. Either is
+ * enough, because an unlink removes both and a link written some other way may have only one.
+ */
+export async function isLinked(tx: TransactionClient, r: ResolvedLink): Promise<boolean> {
+  const reference = await tx.reference.findUnique({
+    where: {
+      fromType_fromId_toType_toId_kind: {
+        fromType: r.fromType,
+        fromId: r.fromId,
+        toType: r.toType,
+        toId: r.toId,
+        kind: r.referenceKind,
+      },
+    },
+    select: { id: true },
+  });
+  if (reference !== null) return true;
+
+  if (r.fromType === 'task' && r.toType === 'requirement') {
+    const row = await tx.taskRequirement.findUnique({
+      where: { taskId_requirementId: { taskId: r.fromId, requirementId: r.toId } },
+      select: { taskId: true },
+    });
+    if (row !== null) return true;
+  }
+  if (r.kind === 'depends_on') {
+    const edge = await tx.taskDependency.findUnique({
+      where: { taskId_dependsOnId: { taskId: r.fromId, dependsOnId: r.toId } },
+      select: { taskId: true },
+    });
+    if (edge !== null) return true;
+  }
+  if (r.fromType === 'adr' && r.toType === 'adr') {
+    const relation = await tx.adrRelation.findFirst({
+      where: { adrId: r.fromId, relatedAdrId: r.toId },
+      select: { adrId: true },
+    });
+    if (relation !== null) return true;
+  }
+  return false;
+}
+
+/**
+ * Write the link's rows, without an audit event: the caller records what the write *was*.
+ *
+ * `created` is whether the reference row is new, which is what the API has always answered.
+ * `changed` is whether *any* row is new, which is what undo needs: a link that changed nothing
+ * has nothing to reverse, and reversing it would remove a link this write never made.
+ */
+export async function writeLink(
+  tx: TransactionClient,
+  r: ResolvedLink,
+): Promise<{ created: boolean; changed: boolean }> {
+  const { from, to, kind, fromType, toType, fromId, toId, referenceKind } = r;
+  // `createMany` with `skipDuplicates` answers how many rows it wrote, where an upsert cannot.
+  let written = 0;
 
   if (kind === 'depends_on') {
-    if (fromType !== 'task' || toType !== 'task') {
-      throw new Invalid(`depends_on links a task to a task; ${from} → ${to} is not that`);
-    }
-    if (fromId === toId) throw new Invalid(`${from} cannot depend on itself`);
-    if (source.entity['projectId'] !== target.entity['projectId']) {
+    assertDependable(r);
+    // Inside the transaction, so two edges written at once cannot each pass the check and
+    // together close a loop the check was there to refuse.
+    const loop = await pathBetween(tx, toId, fromId);
+    if (loop !== null) {
       throw new Invalid(
-        `${from} and ${to} are in different projects; a dependency stays inside one, because ` +
-          'the brief that honours it is per project',
+        `${from} depends_on ${to} would close a cycle: ${[from, ...loop].join(' → ')}`,
       );
+    }
+    written += (
+      await tx.taskDependency.createMany({
+        data: [{ taskId: fromId, dependsOnId: toId }],
+        skipDuplicates: true,
+      })
+    ).count;
+  }
+
+  const existing = await tx.reference.findUnique({
+    where: {
+      fromType_fromId_toType_toId_kind: { fromType, fromId, toType, toId, kind: referenceKind },
+    },
+  });
+
+  if (existing === null) {
+    await tx.reference.create({
+      data: { fromType, fromId, toType, toId, kind: referenceKind, citedAs: to },
+    });
+    written += 1;
+  }
+
+  // Coverage counts `task_requirement`, not references, so the link has to land there too.
+  if (fromType === 'task' && toType === 'requirement') {
+    written += (
+      await tx.taskRequirement.createMany({
+        data: [{ taskId: fromId, requirementId: toId }],
+        skipDuplicates: true,
+      })
+    ).count;
+  }
+
+  if (fromType === 'adr' && toType === 'adr') {
+    const relationKind = kind === 'supersedes' ? 'supersedes' : 'extends';
+    written += (
+      await tx.adrRelation.createMany({
+        data: [{ adrId: fromId, relatedAdrId: toId, kind: relationKind }],
+        skipDuplicates: true,
+      })
+    ).count;
+    // A supersedes edge is also a status change on the ADR it replaces.
+    if (relationKind === 'supersedes') {
+      await tx.adr.update({ where: { id: toId }, data: { status: 'superseded' } });
+      written += (
+        await tx.adrRelation.createMany({
+          data: [{ adrId: toId, relatedAdrId: fromId, kind: 'superseded_by' }],
+          skipDuplicates: true,
+        })
+      ).count;
     }
   }
 
-  // `extends` is an ADR relation and not a reference kind; every other kind is both.
-  const referenceKind: ReferenceKind = kind === 'extends' ? 'relates' : kind;
+  return { created: existing === null, changed: written > 0 };
+}
+
+/** Remove the link's rows, without an audit event. `removed` is whether there was anything to remove. */
+export async function removeLink(tx: TransactionClient, r: ResolvedLink): Promise<{ removed: boolean }> {
+  const { kind, fromType, toType, fromId, toId, referenceKind } = r;
+  let removed = 0;
+
+  removed += (
+    await tx.reference.deleteMany({ where: { fromType, fromId, toType, toId, kind: referenceKind } })
+  ).count;
+  if (fromType === 'task' && toType === 'requirement') {
+    removed += (await tx.taskRequirement.deleteMany({ where: { taskId: fromId, requirementId: toId } }))
+      .count;
+  }
+  if (fromType === 'adr' && toType === 'adr') {
+    removed += (await tx.adrRelation.deleteMany({ where: { adrId: fromId, relatedAdrId: toId } })).count;
+  }
+  if (kind === 'depends_on') {
+    removed += (await tx.taskDependency.deleteMany({ where: { taskId: fromId, dependsOnId: toId } }))
+      .count;
+  }
+  return { removed: removed > 0 };
+}
+
+export async function link(
+  db: Db,
+  actor: Actor,
+  from: string,
+  to: string,
+  kind: LinkKind,
+): Promise<LinkResult> {
+  const resolved = await resolveLink(db, from, to, kind);
 
   return db.$transaction(async (tx) => {
-    if (kind === 'depends_on') {
-      // Inside the transaction, so two edges written at once cannot each pass the check and
-      // together close a loop the check was there to refuse.
-      const loop = await pathBetween(tx, toId, fromId);
-      if (loop !== null) {
-        throw new Invalid(
-          `${from} depends_on ${to} would close a cycle: ${[from, ...loop].join(' → ')}`,
-        );
-      }
-      await tx.taskDependency.upsert({
-        where: { taskId_dependsOnId: { taskId: fromId, dependsOnId: toId } },
-        create: { taskId: fromId, dependsOnId: toId },
-        update: {},
-      });
-    }
-
-    const existing = await tx.reference.findUnique({
-      where: {
-        fromType_fromId_toType_toId_kind: {
-          fromType,
-          fromId,
-          toType,
-          toId,
-          kind: referenceKind,
-        },
-      },
-    });
-
-    if (existing === null) {
-      await tx.reference.create({
-        data: { fromType, fromId, toType, toId, kind: referenceKind, citedAs: to },
-      });
-    }
-
-    // Coverage counts `task_requirement`, not references, so the link has to land there too.
-    if (fromType === 'task' && toType === 'requirement') {
-      await tx.taskRequirement.upsert({
-        where: { taskId_requirementId: { taskId: fromId, requirementId: toId } },
-        create: { taskId: fromId, requirementId: toId },
-        update: {},
-      });
-    }
-
-    if (fromType === 'adr' && toType === 'adr') {
-      const relationKind = kind === 'supersedes' ? 'supersedes' : 'extends';
-      await tx.adrRelation.upsert({
-        where: { adrId_relatedAdrId_kind: { adrId: fromId, relatedAdrId: toId, kind: relationKind } },
-        create: { adrId: fromId, relatedAdrId: toId, kind: relationKind },
-        update: {},
-      });
-      // A supersedes edge is also a status change on the ADR it replaces.
-      if (relationKind === 'supersedes') {
-        await tx.adr.update({ where: { id: toId }, data: { status: 'superseded' } });
-        await tx.adrRelation.upsert({
-          where: {
-            adrId_relatedAdrId_kind: { adrId: toId, relatedAdrId: fromId, kind: 'superseded_by' },
-          },
-          create: { adrId: toId, relatedAdrId: fromId, kind: 'superseded_by' },
-          update: {},
-        });
-      }
-    }
+    const { created, changed } = await writeLink(tx, resolved);
 
     await record(tx, {
       ...actor,
       action: 'create',
-      entityType: fromType,
-      entityId: fromId,
+      entityType: resolved.fromType,
+      entityId: resolved.fromId,
       entityHumanId: from,
-      after: { event: 'link', to, kind },
+      // `changed` is what lets undo tell a new link from a repeat of one that was already there:
+      // reversing the repeat would remove the earlier link, which this event never made.
+      after: { event: 'link', to, kind, changed },
     });
 
-    return { from, to, kind, created: existing === null };
+    return { from, to, kind, created };
   });
 }
 
@@ -208,45 +330,25 @@ export async function unlink(
   actor: Actor,
   from: string,
   to: string,
-  kind: ReferenceKind | 'extends',
+  kind: LinkKind,
 ): Promise<LinkResult> {
-  const fromType = typeOf(from);
-  const toType = typeOf(to);
-
-  const [source, target] = await Promise.all([
-    getByHumanId(db, from, { backlinks: false }),
-    getByHumanId(db, to, { backlinks: false }),
-  ]);
-  const fromId = String(source.entity['id']);
-  const toId = String(target.entity['id']);
-  const referenceKind: ReferenceKind = kind === 'extends' ? 'relates' : kind;
+  const resolved = await resolveLink(db, from, to, kind);
 
   return db.$transaction(async (tx) => {
-    const { count } = await tx.reference.deleteMany({
-      where: { fromType, fromId, toType, toId, kind: referenceKind },
-    });
-
-    if (fromType === 'task' && toType === 'requirement') {
-      await tx.taskRequirement.deleteMany({ where: { taskId: fromId, requirementId: toId } });
-    }
-    if (fromType === 'adr' && toType === 'adr') {
-      await tx.adrRelation.deleteMany({ where: { adrId: fromId, relatedAdrId: toId } });
-    }
-    if (kind === 'depends_on') {
-      await tx.taskDependency.deleteMany({ where: { taskId: fromId, dependsOnId: toId } });
-    }
+    const { removed } = await removeLink(tx, resolved);
 
     await record(tx, {
       ...actor,
       action: 'delete',
-      entityType: fromType,
-      entityId: fromId,
+      entityType: resolved.fromType,
+      entityId: resolved.fromId,
       entityHumanId: from,
       // Recorded in full, because an unlink is what `POST /undo` has to be able to put back.
       before: { event: 'link', to, kind },
-      after: { event: 'unlink', to, kind },
+      // `changed`, as on a link: an unlink of something not linked has nothing to put back.
+      after: { event: 'unlink', to, kind, changed: removed },
     });
 
-    return { from, to, kind, created: false, removed: count > 0 } as LinkResult;
+    return { from, to, kind, created: false, removed } as LinkResult;
   });
 }

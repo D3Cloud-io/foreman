@@ -1,7 +1,8 @@
 import type { Db } from '../db.js';
 import type { EntityType } from '../generated/prisma/enums.js';
 import { record, scrub, type Actor, type TransactionClient } from './audit.js';
-import { Conflict, NotFound } from './errors.js';
+import { Conflict, Invalid, NotFound } from './errors.js';
+import { isLinked, removeLink, resolveLink, writeLink, type LinkKind } from './links.js';
 import { rollupAfter } from './rollup.js';
 
 /**
@@ -138,6 +139,10 @@ export interface UndoResult {
  *
  * Create becomes a soft delete, delete becomes a restore, and update writes `before` back. The
  * reversal is itself audited, and the original event is stamped so it cannot be undone twice.
+ *
+ * A link and an unlink are the exception: they are recorded as a `create` and a `delete` on the
+ * entity they start from, but the link is what changed, so the link is what is reversed — see
+ * `undoLink`.
  */
 export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<UndoResult> {
   const event = await db.auditEvent.findUnique({ where: { id: auditEventId } });
@@ -150,13 +155,17 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
     // Undoing an undo is a redo, and redo is not what anyone means by it. Reverse the original.
     throw new Conflict('that event is itself a reversal; undo the original change instead');
   }
+
+  const before = event.before as Record<string, unknown> | null;
+  const after = event.after as Record<string, unknown> | null;
+
+  const linkEvent = linkEventOf(event.action, after);
+  if (linkEvent !== null) return undoLink(db, actor, event, linkEvent);
+
   if (!isUndoable(event.entityType)) {
     throw new Conflict(`${event.entityType} changes cannot be undone`);
   }
-
   const type = event.entityType;
-  const before = event.before as Record<string, unknown> | null;
-  const after = event.after as Record<string, unknown> | null;
 
   return db.$transaction(async (tx) => {
     const table = model(tx, type);
@@ -223,6 +232,150 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
       action: event.action,
       entityType: type,
       entityHumanId: event.entityHumanId,
+      reversalEventId: reversalId,
+    };
+  });
+}
+
+interface LinkEvent {
+  /** `link` for an event that added the link, `unlink` for one that removed it. */
+  readonly event: 'link' | 'unlink';
+  readonly to: string;
+  readonly kind: LinkKind;
+  /** Whether the event actually changed anything. Absent on events written before it was recorded. */
+  readonly changed: boolean | undefined;
+}
+
+/**
+ * The link an event records, or null when it records a change to an entity row. `links.ts` marks
+ * both with `event` in `after`; the action alone cannot tell a link from a creation.
+ */
+function linkEventOf(action: string, after: Record<string, unknown> | null): LinkEvent | null {
+  const marker = after?.['event'];
+  const to = after?.['to'];
+  const kind = after?.['kind'];
+  if (typeof to !== 'string' || typeof kind !== 'string') return null;
+
+  const changed = typeof after?.['changed'] === 'boolean' ? after['changed'] : undefined;
+
+  if (action === 'create' && marker === 'link') {
+    return { event: 'link', to, kind: kind as LinkKind, changed };
+  }
+  if (action === 'delete' && marker === 'unlink') {
+    return { event: 'unlink', to, kind: kind as LinkKind, changed };
+  }
+  return null;
+}
+
+type AuditEventRow = NonNullable<Awaited<ReturnType<Db['auditEvent']['findUnique']>>>;
+
+/**
+ * Reverse a link by unlinking, and an unlink by linking — never by touching the entity row.
+ *
+ * The refusal rule is the same one as everywhere else, stated for a link: the link must still be
+ * in the state the event left it. A link since removed, or an unlink since put back, has been
+ * reversed already by someone else, and undoing it again would not restore anything.
+ */
+async function undoLink(
+  db: Db,
+  actor: Actor,
+  event: AuditEventRow,
+  recorded: LinkEvent,
+): Promise<UndoResult> {
+  const from = event.entityHumanId;
+  if (from === null) throw new Conflict('that link recorded no source to reverse it from');
+  const { to, kind } = recorded;
+
+  if (recorded.changed === false) {
+    throw new Conflict(
+      recorded.event === 'link'
+        ? `nothing to undo: ${from} was already linked to ${to} when that was recorded, and ` +
+          'undoing it would remove the earlier link'
+        : `nothing to undo: ${from} was not linked to ${to} when that was recorded, so there is ` +
+          'no link to put back',
+    );
+  }
+  if (recorded.changed === undefined) {
+    // Written before link events said whether they changed anything. A repeat of an existing link
+    // looks the same as a new one, and reversing it would remove a link this event never made.
+    throw new Conflict(
+      `that ${recorded.event} was recorded before Foreman noted whether it changed anything, so ` +
+        `undoing it could remove or restore a link it never touched; ` +
+        `${recorded.event === 'link' ? 'unlink' : 'link'} ${from} and ${to} instead`,
+    );
+  }
+  if (recorded.event === 'link' && kind === 'supersedes') {
+    // Superseding also moved the older ADR's status, and an unlink does not move it back. A
+    // half-reversal that leaves the ADR marked superseded is worse than a refusal.
+    throw new Conflict(
+      `a supersedes link also changed ${to}'s status, which unlinking does not restore; ` +
+        'reverse it in the console',
+    );
+  }
+
+  // Both ends are looked up first: a link to something since deleted cannot be reversed either way.
+  const resolved = await resolveLink(db, from, to, kind);
+
+  return db.$transaction(async (tx) => {
+    // Claimed inside the transaction, so two undos of the same event at once cannot both reverse it.
+    const claimed = await tx.auditEvent.updateMany({
+      where: { id: event.id, undoneAt: null },
+      data: { undoneAt: new Date() },
+    });
+    if (claimed.count === 0) throw new Conflict('that change has already been undone');
+
+    const linked = await isLinked(tx, resolved);
+    const marker = { to, kind };
+
+    let before: Record<string, unknown>;
+    let after: Record<string, unknown>;
+    if (recorded.event === 'link') {
+      if (!linked) {
+        throw new Conflict(`that link cannot be undone: ${from} is no longer linked to ${to}`);
+      }
+      await removeLink(tx, resolved);
+      before = { event: 'link', ...marker };
+      after = { event: 'unlink', ...marker };
+    } else {
+      if (linked) {
+        throw new Conflict(`that unlink cannot be undone: ${from} is already linked to ${to} again`);
+      }
+      try {
+        await writeLink(tx, resolved);
+      } catch (error) {
+        // A depends_on edge that was fine when it was removed may close a cycle now that other
+        // edges have been added; putting it back would leave tasks the brief can never offer.
+        if (error instanceof Invalid) {
+          throw new Conflict(`that unlink cannot be undone: ${error.message}`);
+        }
+        throw error;
+      }
+      before = { event: 'unlink', ...marker };
+      after = { event: 'link', ...marker };
+    }
+
+    // One event, the reversal: not an undo plus a fresh link event that could itself be undone.
+    const reversalId = await record(tx, {
+      ...actor,
+      action: 'undo',
+      entityType: resolved.fromType,
+      entityId: resolved.fromId,
+      entityHumanId: from,
+      before,
+      after,
+    });
+
+    // Stamped, so the same change cannot be undone twice.
+    await tx.auditEvent.update({
+      where: { id: event.id },
+      data: { undoneByEventId: reversalId },
+    });
+
+    return {
+      undid: event.id,
+      action: event.action,
+      entityType: resolved.fromType,
+      entityHumanId: from,
       reversalEventId: reversalId,
     };
   });
