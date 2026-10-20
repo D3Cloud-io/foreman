@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { foreman, type HealthReport } from '../lib/api';
+import { api, foreman, type HealthReport } from '../lib/api';
 
 /**
  * What the frame says needs you (FRM-ADR-025): the counts on the sidebar and the tab bar, and the
@@ -32,6 +32,18 @@ const refreshers = new Set<() => void>();
 
 export function refreshSignals(): void {
   for (const refresh of refreshers) refresh();
+}
+
+/**
+ * Open critical findings across every project, from the route's own `total` (FRM-REQ-242). The
+ * page asked for is one row: the total counts the whole matching set, so nothing is fetched just
+ * to be counted.
+ */
+export async function openCriticalTotal(): Promise<number> {
+  const page = await api.get<{ items: unknown[]; total: number | null }>(
+    '/api/findings?severity=critical&status=open&limit=1',
+  );
+  return page.total ?? page.items.length;
 }
 
 export interface ShellSignals {
@@ -80,8 +92,7 @@ export function useShellSignals(path: string, code: string | null): ShellSignals
 
     if (now - lastGlobal.current >= FRESH_MS) {
       lastGlobal.current = now;
-      foreman
-        .openCriticalCount()
+      openCriticalTotal()
         .then((count) => {
           if (live()) setCriticals(count);
         })
