@@ -163,9 +163,17 @@ export async function copyBlobs(
     }
 
     const to = join(dest, name);
-    if (previous !== undefined && (await sizeOf(join(previous, name))) === size) {
+    // A link shares the earlier set's inode, so whatever is wrong with that file becomes wrong in
+    // this set too. Size alone would carry a same-size bit-rotted file forward forever, with every
+    // nightly reporting success; only a file that still hashes to its name is linked (FRM-REQ-202).
+    const earlier = previous === undefined ? undefined : join(previous, name);
+    if (
+      earlier !== undefined &&
+      (await sizeOf(earlier)) === size &&
+      (await hashFile(earlier).catch(() => null)) === name
+    ) {
       try {
-        await link(join(previous, name), to);
+        await link(earlier, to);
         linked += 1;
         continue;
       } catch {

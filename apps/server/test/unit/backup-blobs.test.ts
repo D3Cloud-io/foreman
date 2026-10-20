@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -89,6 +89,19 @@ describe('blob backup and verification', () => {
 
       const result = await copyBlobs(src, join(root, 'set2'), first);
       expect(result).toMatchObject({ linked: 0, copied: 1 });
+    });
+
+    it('copies the live file rather than linking a same-size corrupt one from the previous set', async () => {
+      const a = await put(src, 'alpha');
+      const first = join(root, 'set1');
+      await mkdir(first);
+      // Same length as 'alpha', different bytes: the case a size check alone would carry forward.
+      await writeFile(join(first, a), 'alphx');
+
+      const second = join(root, 'set2');
+      const result = await copyBlobs(src, second, first);
+      expect(result).toMatchObject({ linked: 0, copied: 1 });
+      expect(await readFile(join(second, a), 'utf8')).toBe('alpha');
     });
   });
 
