@@ -27,6 +27,7 @@ import {
   Lightbulb,
   ListChecks,
   ListTodo,
+  MonitorSmartphone,
   Radar,
   ScrollText,
   KeyRound,
@@ -72,6 +73,8 @@ import { Search as SearchScreen } from './screens/Search';
 import { Requirements } from './screens/Requirements';
 import { RegisterView } from './screens/RegisterView';
 import { ScopeOfWorkView } from './screens/ScopeOfWorkView';
+import { ScreenDetail } from './screens/ScreenDetail';
+import { Screens } from './screens/Screens';
 import { TaskDetail } from './screens/TaskDetail';
 
 /**
@@ -286,6 +289,7 @@ const SECTION_ICONS: Record<string, ReactNode> = {
   activity: <GitBranch />,
   audits: <ListChecks />,
   drift: <Radar />,
+  screens: <MonitorSmartphone />,
 };
 
 function ProjectSections({ path }: { path: string }) {
@@ -386,6 +390,11 @@ function Screen({ path, search }: { path: string; search: string }) {
       return <FindingDetail humanId={route.humanId ?? ''} />;
     case 'drift':
       return <DriftView code={route.code ?? ''} />;
+    case 'screens':
+      return <Screens code={route.code ?? ''} />;
+    case 'screen':
+      // Keyed by the ID, so moving to another screen resets its viewport, theme and forms.
+      return <ScreenDetail key={route.humanId} code={route.code ?? ''} humanId={route.humanId ?? ''} />;
     case 'health':
       return <Health />;
     case 'tokens':

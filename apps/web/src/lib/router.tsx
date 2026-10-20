@@ -92,6 +92,8 @@ export interface Route {
     | 'findings'
     | 'finding'
     | 'drift'
+    | 'screens'
+    | 'screen'
     | 'health'
     | 'tokens'
     | 'search'
@@ -144,6 +146,13 @@ export function routeFor(path: string): Route {
     if (parts[2] === 'audits' && parts[3] === undefined) return { screen: 'audits', code };
     if (parts[2] === 'activity' && parts[3] === undefined) return { screen: 'activity', code };
     if (parts[2] === 'drift' && parts[3] === undefined) return { screen: 'drift', code };
+    // A screen's ID carries its project, but the API reads it under the project's path, so the
+    // page sits there too (FRM-REQ-196).
+    if (parts[2] === 'screens') {
+      return parts[3] === undefined
+        ? { screen: 'screens', code }
+        : { screen: 'screen', code, humanId: parts[3] };
+    }
     if (parts[2] === 'documents') {
       return parts[3] === undefined
         ? { screen: 'documents', code }
