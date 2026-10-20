@@ -5,6 +5,15 @@
  * is no CORS, no token in `localStorage`, and nothing for a script on the page to steal.
  */
 
+import type {
+  Screen,
+  ScreenDetail,
+  ScreenProposalCreate,
+  ScreenVerdict,
+  ScreenVerdictKind,
+  ScreenVersion,
+} from '@foreman/shared';
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -45,7 +54,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   // Headers may legally be an array of pairs, which does not spread into an object — it spreads
   // into indices, and the header silently disappears.
   const headers = new Headers(init.headers);
-  if (init.body !== undefined) headers.set('content-type', 'application/json');
+  // A multipart body sets its own content type, boundary included; naming JSON over it would make
+  // the upload unreadable to the server.
+  if (init.body !== undefined && !(init.body instanceof FormData)) {
+    headers.set('content-type', 'application/json');
+  }
 
   const res = await fetch(path, {
     ...init,
@@ -89,6 +102,12 @@ export const api = {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
   del: (path: string) => request<undefined>(path, { method: 'DELETE' }),
+  /** One file as multipart, in the field the blob route reads (FRM-REQ-190). */
+  upload: <T>(path: string, field: string, file: Blob) => {
+    const form = new FormData();
+    form.append(field, file);
+    return request<T>(path, { method: 'POST', body: form });
+  },
 };
 
 export interface SessionUser {
@@ -951,7 +970,35 @@ export const foreman = {
   healthReport: () => api.get<HealthReport>('/api/health-report'),
   brief: (code: string) => api.get<Brief>(`/api/brief/${code}`),
   entity: (humanId: string) => api.get<EntityResult>(`/api/entities/${humanId}`),
+
+  // --- Screens (FRM-REQ-195 … FRM-REQ-197) -----------------------------------
+  screens: (code: string) => api.get<Page<Screen>>(`/api/projects/${code}/screens`),
+  screen: (code: string, humanId: string) =>
+    api.get<ScreenDetail>(`/api/projects/${code}/screens/${humanId}`),
+  /** The bytes first; a proposal or capture then names them by SHA. */
+  uploadBlob: (file: Blob) => api.upload<UploadedBlob>('/api/blobs', 'file', file),
+  addProposal: (code: string, humanId: string, body: ScreenProposalCreate) =>
+    api.post<ScreenVersion>(`/api/projects/${code}/screens/${humanId}/proposals`, body),
+  recordVerdict: (
+    code: string,
+    humanId: string,
+    versionId: string,
+    body: { verdict: ScreenVerdictKind; note?: string },
+  ) =>
+    api.post<ScreenVerdict>(
+      `/api/projects/${code}/screens/${humanId}/captures/${versionId}/verdict`,
+      body,
+    ),
 };
+
+/** What `POST /api/blobs` answers: the stored file, addressed by its hash. */
+export interface UploadedBlob {
+  id: string;
+  sha256: string;
+  mediaType: string;
+  byteSize: number;
+  url: string;
+}
 
 /** One place you are signed in — a browser, or a phone by the name it gave (FRM-T-14.4). */
 export interface SignedInSession {
