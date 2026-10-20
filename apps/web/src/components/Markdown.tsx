@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { useTheme } from '@d3cloud/ui';
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { Modal, useTheme } from '@d3cloud/ui';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import mermaid from 'mermaid';
+import { mermaidThemeVariables, wrapTables } from './markdownSupport';
 
 /**
  * Markdown, rendered — with Mermaid diagrams (FRM-REQ-066).
@@ -21,20 +22,60 @@ import mermaid from 'mermaid';
  *    render time, so a diagram drawn in light mode stays light when the theme flips — pale edge
  *    labels on pale plates, failing contrast. The theme is a dependency of the drawing, and a
  *    change redraws.
+ * 5. **A diagram is drawn from the console's tokens** (FRM-REQ-250). Mermaid's own `default` theme
+ *    draws dark-grey edges on any fill, 1.26:1 on a navy plate. The `--color-*` values are read from
+ *    the page when the diagram is drawn — see `mermaidThemeVariables` — and Mermaid is
+ *    re-initialised whenever they differ from the last time, so light and dark are each the
+ *    console's own palette.
+ * 6. **A diagram opens full size.** A wide one is unreadable in a card; clicking it (or Enter on it)
+ *    opens the drawing in a Modal, scrollable at its natural width.
+ * 7. **A table scrolls inside its card**, in a focusable, named region (`wrapTables`), rather than
+ *    pushing the page sideways on a phone.
  */
 
-/** The theme Mermaid was last initialised with. It is one global configuration for the page. */
-let initialisedFor: boolean | null = null;
+/** The token values Mermaid was last initialised with. It is one global configuration. */
+let initialisedWith = '';
 
 function initMermaid(dark: boolean): void {
-  if (initialisedFor === dark) return;
+  const root = window.getComputedStyle(window.document.documentElement);
+  const variables = mermaidThemeVariables((token) => root.getPropertyValue(token), dark);
+  const signature = JSON.stringify(variables);
+  if (initialisedWith === signature) return;
   mermaid.initialize({
     startOnLoad: false,
-    theme: dark ? 'dark' : 'default',
+    theme: 'base',
+    themeVariables: variables,
     securityLevel: 'strict',
     fontFamily: 'inherit',
   });
-  initialisedFor = dark;
+  initialisedWith = signature;
+}
+
+/**
+ * A diagram at its natural width, in a box that scrolls. Mermaid sizes its SVG to `width: 100%` with
+ * a `max-width`, which is the right thing in a card and the wrong thing in a zoom.
+ */
+function ZoomedDiagram({ svg }: { svg: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = box.current?.querySelector('svg');
+    if (!element) return;
+    const width = element.viewBox.baseVal.width;
+    element.style.maxWidth = 'none';
+    element.style.width = width > 0 ? `${String(width)}px` : '100%';
+  }, [svg]);
+  return (
+    <div
+      ref={box}
+      className="fm-mermaid-zoom"
+      role="region"
+      tabIndex={0}
+      aria-label="Diagram, full size"
+      style={{ overflow: 'auto', maxHeight: '70vh' }}
+      // Mermaid's own output, drawn with `securityLevel: 'strict'`.
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
 }
 
 /**
@@ -59,6 +100,7 @@ export function Markdown({ children }: { children: string }) {
   // `resolved`, not `preference`: `system` is followed live through `prefers-color-scheme` by the
   // provider, so this one value changes for the ThemeSwitch and for the OS alike.
   const dark = useTheme().resolved === 'dark';
+  const [zoomed, setZoomed] = useState<string | null>(null);
   const [rendered, setRendered] = useState<{ html: string; diagrams: string[] }>({
     html: '',
     diagrams: [],
@@ -68,7 +110,7 @@ export function Markdown({ children }: { children: string }) {
     const { text, diagrams } = split(children);
     const parsed = marked.parse(text, { async: false, gfm: true, breaks: false });
     // `data-mermaid` must survive the sanitiser, or the placeholders are unreachable.
-    const html = DOMPurify.sanitize(parsed, { ADD_ATTR: ['data-mermaid'] });
+    const html = wrapTables(DOMPurify.sanitize(parsed, { ADD_ATTR: ['data-mermaid'] }));
     setRendered({ html, diagrams });
   }, [children]);
 
@@ -91,18 +133,30 @@ export function Markdown({ children }: { children: string }) {
     // An AbortController rather than a boolean: rendering a diagram is asynchronous, and a render
     // that finishes after the section changed must not paint over what replaced it.
     const cancel = new AbortController();
-    initMermaid(dark);
+    // A function, so the check after an `await` is not narrowed to what it was before it.
+    const cancelled = () => cancel.signal.aborted;
 
     void (async () => {
+      // A macrotask, not a microtask: the theme provider sets `data-theme` in an effect of its own,
+      // which runs *after* this child's, and the tokens must be read once it has.
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      if (cancelled()) return;
+      initMermaid(dark);
       for (const [index, source] of rendered.diagrams.entries()) {
         const slot = root.querySelector(`[data-mermaid="${String(index)}"]`);
         if (slot === null) continue;
         try {
           drawings += 1;
           const { svg } = await mermaid.render(`fm-mermaid-${String(drawings)}`, source);
-          if (!cancel.signal.aborted) slot.innerHTML = svg;
+          if (cancelled()) continue;
+          slot.innerHTML = svg;
+          // Reachable and named, so the zoom is not a mouse-only feature.
+          slot.setAttribute('role', 'button');
+          slot.setAttribute('tabindex', '0');
+          slot.setAttribute('aria-label', 'Diagram. Activate to open it full size.');
+          slot.setAttribute('style', 'cursor:zoom-in;overflow-x:auto');
         } catch (error) {
-          if (cancel.signal.aborted) return;
+          if (cancelled()) return;
           // The source and the complaint, not an empty box: a diagram that silently vanished is
           // one nobody notices is broken.
           const message = error instanceof Error ? error.message : String(error);
@@ -119,12 +173,46 @@ export function Markdown({ children }: { children: string }) {
     };
   }, [rendered, dark]);
 
+  const zoomFrom = (target: EventTarget | null): string | null => {
+    if (!(target instanceof Element)) return null;
+    const slot = target.closest('[data-mermaid]');
+    if (slot === null || !host.current?.contains(slot)) return null;
+    return slot.querySelector('svg')?.outerHTML ?? null;
+  };
+  const onClick = (event: MouseEvent) => {
+    const svg = zoomFrom(event.target);
+    if (svg !== null) setZoomed(svg);
+  };
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    // Only the slot itself: a space typed in a focused table region must still scroll it.
+    if (!(event.target instanceof Element) || !event.target.hasAttribute('data-mermaid')) return;
+    const svg = zoomFrom(event.target);
+    if (svg === null) return;
+    event.preventDefault();
+    setZoomed(svg);
+  };
+
   return (
-    <div
-      ref={host}
-      className="fm-markdown"
-      // Sanitised in the effect above, and the only path by which content reaches this.
-      dangerouslySetInnerHTML={{ __html: rendered.html }}
-    />
+    <>
+      <div
+        ref={host}
+        className="fm-markdown"
+        onClick={onClick}
+        onKeyDown={onKeyDown}
+        // Sanitised in the effect above, and the only path by which content reaches this.
+        dangerouslySetInnerHTML={{ __html: rendered.html }}
+      />
+      <Modal
+        open={zoomed !== null}
+        onOpenChange={(open) => {
+          if (!open) setZoomed(null);
+        }}
+        title="Diagram"
+        size="lg"
+      >
+        {zoomed !== null && <ZoomedDiagram svg={zoomed} />}
+      </Modal>
+    </>
   );
 }
