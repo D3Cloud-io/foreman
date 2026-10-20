@@ -128,6 +128,8 @@ export interface StoredBlob {
   readonly blob: Blob;
   /** False when the bytes were already stored: no second row, no second file. */
   readonly created: boolean;
+  /** The audit event the upload wrote (FRM-REQ-243); empty when the bytes were already stored. */
+  readonly auditEventIds: string[];
 }
 
 /**
@@ -147,7 +149,7 @@ export async function storeBlob(
   await writeOnce(dir, sha256, input.bytes);
 
   const existing = await db.blob.findUnique({ where: { sha256 } });
-  if (existing !== null) return { blob: shape(existing), created: false };
+  if (existing !== null) return { blob: shape(existing), created: false, auditEventIds: [] };
 
   try {
     const row = await db.$transaction(async (tx) => {
@@ -159,22 +161,22 @@ export async function storeBlob(
           createdBy: actor.actor,
         },
       });
-      await record(tx, {
+      const event = await record(tx, {
         ...actor,
         action: 'create',
         entityType: 'blob',
         entityId: created.id,
         after: shape(created),
       });
-      return created;
+      return { created, event };
     });
-    return { blob: shape(row), created: true };
+    return { blob: shape(row.created), created: true, auditEventIds: [row.event] };
   } catch (error) {
     // Two uploads of the same bytes raced past the lookup, and the unique index chose one. The
     // loser's answer is the winner's row — the same thing a later upload would have been told.
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       const winner = await db.blob.findUnique({ where: { sha256 } });
-      if (winner !== null) return { blob: shape(winner), created: false };
+      if (winner !== null) return { blob: shape(winner), created: false, auditEventIds: [] };
     }
     throw error;
   }

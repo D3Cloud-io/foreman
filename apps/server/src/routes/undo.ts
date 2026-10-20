@@ -6,7 +6,7 @@ import {
 import { Router, type RequestHandler, type Response } from 'express';
 import { requireAuth, requireScope } from '../auth/middleware.js';
 import type { Db } from '../db.js';
-import { auditHistory, undo } from '../domain/undo.js';
+import { auditHistory, undo, undoabilityOf } from '../domain/undo.js';
 import { actorOf, handler, param, parseQuery } from './helpers.js';
 
 /**
@@ -59,5 +59,12 @@ export function auditEventsHandler(db: Db): RequestHandler {
     const query = parseQuery(AuditEventsQuery, req, res);
     if (query === null) return;
     res.json(await auditHistory(db, query.entity, query.limit));
+  });
+}
+
+/** `GET /api/audit-events/:id/undoable` — the verdict on one event, for those a history leaves unchecked. */
+export function undoabilityHandler(db: Db): RequestHandler {
+  return handler(async (req, res) => {
+    res.json(await undoabilityOf(db, param(req, 'id')));
   });
 }

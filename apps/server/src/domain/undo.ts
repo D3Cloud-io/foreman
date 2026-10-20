@@ -1,6 +1,6 @@
 import type { Db } from '../db.js';
 import type { EntityType } from '../generated/prisma/enums.js';
-import type { AuditEventEntry, AuditEventsResponse } from '@foreman/shared';
+import type { AuditEventEntry, AuditEventsResponse, AuditEventUndoability } from '@foreman/shared';
 import { eventIds, record, scrub, summarize, type Actor, type TransactionClient } from './audit.js';
 import { Conflict, Invalid, NotFound } from './errors.js';
 import {
@@ -173,6 +173,24 @@ export async function softDelete(
   });
 }
 
+/**
+ * A transaction that answers the group advisory lock without taking it. `undoReorder` (groups.ts)
+ * takes the lock itself; in a dry run that would let a read-only caller queue every group write.
+ */
+function withoutGroupLock(tx: TransactionClient): TransactionClient {
+  return new Proxy(tx, {
+    get(target, property) {
+      if (property === '$executeRaw') {
+        return (strings: TemplateStringsArray, ...values: unknown[]) =>
+          strings.join('').includes('pg_advisory_xact_lock')
+            ? Promise.resolve(0)
+            : (target.$executeRaw as (...args: unknown[]) => unknown)(strings, ...values);
+      }
+      return Reflect.get(target, property) as unknown;
+    },
+  });
+}
+
 export interface UndoResult {
   readonly undid: string;
   readonly action: string;
@@ -280,7 +298,7 @@ async function undoEvent(
     const rollsBack = {
       $transaction: (run: (tx: TransactionClient) => Promise<unknown>) =>
         db.$transaction(async (tx) => {
-          await run(tx);
+          await run(withoutGroupLock(tx));
           throw new DryRunPassed();
         }),
     } as unknown as Db;
@@ -297,20 +315,27 @@ async function undoEvent(
   return db.$transaction(async (tx) => {
     // The lock before any read, so `current` — what the drift check compares, what `finishUndo`
     // settles from, and the reversal's `before` — is what every other group write left.
-    if (GROUPED.has(type)) await lockGroups(tx);
+    //
+    // **Not in a dry run.** A verdict is advisory — the real undo takes the lock and checks again —
+    // and `GET /api/audit-events` is a read: a caller holding only `read` must not be able to
+    // queue every group write behind it by asking for a history.
+    if (GROUPED.has(type) && !dryRun) await lockGroups(tx);
 
     // Claimed before anything is read or written: of two undos of the same change, exactly one
-    // gets past this line, and the other is refused rather than reversing it a second time.
-    const claimed = await tx.auditEvent.updateMany({
-      where: { id: event.id, undoneAt: null },
-      data: { undoneAt: new Date() },
-    });
-    if (claimed.count === 0) throw new Conflict('that change has already been undone');
+    // gets past this line, and the other is refused rather than reversing it a second time. A dry
+    // run leaves the event alone (`undoneAt` was read above), so it never holds its row.
+    if (!dryRun) {
+      const claimed = await tx.auditEvent.updateMany({
+        where: { id: event.id, undoneAt: null },
+        data: { undoneAt: new Date() },
+      });
+      if (claimed.count === 0) throw new Conflict('that change has already been undone');
+    }
 
     const table = model(tx, type);
     // The row too: a lifecycle rollup locks a project's row without the group lock, and a
     // `current` read beside one would record — and let this restore — a lifecycle it has replaced.
-    if (type === 'project') {
+    if (type === 'project' && !dryRun) {
       await tx.$queryRaw`SELECT id FROM project WHERE id = ${event.entityId}::uuid FOR UPDATE`;
     }
     const current = (await (table as { findUnique: (args: unknown) => Promise<unknown> }).findUnique(
@@ -512,11 +537,13 @@ async function undoLink(
 
   return db.$transaction(async (tx) => {
     // Claimed inside the transaction, so two undos of the same event at once cannot both reverse it.
-    const claimed = await tx.auditEvent.updateMany({
-      where: { id: event.id, undoneAt: null },
-      data: { undoneAt: new Date() },
-    });
-    if (claimed.count === 0) throw new Conflict('that change has already been undone');
+    if (!dryRun) {
+      const claimed = await tx.auditEvent.updateMany({
+        where: { id: event.id, undoneAt: null },
+        data: { undoneAt: new Date() },
+      });
+      if (claimed.count === 0) throw new Conflict('that change has already been undone');
+    }
 
     const present = await rowsPresent(tx, resolved);
     const marker = { to, kind };
@@ -647,6 +674,15 @@ function restorable(
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * How many of a history's newest events have their verdict worked out. A verdict is a rolled-back
+ * transaction, so a list of two hundred is two hundred of them; the console shows the newest few
+ * with Undo, and asks for any other with `undoabilityOf`.
+ */
+export const CHECKED_EVENTS = 10;
+
+export const NOT_CHECKED = 'not checked — open the event to check';
+
+/**
  * One record's history, newest first, each event saying whether it could be undone right now and
  * if not why (FRM-REQ-243).
  *
@@ -655,7 +691,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * A deleted record still has a history; that is where its undo is.
  *
  * `undoable` is not recomputed from a copy of the rules: `checkUndo` runs the undo itself and rolls
- * it back. It costs a transaction per event, so the list is capped.
+ * it back. Only the newest `CHECKED_EVENTS` are checked; the rest carry `undoable: null` and the
+ * reason `NOT_CHECKED`. A dry run takes no group lock and claims nothing (see `undoEvent`).
  */
 export async function auditHistory(
   db: Db,
@@ -669,17 +706,29 @@ export async function auditHistory(
   });
 
   const items: AuditEventEntry[] = [];
-  for (const event of events) {
-    const verdict = await checkUndo(db, event);
+  for (const [index, event] of events.entries()) {
+    const verdict = index < CHECKED_EVENTS ? await checkUndo(db, event) : null;
     items.push({
       id: event.id,
       at: event.createdAt.toISOString(),
       actor: { kind: event.actorKind, label: event.actor },
       action: event.action,
       summary: summarize({ ...event, entityType: event.entityType }),
-      undoable: verdict.undoable,
-      ...(verdict.undoable ? {} : { reason: verdict.reason }),
+      undoable: verdict === null ? null : verdict.undoable,
+      ...(verdict === null
+        ? { reason: NOT_CHECKED }
+        : verdict.undoable
+          ? {}
+          : { reason: verdict.reason }),
     });
   }
   return { entity, items };
+}
+
+/** One event's verdict, for the ones a history did not check. NotFound for an event that is not there. */
+export async function undoabilityOf(db: Db, id: string): Promise<AuditEventUndoability> {
+  const event = UUID.test(id) ? await db.auditEvent.findUnique({ where: { id } }) : null;
+  if (event === null) throw new NotFound(`audit event ${id}`);
+  const verdict = await checkUndo(db, event);
+  return { id, ...verdict };
 }

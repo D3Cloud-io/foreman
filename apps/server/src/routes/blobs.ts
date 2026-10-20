@@ -91,11 +91,11 @@ export function blobRoutes(db: Db, config: Config): Router {
         return;
       }
 
-      const { blob, created } = await storeBlob(db, actorOf(req), config.FOREMAN_BLOB_DIR, {
+      const { blob, created, auditEventIds } = await storeBlob(db, actorOf(req), config.FOREMAN_BLOB_DIR, {
         bytes: file.buffer,
         mediaType,
       });
-      res.status(created ? 201 : 200).json(blob);
+      res.status(created ? 201 : 200).json({ ...blob, auditEventIds });
     }),
   );
 

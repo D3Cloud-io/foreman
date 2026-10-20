@@ -101,14 +101,14 @@ export function screenRoutes(db: Db, config: Config): Router {
     handler(async (req, res) => {
       const body = parseBody(ScreenProposalCreate, req, res);
       if (body === null) return;
-      const { value, created } = await addProposal(
+      const { value, created, auditEventIds } = await addProposal(
         db,
         actorOf(req),
         param(req, 'code'),
         param(req, 'humanId'),
         body,
       );
-      res.status(created ? 201 : 200).json(value);
+      res.status(created ? 201 : 200).json({ ...value, auditEventIds });
     }),
   );
 
@@ -118,14 +118,14 @@ export function screenRoutes(db: Db, config: Config): Router {
     handler(async (req, res) => {
       const body = parseBody(ScreenCaptureCreate, req, res);
       if (body === null) return;
-      const { value, created } = await addCapture(
+      const { value, created, auditEventIds } = await addCapture(
         db,
         actorOf(req),
         param(req, 'code'),
         param(req, 'humanId'),
         body,
       );
-      res.status(created ? 201 : 200).json(value);
+      res.status(created ? 201 : 200).json({ ...value, auditEventIds });
     }),
   );
 
@@ -153,14 +153,14 @@ export function screenRoutes(db: Db, config: Config): Router {
     handler(async (req, res) => {
       const body = parseBody(ScreenComponentCreate, req, res);
       if (body === null) return;
-      const { value, created } = await addComponent(
+      const { value, created, auditEventIds } = await addComponent(
         db,
         actorOf(req),
         param(req, 'code'),
         param(req, 'humanId'),
         body,
       );
-      res.status(created ? 201 : 200).json(value);
+      res.status(created ? 201 : 200).json({ ...value, auditEventIds });
     }),
   );
 
