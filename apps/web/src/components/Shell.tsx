@@ -136,22 +136,40 @@ function useShortcuts(paletteOpen: boolean, setPaletteOpen: (open: boolean) => v
   // Read by the listener, which is bound once.
   const open = useRef(paletteOpen);
   open.current = paletteOpen;
+  // The key that last opened or closed something, until it is released: its auto-repeats are
+  // swallowed, so a held ⌘K does not flicker the palette and a held `/` or `?` cannot type itself
+  // into the input that has just taken focus.
+  const held = useRef<string | null>(null);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (event.repeat) {
+        if (held.current === event.key.toLowerCase()) event.preventDefault();
+        return;
+      }
       if (open.current && isPaletteChord(event, IS_MAC) && !event.defaultPrevented) {
         event.preventDefault();
+        held.current = event.key.toLowerCase();
         setPaletteOpen(false);
         return;
       }
       const action = shortcutFor(event, { mac: IS_MAC, dialogOpen: dialogIsOpen(document) });
       if (action === null) return;
       event.preventDefault();
+      held.current = event.key.toLowerCase();
       if (action === 'palette') setPaletteOpen(true);
       else openSheet();
     };
+    // A Mac sends no keyup for `k` while ⌘ is down, so letting go of a modifier ends it as well.
+    const onUp = (event: KeyboardEvent) => {
+      if (['Meta', 'Control', 'Shift'].includes(event.key) || event.key.toLowerCase() === held.current) {
+        held.current = null;
+      }
+    };
     document.addEventListener('keydown', onKey);
+    document.addEventListener('keyup', onUp);
     return () => {
       document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keyup', onUp);
     };
   }, [setPaletteOpen, openSheet]);
 }

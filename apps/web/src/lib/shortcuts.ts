@@ -41,6 +41,10 @@ export interface KeyLike {
   readonly shiftKey: boolean;
   readonly defaultPrevented?: boolean;
   readonly isComposing?: boolean;
+  /** Held down: the browser's auto-repeat, which is never a second press. */
+  readonly repeat?: boolean;
+  /** 229 is what a browser sends for a key an input method is handling. */
+  readonly keyCode?: number;
   readonly target: TargetLike | EventTarget | null;
 }
 
@@ -109,7 +113,9 @@ export function shortcutFor(
   event: KeyLike,
   env: { mac: boolean; dialogOpen: boolean },
 ): ShortcutAction | null {
-  if (event.defaultPrevented === true || event.isComposing === true || env.dialogOpen) return null;
+  if (event.defaultPrevented === true || event.isComposing === true || event.keyCode === 229) return null;
+  // A held key opens nothing a second time, and closes nothing it just opened.
+  if (event.repeat === true || env.dialogOpen) return null;
   if (isPaletteChord(event, env.mac)) return isDraftField(event.target) ? null : 'palette';
   if (event.metaKey || event.ctrlKey || event.altKey || isTextField(event.target)) return null;
   if (event.key === '/') return 'palette';
