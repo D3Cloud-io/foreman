@@ -281,6 +281,55 @@ test.describe('the group scope', () => {
     await expect(page.getByRole('button', { name: `Scope: ${CLOUD}. Change scope` })).toBeFocused();
   });
 
+  test('the shell keeps the scope: its rows, the brand and the switcher, across scoped pages', async ({ page }) => {
+    await page.goto(`/findings?group=${dormice.slug}`);
+    const nav = page.getByRole('navigation', { name: 'Main' });
+    for (const [name, to] of [
+      ['Home', '/'],
+      ['Projects', '/projects'],
+      ['Search', '/search'],
+    ] as const) {
+      await expect(nav.getByRole('link', { name, exact: true })).toHaveAttribute('href', `${to}?group=${dormice.slug}`);
+    }
+    // Findings carries a count when something needs you, which renames the link; match its start.
+    await expect(nav.getByRole('link', { name: /^Findings/ })).toHaveAttribute('href', `/findings?group=${dormice.slug}`);
+    await expect(page.getByRole('link', { name: 'Foreman' }).first()).toHaveAttribute('href', `/?group=${dormice.slug}`);
+
+    await nav.getByRole('link', { name: 'Search', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/search\\?group=${dormice.slug}$`));
+    await nav.getByRole('link', { name: 'Projects', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/projects\\?group=${dormice.slug}$`));
+    await expect(page.getByRole('button', { name: `Scope: ${DORMICE}. Change scope` })).toBeVisible();
+
+    // Into a project: not a scoped page, so the scope goes, the switcher says All projects, and
+    // the rows go back to plain links.
+    await page.getByRole('main').getByRole('link', { name: `Scoped ${IN_DORMICE[0]}` }).click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${IN_DORMICE[0]}$`));
+    await expect(page.getByRole('button', { name: 'Scope: All projects. Change scope' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: /^Findings/ })).toHaveAttribute('href', '/findings');
+
+    // Choosing a scope from a page a scope does not narrow goes to Home in it.
+    await page.getByRole('button', { name: 'Scope: All projects. Change scope' }).click();
+    await page.getByRole('menu').getByRole('menuitemradio', { name: new RegExp(`^${CLOUD}`) }).click();
+    await expect(page).toHaveURL(new RegExp(`/\\?group=${cloud.slug}$`));
+  });
+
+  test('on a phone the tab bar keeps the scope, and the drawer has the switcher too', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`/?group=${dormice.slug}`);
+    const bar = page.getByRole('navigation', { name: 'Primary' });
+    await expect(bar.getByRole('link', { name: 'Search', exact: true })).toHaveAttribute('href', `/search?group=${dormice.slug}`);
+    await expect(bar.getByRole('link', { name: 'Projects', exact: true })).toHaveAttribute('href', `/projects?group=${dormice.slug}`);
+    await bar.getByRole('link', { name: 'Search', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/search\\?group=${dormice.slug}$`));
+
+    await page.getByRole('button', { name: 'Open navigation' }).click();
+    const drawer = page.getByRole('dialog', { name: 'Navigation' });
+    await drawer.getByRole('button', { name: `Scope: ${DORMICE}. Change scope` }).click();
+    await page.getByRole('menu').getByRole('menuitemradio', { name: new RegExp(`^${CLOUD}`) }).click();
+    await expect(page).toHaveURL(new RegExp(`/search\\?group=${cloud.slug}$`));
+  });
+
   test('a link to a group that does not exist says so, with the way back', async ({ page }) => {
     await page.goto(`/findings?group=no-such-group-${RUN.toLowerCase()}`);
     await expect(page.getByRole('heading', { name: `No group is called “no-such-group-${RUN.toLowerCase()}”` })).toBeVisible();

@@ -13,7 +13,7 @@ import {
   Stack,
 } from '@d3cloud/ui';
 import { Check, Minus } from 'lucide-react';
-import { ScopeBar, UnknownScope } from '../components/ScopeSwitcher';
+import { ScopeNotice, UnknownScope } from '../components/ScopeSwitcher';
 import { foreman, type PortfolioRow } from '../lib/api';
 import { matchScope, scopeOf, scopeOptions, UNGROUPED as UNGROUPED_SCOPE, useScope } from '../lib/scope';
 import { useAsync } from '../lib/useAsync';
@@ -87,7 +87,7 @@ export function Projects({ search }: { search: string }) {
     return (
       <Page>
         {header}
-        <ScopeBar />
+        <ScopeNotice />
         <UnknownScope scope={scope} />
       </Page>
     );
@@ -103,7 +103,7 @@ export function Projects({ search }: { search: string }) {
     return (
       <Page>
         {header}
-        <ScopeBar />
+        <ScopeNotice />
         <EmptyState kind="error" heading="The projects did not load">
           {message}
         </EmptyState>
@@ -115,7 +115,7 @@ export function Projects({ search }: { search: string }) {
     return (
       <Page>
         {header}
-        <ScopeBar />
+        <ScopeNotice />
         <Skeleton lines={6} />
       </Page>
     );
@@ -156,7 +156,7 @@ export function Projects({ search }: { search: string }) {
   return (
     <Page>
       {header}
-      <ScopeBar />
+      <ScopeNotice />
       <Stack gap="16">
         <Cluster gap="12" align="center" justify="between">
           <Cluster gap="12" align="center" className="fm-filters">

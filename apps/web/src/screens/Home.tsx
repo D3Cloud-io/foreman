@@ -13,7 +13,7 @@ import {
   Stack,
 } from '@d3cloud/ui';
 import { ArrowUpRight, ChevronDown, ChevronRight, UsersRound } from 'lucide-react';
-import { ScopeBar, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
+import { ScopeNotice, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
 import { foreman, type PortfolioRow } from '../lib/api';
 import { scopedHref, scopeOf } from '../lib/scope';
 import { useAsync } from '../lib/useAsync';
@@ -276,7 +276,7 @@ export function Home({ search }: { search: string }) {
   const frame = (description: string, content: ReactNode) => (
     <Page>
       <PageHeader title="Home" description={description} />
-      <ScopeBar />
+      <ScopeNotice />
       {content}
     </Page>
   );

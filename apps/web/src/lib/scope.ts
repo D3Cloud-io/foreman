@@ -8,7 +8,7 @@ import { navigate, useLocation } from './router';
  * `?group=dormice` narrows Home, Projects, Findings, Search and Drift to one family, and because it
  * is in the URL a link to "Dormice's findings" is a link: shared, it opens in that scope. Moving
  * between scoped pages keeps it because their links carry it **in their href** (`scopedHref`,
- * `ScopedLink`), so a middle-click, a new tab and a copied link keep it too; a page that is not
+ * `useScope().link`), so a middle-click, a new tab and a copied link keep it too; a page that is not
  * scoped — a project, a finding, Settings — drops it, because it would mean nothing there.
  *
  * Everything but `useScope` is a pure function over strings, so the rules are tested once.

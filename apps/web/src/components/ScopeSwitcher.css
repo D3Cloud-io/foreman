@@ -182,15 +182,23 @@
   color: var(--color-fg-muted);
 }
 
-/* The switcher on a scoped page, until the shell has a place for it (FRM-T-16.4). */
-.fm-scope-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-12);
+/* The shell's places for it (FRM-T-16.4's slot): under the brand in the sidebar and the drawer,
+   and beside the brand in the phone's top bar. */
+.fm-scope-slot {
+  padding: 0 var(--space-12) var(--space-12);
 }
-.fm-scope-bar .fm-scope {
-  width: 16rem;
-  max-width: 100%;
+.fm-scope--rail {
+  align-items: center;
+}
+.fm-scope__button--rail {
+  justify-content: center;
+  width: 2.5rem;
+  padding: 0;
+  gap: var(--space-4);
+}
+.fm-scope-topbar {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  min-width: 0;
 }

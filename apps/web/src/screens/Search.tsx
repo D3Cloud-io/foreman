@@ -14,7 +14,7 @@ import {
   Skeleton,
   Stack,
 } from '@d3cloud/ui';
-import { ScopeBar, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
+import { ScopeNotice, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
 import { foreman, type SearchHit, type SearchResult } from '../lib/api';
 import { replaceLocation } from '../lib/router';
 import { scopeOf, withParams } from '../lib/scope';
@@ -104,7 +104,7 @@ export function Search({ search }: { search: string }) {
               : `Across ${phrase} — by kind, an exact ID first.`
         }
       />
-      <ScopeBar />
+      <ScopeNotice />
 
       <form
         onSubmit={(event) => {

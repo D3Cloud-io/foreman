@@ -1,6 +1,17 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { EmptyState, Link, Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger, Modal } from '@d3cloud/ui';
-import { Check, ChevronsUpDown, Settings2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  EmptyState,
+  Link,
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuSeparator,
+  MenuTrigger,
+  Modal,
+  Tooltip,
+  useAppShell,
+} from '@d3cloud/ui';
+import { Check, ChevronsUpDown, Layers, Settings2 } from 'lucide-react';
 import { foreman } from '../lib/api';
 import {
   matchScope,
@@ -18,9 +29,13 @@ import './ScopeSwitcher.css';
  * The scope switcher (17.03, FRM-ADR-024, FRM-T-17.4): All projects, each group with its count,
  * Ungrouped, then Manage groups…, the current one checked.
  *
- * - **`menu`** — the sidebar's: a full-width button under the brand, opening a Menu.
+ * - **`menu`** — the sidebar's and the phone drawer's: a full-width button under the brand, opening
+ *   a Menu; an icon with a tooltip when the sidebar is collapsed to its rail.
  * - **`sheet`** — the phone top bar's: a chip with the group's dot and name, opening the same list
  *   as a bottom sheet (the library's Modal is one below 600px).
+ *
+ * The shell mounts both (`components/Shell.tsx`); a scoped page shows `ScopeNotice` under its
+ * header.
  *
  * Every entry is a real link to the same page in that scope, so a scope is something you can open
  * in a new tab or copy; the URL is the only place it is kept. A group's dot is never shown without
@@ -74,6 +89,8 @@ export function useScopeView() {
 export function ScopeSwitcher({ presentation }: { presentation: 'menu' | 'sheet' }) {
   const { hrefFor, groups, options, current, name } = useScopeView();
   const [open, setOpen] = useState(false);
+  const { collapsed } = useAppShell();
+  const rail = presentation === 'menu' && collapsed;
   // The checked entry, so opening lands on where you are rather than on the first row (17.03).
   // Focus goes back to the trigger on close: the Menu and the Modal (given it as `trigger`) both
   // return it there.
@@ -155,21 +172,38 @@ export function ScopeSwitcher({ presentation }: { presentation: 'menu' | 'sheet'
     );
   }
 
+  // The sidebar collapsed to its 64px rail has no room for a name, so the button is an icon with
+  // the scope said by its tooltip and its accessible name — never a bare accent dot.
+  const trigger = rail ? (
+    <button type="button" className="fm-scope__button fm-scope__button--rail" aria-label={label}>
+      <Layers aria-hidden="true" className="fm-icon-sm" />
+      {dot}
+    </button>
+  ) : (
+    <button type="button" className="fm-scope__button" aria-label={label}>
+      {dot}
+      <span className="fm-scope__label fm-truncate">{name}</span>
+      {current !== undefined && <span className="fm-scope__count">{current.count}</span>}
+      <ChevronsUpDown aria-hidden="true" className="fm-icon-sm fm-scope__chevron" />
+    </button>
+  );
+
   return (
-    <div className="fm-scope">
-      <span className="fm-scope__caption" aria-hidden="true">
-        Scope
-      </span>
+    <div className={`fm-scope${rail ? ' fm-scope--rail' : ''}`}>
+      {!rail && (
+        <span className="fm-scope__caption" aria-hidden="true">
+          Scope
+        </span>
+      )}
       <Menu>
-        <MenuTrigger>
-          <button type="button" className="fm-scope__button" aria-label={label}>
-            {dot}
-            <span className="fm-scope__label fm-truncate">{name}</span>
-            {current !== undefined && <span className="fm-scope__count">{current.count}</span>}
-            <ChevronsUpDown aria-hidden="true" className="fm-icon-sm fm-scope__chevron" />
-          </button>
-        </MenuTrigger>
-        <MenuContent className="fm-scope__menu" {...openOnCurrent}>
+        {rail ? (
+          <Tooltip content={`Scope: ${name}`} side="right">
+            <MenuTrigger>{trigger}</MenuTrigger>
+          </Tooltip>
+        ) : (
+          <MenuTrigger>{trigger}</MenuTrigger>
+        )}
+        <MenuContent className="fm-scope__menu" side={rail ? 'right' : 'bottom'} {...openOnCurrent}>
           {options.map((option) => (
             <MenuItem key={option.key} asChild>
               <a
@@ -238,36 +272,5 @@ export function UnknownScope({ scope }: { scope: string }) {
         Show every project
       </Link>
     </EmptyState>
-  );
-}
-
-const WIDE = '(min-width: 1024px)';
-
-function subscribeWide(onChange: () => void): () => void {
-  const query = window.matchMedia(WIDE);
-  query.addEventListener('change', onChange);
-  return () => {
-    query.removeEventListener('change', onChange);
-  };
-}
-
-/**
- * The line above a scoped page's content: the switcher, and "Viewing … · Show all".
- *
- * TEMPORARY — the switcher belongs in the sidebar head and the phone top bar, which FRM-T-16.4 is
- * rebuilding. Until that lands it stands here, on each scoped page, in the presentation the shell
- * will give it at this width; once it is mounted in the shell, this keeps only the notice.
- */
-export function ScopeBar() {
-  const wide = useSyncExternalStore(
-    subscribeWide,
-    () => window.matchMedia(WIDE).matches,
-    () => true,
-  );
-  return (
-    <div className="fm-scope-bar">
-      <ScopeSwitcher presentation={wide ? 'menu' : 'sheet'} />
-      <ScopeNotice />
-    </div>
   );
 }

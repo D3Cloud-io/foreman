@@ -13,7 +13,7 @@ import {
   Table,
   type TableColumn,
 } from '@d3cloud/ui';
-import { ScopeBar, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
+import { ScopeNotice, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
 import { foreman, type FindingRow } from '../lib/api';
 import { replaceLocation } from '../lib/router';
 import { scopeOf, withParams } from '../lib/scope';
@@ -161,7 +161,7 @@ export function Findings({ search }: { search: string }) {
             }
           : {})}
       />
-      <ScopeBar />
+      <ScopeNotice />
 
       {findings.state.status === 'ready' && items.length > 0 && (
         <Stack gap="16">

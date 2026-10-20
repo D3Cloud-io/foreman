@@ -1,5 +1,5 @@
 import { Alert, Cluster, EmptyState, Grid, Page, PageHeader, Section, Skeleton, Stack } from '@d3cloud/ui';
-import { ScopeBar, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
+import { ScopeNotice, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
 import type { ReactNode } from 'react';
 import { foreman, type DriftAcross as DriftAcrossResult } from '../lib/api';
 import { scopeOf } from '../lib/scope';
@@ -56,7 +56,7 @@ export function DriftAcross({ search }: { search: string }) {
   return (
     <Page>
       {header}
-      <ScopeBar />
+      <ScopeNotice />
       {body}
     </Page>
   );
