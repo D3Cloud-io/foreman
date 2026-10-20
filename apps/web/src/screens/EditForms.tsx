@@ -33,6 +33,13 @@ interface Field {
   readonly optional?: boolean;
 }
 
+/** One reason the exit gate refused a phase, as the 409 names it (FRM-REQ-056). */
+interface GateFailure {
+  readonly kind: string;
+  readonly humanId: string;
+  readonly detail: string;
+}
+
 export interface EditFormProps {
   /** Names the action: "Edit BND-T-0.3", never "Edit". */
   title: string;
@@ -57,6 +64,9 @@ export function EditForm({
   const [values, setValues] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  // A refused phase completion carries every reason (FRM-REQ-056). The headline alone says how
+  // many things are in the way; these say which, so the person knows what to go and fix.
+  const [blockers, setBlockers] = useState<GateFailure[]>([]);
   const [busy, setBusy] = useState(false);
 
   const set = (name: string, value: string) => {
@@ -68,6 +78,7 @@ export function EditForm({
     setBusy(true);
     setError(null);
     setFieldErrors({});
+    setBlockers([]);
 
     // Only what changed. Sending the whole form would overwrite a field somebody else edited
     // between this screen loading and this button being pressed.
@@ -91,13 +102,16 @@ export function EditForm({
       })
       .catch((caught: unknown) => {
         if (caught instanceof ApiError) {
-          const body = caught.body as { fields?: { path: string; message: string }[] } | undefined;
+          const body = caught.body as
+            | { fields?: { path: string; message: string }[]; gate?: { failures?: GateFailure[] } }
+            | undefined;
           if (body?.fields !== undefined) {
             // Per-field, where the person can act on it, rather than one message at the top.
             setFieldErrors(
               Object.fromEntries(body.fields.map((f) => [f.path, f.message])),
             );
           }
+          setBlockers(body?.gate?.failures ?? []);
           setError(caught.message);
         } else {
           setError('That did not save.');
@@ -118,6 +132,7 @@ export function EditForm({
           setValues(initial);
           setError(null);
           setFieldErrors({});
+          setBlockers([]);
         }
       }}
       trigger={trigger}
@@ -129,6 +144,15 @@ export function EditForm({
           {error === null ? null : (
             <Alert tone="danger" title="That did not save" dynamic>
               {error}
+              {blockers.length === 0 ? null : (
+                <ul aria-label="What is in the way">
+                  {blockers.map((b) => (
+                    <li key={`${b.kind}:${b.humanId}`}>
+                      <code>{b.humanId}</code> {b.detail}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Alert>
           )}
 
