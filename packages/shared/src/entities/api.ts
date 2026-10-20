@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AnyId, HumanId, ProjectCode } from '../ids.js';
+import { GroupArg } from './groups.js';
 
 /**
  * The request shapes the API and the MCP shim **both** use.
@@ -35,17 +36,19 @@ export const BriefInput = z.object({
 });
 export type BriefInput = z.infer<typeof BriefInput>;
 
-/** `foreman_portfolio` / `GET /api/portfolio`. No arguments: it is the whole picture or nothing. */
-export const PortfolioInput = z.object({});
+/**
+ * `foreman_portfolio` / `GET /api/portfolio`: every project, under its group in order, the
+ * ungrouped last (FRM-REQ-237). `group` narrows to one — `GRP-001`, a slug, or `ungrouped`.
+ */
+export const PortfolioInput = z.object({
+  group: GroupArg.optional().describe('Narrow to one: GRP-n, slug or ungrouped'),
+});
 export type PortfolioInput = z.infer<typeof PortfolioInput>;
 
 /** `foreman_search` / `GET /api/search`. */
 export const SearchInput = z.object({
-  q: z.string().min(1).max(200).describe('What to look for; an exact human ID resolves first'),
-  types: z
-    .array(SearchableType)
-    .optional()
-    .describe('Narrow to these kinds of thing'),
+  q: z.string().min(1).max(200).describe('What to look for'),
+  types: z.array(SearchableType).optional().describe('Narrow to these kinds'),
   project: ProjectCode.optional().describe('Narrow to one project'),
   limit: z.number().int().min(1).max(100).default(30),
 });
@@ -71,7 +74,7 @@ export type GetInput = z.infer<typeof GetInput>;
  */
 export const CoverageInput = z.object({
   project: ProjectCode.describe('The project code, e.g. BND'),
-  phase: HumanId.optional().describe('A phase ID, e.g. BND-P-3: answer its exit gate instead'),
+  phase: HumanId.optional().describe('A phase ID, e.g. BND-P-3'),
 });
 export type CoverageInput = z.infer<typeof CoverageInput>;
 

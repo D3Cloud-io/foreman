@@ -79,8 +79,8 @@ export type FindingUpdate = z.infer<typeof FindingUpdate>;
 
 /** `foreman_findings` / `GET /api/findings`. Cross-project by default — that is the whole point. */
 export const FindingsInput = z.object({
-  project: ProjectCode.optional().describe('Narrow to one project; omit for every project'),
-  severity: Severity.optional().describe('critical, high, medium or low'),
+  project: ProjectCode.optional().describe('Narrow to one project'),
+  severity: Severity.optional(),
   status: FindingStatus.optional().describe('Defaults to open'),
   lens: z.string().max(40).optional().describe('security, accessibility, operability, …'),
   limit: z.number().int().min(1).max(200).default(50),

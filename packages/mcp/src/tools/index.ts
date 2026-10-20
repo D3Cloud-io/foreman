@@ -81,17 +81,26 @@ export const READ_TOOLS: readonly ToolDefinition[] = [
   {
     name: 'foreman_portfolio',
     title: 'Portfolio',
-    description: 'One row per project: lifecycle, active phase, task counts, criticals, CI, drift.',
+    description:
+      'Every project under its group, in order: lifecycle, active phase, task counts, criticals, ' +
+      'CI, drift.',
     inputSchema: PortfolioInput,
     cache: CACHE.portfolio,
-    run: async (client) => client.get('/api/portfolio'),
+    run: async (client, input) => {
+      const args = PortfolioInput.parse(input);
+      // The grouped sections only. `items` is the same rows again in code order, kept for the
+      // readers that predate groups; sent here it would double every portfolio call's output.
+      const answer = await (args.group === undefined
+        ? client.get<Record<string, unknown>>('/api/portfolio')
+        : client.get<Record<string, unknown>>('/api/portfolio', { group: args.group }));
+      return Object.fromEntries(Object.entries(answer).filter(([key]) => key !== 'items'));
+    },
   },
   {
     name: 'foreman_search',
     title: 'Search',
     description:
-      'Typed search across requirements, tasks, ADRs, findings, decisions, risks, terms, phases ' +
-      'and document sections. An exact human ID resolves to that entity first.',
+      'Search every project, by kind; an exact human ID resolves to that entity first.',
     inputSchema: SearchInput,
     cache: CACHE.search,
     run: async (client, input) => {
@@ -123,7 +132,7 @@ export const READ_TOOLS: readonly ToolDefinition[] = [
     title: 'Coverage',
     description:
       'Uncovered Musts, tasks citing no requirement, requirements with no acceptance test, EARS ' +
-      'warnings. With a phase, answers its exit gate instead: what stands in the way of completing it.',
+      'warnings. With a phase: its exit gate, what stands in the way of completing it.',
     inputSchema: CoverageInput,
     cache: CACHE.coverage,
     run: async (client, input) => {
@@ -137,8 +146,8 @@ export const READ_TOOLS: readonly ToolDefinition[] = [
     name: 'foreman_findings',
     title: 'Findings inbox',
     description:
-      'Open audit findings across every project, ranked by severity. Narrow by project, severity ' +
-      'or lens. Each carries its location, the audit it came from and its fix state.',
+      'Open audit findings across every project, by severity, each with its location, audit and ' +
+      'fix state.',
     inputSchema: FindingsInput,
     cache: CACHE.findings,
     run: async (client, input) => {

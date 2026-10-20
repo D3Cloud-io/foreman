@@ -1,6 +1,10 @@
+import type { GroupAccent, ScopedGuidelineSummary } from '@foreman/shared';
 import type { Db } from '../db.js';
 import { phaseInFlight } from './wherewestand.js';
 import { driftFor, type DriftCategory } from './drift.js';
+import { NotFound } from './errors.js';
+import { findGroup, listGroups } from './groups.js';
+import { scopedGuidelineSummaries } from './guidelines.js';
 
 /**
  * The portfolio — one row per project, answering "where is everything" at a glance
@@ -16,6 +20,8 @@ export interface PortfolioRow {
   readonly code: string;
   readonly name: string;
   readonly lifecycle: string;
+  /** The family it belongs to (FRM-ADR-024), by the names a link uses, or null for none. */
+  readonly group: PortfolioGroupRef | null;
   readonly phase: { readonly humanId: string; readonly number: string; readonly name: string } | null;
   readonly tasks: {
     readonly open: number;
@@ -41,6 +47,7 @@ export async function portfolio(db: Db, codes?: string[]): Promise<PortfolioRow[
   const projects = await db.project.findMany({
     where: { deletedAt: null, ...(codes === undefined ? {} : { code: { in: codes } }) },
     orderBy: { code: 'asc' },
+    include: { group: { select: { humanId: true, name: true, slug: true, accent: true, deletedAt: true } } },
   });
 
   // One round trip per project is acceptable at this scale — there are twenty of them, not twenty
@@ -96,6 +103,15 @@ export async function portfolio(db: Db, codes?: string[]): Promise<PortfolioRow[
         code: project.code,
         name: project.name,
         lifecycle: project.lifecycle,
+        group:
+          project.group === null || project.group.deletedAt !== null
+            ? null
+            : {
+                humanId: project.group.humanId,
+                name: project.group.name,
+                slug: project.group.slug,
+                accent: project.group.accent,
+              },
         phase:
           phase === null
             ? null
@@ -113,4 +129,107 @@ export async function portfolio(db: Db, codes?: string[]): Promise<PortfolioRow[
       };
     }),
   );
+}
+
+/** A group as a portfolio row names it. */
+export interface PortfolioGroupRef {
+  readonly humanId: string;
+  readonly name: string;
+  readonly slug: string;
+  readonly accent: GroupAccent;
+}
+
+/** One section of the grouped portfolio: a group, and its projects' rows in the group's order. */
+export interface PortfolioGroup {
+  readonly humanId: string;
+  readonly name: string;
+  readonly slug: string;
+  readonly accent: GroupAccent;
+  readonly siteUrl: string | null;
+  readonly projects: readonly PortfolioRow[];
+}
+
+/** The projects in no group, listed last. Not a group: it has no ID. */
+export interface PortfolioUngrouped {
+  readonly humanId: null;
+  readonly name: 'Ungrouped';
+  readonly slug: 'ungrouped';
+  readonly projects: readonly PortfolioRow[];
+}
+
+/**
+ * `GET /api/portfolio` (FRM-REQ-133, FRM-REQ-237).
+ *
+ * `items` is the flat list it always was, in code order, so a reader that predates groups — the
+ * console's dashboard and D3 Constellation's portfolio both decode `items` — reads the same answer.
+ * `groups` and `ungrouped` are the same rows again, sectioned: every live group in its order with
+ * its projects in theirs, and the projects in no group last (FRM-REQ-226).
+ *
+ * `guidelines` carries each active guideline with its scope (FRM-ADR-024).
+ *
+ * Narrowed to a group, everything is that group's: `items` and `groups` hold only it, `ungrouped`
+ * is null, and `guidelines` are the ones that apply to it. Narrowed to `ungrouped`, `groups` is
+ * empty and `guidelines` are the ones for every project. An unknown group is a 404.
+ */
+export interface Portfolio {
+  readonly items: readonly PortfolioRow[];
+  readonly nextCursor: null;
+  readonly total: number;
+  readonly groups: readonly PortfolioGroup[];
+  readonly ungrouped: PortfolioUngrouped | null;
+  readonly guidelines: readonly ScopedGuidelineSummary[];
+}
+
+const UNGROUPED = 'ungrouped';
+
+export async function groupedPortfolio(db: Db, groupRef?: string): Promise<Portfolio> {
+  const ref = groupRef?.trim();
+  const narrowed = ref === undefined || ref.length === 0 ? undefined : ref;
+  const onlyUngrouped = narrowed?.toLowerCase() === UNGROUPED;
+  const only = narrowed === undefined || onlyUngrouped ? null : await findGroup(db, narrowed);
+  if (narrowed !== undefined && !onlyUngrouped && only === null) {
+    throw new NotFound(`group ${narrowed}`);
+  }
+
+  const listing = await listGroups(db);
+  const sections = listing.items.filter((group) => only === null || group.id === only.id);
+  const wanted =
+    narrowed === undefined
+      ? undefined
+      : (onlyUngrouped ? listing.ungrouped.projects : (sections[0]?.projects ?? [])).map((p) => p.code);
+
+  const [rows, guidelines] = await Promise.all([
+    portfolio(db, wanted),
+    scopedGuidelineSummaries(
+      db,
+      narrowed === undefined ? undefined : { groupId: only === null ? null : only.id },
+    ),
+  ]);
+  const byCode = new Map(rows.map((row) => [row.code, row]));
+  const rowsOf = (codes: readonly { code: string }[]): PortfolioRow[] =>
+    codes.flatMap((p) => {
+      const row = byCode.get(p.code);
+      return row === undefined ? [] : [row];
+    });
+
+  return {
+    items: rows,
+    nextCursor: null,
+    total: rows.length,
+    groups: onlyUngrouped
+      ? []
+      : sections.map((group) => ({
+          humanId: group.humanId,
+          name: group.name,
+          slug: group.slug,
+          accent: group.accent,
+          siteUrl: group.siteUrl,
+          projects: rowsOf(group.projects),
+        })),
+    ungrouped:
+      only === null
+        ? { humanId: null, name: 'Ungrouped', slug: 'ungrouped', projects: rowsOf(listing.ungrouped.projects) }
+        : null,
+    guidelines,
+  };
 }

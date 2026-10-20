@@ -1,7 +1,8 @@
-import { GUIDELINE_PREFIX, parseAnyId, PROJECT_IDEA_PREFIX } from '@foreman/shared';
+import { GROUP_PREFIX, GUIDELINE_PREFIX, parseAnyId, PROJECT_IDEA_PREFIX } from '@foreman/shared';
 import type { Db } from '../db.js';
 import type { EntityType } from '../generated/prisma/enums.js';
 import { NotFound } from './errors.js';
+import { findGroup, getGroup } from './groups.js';
 import { screenByHumanId } from './screens.js';
 
 /** How a dependency edge names the task at its other end. */
@@ -38,6 +39,9 @@ const BY_TYPE: Record<string, EntityType> = {
   [PROJECT_IDEA_PREFIX]: 'project_idea',
   // The other codeless one: a guideline applies to every project and so belongs to none.
   [GUIDELINE_PREFIX]: 'guideline',
+  // And a group, the family projects belong to (FRM-REQ-239): it comes back as the group, its
+  // projects in order and the active guidelines that apply to it — `GET /api/groups/:id`'s shape.
+  [GROUP_PREFIX]: 'group',
 };
 
 export interface EntityResult {
@@ -67,7 +71,7 @@ export async function getByHumanId(
     // Not a lookup failure: an unprefixed ID is ambiguous by construction, and saying so is more
     // useful than "not found".
     throw new NotFound(
-      `${humanId} is not a human ID Foreman issues (expected BND-REQ-021, PI-007 or GL-004)`,
+      `${humanId} is not a human ID Foreman issues (expected BND-REQ-021, PI-007, GL-004 or GRP-001)`,
     );
   }
 
@@ -215,6 +219,10 @@ async function findOne(
     case 'guideline': {
       const row = await db.guideline.findFirst({ where });
       return row === null ? null : { id: row.id, entity: row };
+    }
+    case 'group': {
+      const row = await findGroup(db, humanId);
+      return row === null ? null : { id: row.id, entity: { ...(await getGroup(db, humanId)) } };
     }
     case 'finding': {
       const row = await db.finding.findFirst({

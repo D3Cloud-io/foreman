@@ -1,10 +1,10 @@
+import { PortfolioInput } from '@foreman/shared';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireScope } from '../auth/middleware.js';
 import type { Db } from '../db.js';
 import { getByHumanId } from '../domain/entities.js';
-import { activeGuidelineSummaries } from '../domain/guidelines.js';
-import { portfolio } from '../domain/portfolio.js';
+import { groupedPortfolio } from '../domain/portfolio.js';
 import { resourceCatalogue } from '../domain/resources.js';
 import { SEARCHABLE, search } from '../domain/search.js';
 import { handler, param, parseQuery } from './helpers.js';
@@ -67,11 +67,13 @@ export function searchRoutes(db: Db): Router {
 
   router.get(
     '/portfolio',
-    handler(async (_req, res) => {
-      const [rows, guidelines] = await Promise.all([portfolio(db), activeGuidelineSummaries(db)]);
-      // The guidelines ride along (FRM-REQ-187): the portfolio is the cross-project read, and a
-      // session that starts there rather than in one project's brief should get them too.
-      res.json({ items: rows, nextCursor: null, total: rows.length, guidelines });
+    handler(async (req, res) => {
+      const query = parseQuery(PortfolioInput, req, res);
+      if (query === null) return;
+      // The guidelines ride along, each with its scope (FRM-REQ-187, FRM-REQ-237): the portfolio
+      // is the cross-project read, and a session that starts there rather than in one project's
+      // brief should get them too.
+      res.json(await groupedPortfolio(db, query.group));
     }),
   );
 

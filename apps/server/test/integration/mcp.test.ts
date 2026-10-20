@@ -165,8 +165,17 @@ describe.skipIf(url === undefined)('the MCP shim, end to end', () => {
       const client = await connect(readToken);
       const result = await client.callTool({ name: 'foreman_portfolio', arguments: {} });
 
-      const page = JSON.parse(text(result)) as { items: { code: string }[] };
-      expect(page.items.some((p) => p.code === CODE)).toBe(true);
+      // Sectioned by group, the ungrouped last (FRM-REQ-237); the flat `items` copy stays on the
+      // API for the readers that predate groups and is not sent over MCP twice.
+      const page = JSON.parse(text(result)) as {
+        groups: { projects: { code: string }[] }[];
+        ungrouped: { projects: { code: string }[] };
+      };
+      const codes = [...page.groups.flatMap((g) => g.projects), ...page.ungrouped.projects].map(
+        (p) => p.code,
+      );
+      expect(codes).toContain(CODE);
+      expect(page).not.toHaveProperty('items');
     });
 
     it('resolves an entity by human ID, with what cites it', async () => {

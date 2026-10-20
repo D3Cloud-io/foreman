@@ -4,6 +4,7 @@ import {
   AdrStatus,
   DocumentKind,
   GuidelineStatus,
+  type GuidelineScope,
   ProjectIdeaStatus,
   ProjectLifecycle,
   UserRole,
@@ -583,4 +584,22 @@ export interface GuidelineSummary {
   readonly humanId: string;
   readonly title: string;
   readonly decision: string;
+}
+
+/**
+ * A guideline as a project's brief carries it: only the active ones that apply to the project's
+ * group (FRM-REQ-236, FRM-ADR-024). One scoped to that group says so with `appliesTo: 'groups'`;
+ * one for every project carries nothing more, which keeps the line as short as it was.
+ */
+export interface BriefGuideline extends GuidelineSummary {
+  readonly appliesTo?: 'groups';
+}
+
+/**
+ * A guideline as the portfolio carries it: every active one, with where it applies — `'all'`, or
+ * `'groups'` and the `GRP-` IDs it names, in group order.
+ */
+export interface ScopedGuidelineSummary extends GuidelineSummary {
+  readonly appliesTo: GuidelineScope;
+  readonly groups: readonly string[];
 }
