@@ -213,7 +213,14 @@ for (const theme of ['light', 'dark'] as const) {
       await page.goto('/projects/EXMP/requirements');
       await page.waitForLoadState('networkidle');
       await page.getByRole('button', { name: 'Open navigation' }).click();
-      await page.getByRole('dialog', { name: 'Navigation' }).getByRole('link', { name: 'Screens' }).waitFor();
+      const drawer = page.getByRole('dialog', { name: 'Navigation' });
+      await drawer.getByRole('link', { name: 'Drift' }).waitFor();
+      // With both folds open, so their rows are checked too (FRM-T-16.4).
+      for (const name of ['Knowledge', 'Library']) {
+        const toggle = drawer.getByRole('button', { name });
+        if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
+      }
+      await drawer.getByRole('link', { name: 'Screens' }).waitFor();
 
       const violations = await violationsOn(page);
       expect(violations, `drawer (${theme}):\n  ${violations.join('\n  ')}`).toEqual([]);

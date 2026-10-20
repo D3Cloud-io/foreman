@@ -130,7 +130,11 @@ test.describe('the console', () => {
     const opener = page.getByRole('button', { name: /menu|navigation/i }).first();
     await expect(opener).toBeVisible();
     await opener.click();
-    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible();
+    // The tab bar carries Home and the everyday destinations; the drawer holds the rest — the
+    // Library, and a project's rows inside one (FRM-T-16.4).
+    const drawer = page.getByRole('dialog', { name: 'Navigation' });
+    await drawer.getByRole('button', { name: 'Library' }).click();
+    await expect(drawer.getByRole('link', { name: 'Guidelines' })).toBeVisible();
   });
 });
 

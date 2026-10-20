@@ -13,7 +13,7 @@ import {
   sectionSummary,
   siteLabel,
 } from './groups';
-import { navItems, settingsItems } from './nav';
+import { globalItems, libraryItems } from './nav';
 import { routeFor } from './router';
 
 /** FRM-T-17.3: the rules the Groups screens share, written once. */
@@ -198,15 +198,18 @@ describe('where groups live in the console', () => {
     expect(routeFor('/groups/dormice/extra').screen).toBe('not-found');
   });
 
-  it('puts Groups first under Settings, and not on a fund board', () => {
-    expect(settingsItems({ board: false, admin: true }).map((item) => item.label)).toEqual(['Groups', 'Health', 'API tokens']);
-    expect(settingsItems({ board: true, admin: true }).map((item) => item.label)).toEqual(['Health', 'API tokens']);
-    expect(navItems({ board: false, admin: true }).map((item) => item.label)).toEqual([
+  it('puts Groups in the Library, and not on a fund board', () => {
+    expect(libraryItems({ board: false, admin: true }).map((item) => item.label)).toEqual([
+      'Project ideas',
+      'Guidelines',
+      'Groups',
+      'Connect an agent',
+    ]);
+    expect(libraryItems({ board: true, admin: true }).map((item) => item.label)).toEqual(['Members', 'Connect an agent']);
+    expect(globalItems({ board: false, admin: true }, false).map((item) => item.label)).toEqual([
       'Home',
       'Projects',
       'Findings',
-      'Project ideas',
-      'Guidelines',
       'Search',
     ]);
   });

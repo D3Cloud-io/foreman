@@ -74,26 +74,42 @@ test.describe('the tab bar', () => {
 });
 
 test.describe('every destination is reachable on a phone', () => {
+  /** Opens a sidebar disclosure (Library, Knowledge) if it is closed, so its rows are links again. */
+  async function open(scope: ReturnType<Page['getByRole']>, name: string): Promise<void> {
+    const toggle = scope.getByRole('button', { name });
+    if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
+  }
+
   for (const path of ['/', '/projects/EXMP/requirements']) {
-    test(`from ${path}, through the drawer`, async ({ page }) => {
+    test(`from ${path}, through the drawer and the tab bar`, async ({ page }) => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await signIn(page);
       await page.goto(path);
-      await page.getByRole('navigation', { name: 'Main' }).getByRole('link').first().waitFor();
-      // Inside a project the sidebar's last group arrives with the brief.
-      if (path.startsWith('/projects/')) {
-        await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Screens' }).waitFor();
-      }
+      const main = page.getByRole('navigation', { name: 'Main' });
+      await main.getByRole('link').first().waitFor();
+      await open(main, 'Library');
+      if (path.startsWith('/projects/')) await open(main, 'Knowledge');
       const wide = await hrefsIn(page, 'Main');
       expect(wide.length).toBeGreaterThan(5);
 
+      // On a phone the tab bar carries the everyday destinations, so the drawer holds the rest
+      // (FRM-T-16.4): between them, everything the laptop's sidebar offers.
       await page.setViewportSize(PHONE);
+      await page.getByRole('navigation', { name: 'Primary' }).getByRole('link').first().waitFor();
+      const tabs = await hrefsIn(page, 'Primary');
       await page.getByRole('button', { name: 'Open navigation' }).click();
       const drawer = page.getByRole('dialog', { name: 'Navigation' });
       await expect(drawer).toBeVisible();
-      if (path.startsWith('/projects/')) await drawer.getByRole('link', { name: 'Screens' }).waitFor();
+      await open(drawer, 'Library');
+      if (path.startsWith('/projects/')) await open(drawer, 'Knowledge');
       const narrow = await hrefsIn(page, 'Main');
-      expect(narrow).toEqual(wide);
+      for (const href of wide) {
+        expect([...narrow, ...tabs], `${href} is on a laptop and nowhere on a phone`).toContain(href);
+      }
+      // The drawer does not repeat the four everyday tabs. The fifth follows where you are (the
+      // project, or Project ideas), and its row in the drawer is where it sits among its kind.
+      const everyday = tabs.slice(0, 4);
+      expect(narrow.filter((href) => everyday.includes(href))).toEqual([]);
 
       // And choosing one closes the drawer and goes there.
       await drawer.getByRole('link', { name: 'Guidelines' }).click();

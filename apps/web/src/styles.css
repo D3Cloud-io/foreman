@@ -28,6 +28,220 @@
   height: calc(var(--space-64) + env(safe-area-inset-bottom));
 }
 
+/* The sidebar's own pieces (FRM-T-16.4). Everything else in the frame is the library's AppShell
+   in its default raised tone (FRM-ADR-025).
+
+   A Library or Knowledge row: a disclosure drawn to the library's SideNav row metrics — 36px, 13px
+   medium, muted until hovered — because it sits in the same list and must not read as a different
+   kind of thing. SideNavGroup has nothing to fold it in 1.7 (DS-REQ-026); when it does, this goes. */
+.fm-disclosure {
+  list-style: none;
+}
+.fm-disclosure__toggle {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  min-height: 36px;
+  padding: var(--space-6) var(--space-8);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font: inherit;
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+  font-weight: var(--weight-medium);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--motion-hover), color var(--motion-hover);
+}
+.fm-disclosure__toggle:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-fg);
+}
+.fm-disclosure__toggle:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: calc(-1 * var(--focus-width));
+}
+.fm-disclosure__icon {
+  display: inline-flex;
+  flex: none;
+  width: var(--icon-16);
+  justify-content: center;
+}
+.fm-disclosure__icon svg,
+.fm-disclosure__chevron {
+  width: var(--icon-16);
+  height: var(--icon-16);
+}
+.fm-disclosure__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fm-disclosure__chevron {
+  flex: none;
+  color: var(--color-fg-faint);
+  transition: transform var(--motion-hover);
+}
+.fm-disclosure__toggle[aria-expanded="true"] .fm-disclosure__chevron {
+  transform: rotate(90deg);
+}
+.fm-disclosure__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0 0 0 var(--space-12);
+  list-style: none;
+}
+.fm-disclosure__list[hidden] {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fm-disclosure__chevron {
+    transition: none;
+  }
+}
+@media (pointer: coarse) {
+  .fm-disclosure__toggle {
+    min-height: 44px;
+  }
+}
+/* A collapsed rail shows icons only: the disclosure keeps its icon, its name stays for a screen
+   reader, and the rows inside line up with the rest of the rail. */
+.d3-shell[data-collapsed] .fm-disclosure__toggle {
+  justify-content: center;
+  padding: 0;
+  min-height: 40px;
+}
+.d3-shell[data-collapsed] .fm-disclosure__label,
+.d3-shell[data-collapsed] .fm-disclosure__chevron {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.d3-shell[data-collapsed] .fm-disclosure__list {
+  padding-left: 0;
+}
+
+/* Search's key hint, after its label. Generated content with empty alternative text, so it is seen
+   and not read as part of the link's name — `aria-keyshortcuts` says it once instead. */
+.fm-kbd::after {
+  content: attr(data-kbd) / "";
+  flex: none;
+  padding: 0 var(--space-4);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-fg-muted);
+  font-size: var(--text-11);
+  line-height: var(--leading-11);
+  font-weight: var(--weight-medium);
+}
+.d3-shell[data-collapsed] .fm-kbd::after {
+  display: none;
+}
+
+/* The footer's health line, above the account menu: a dot and what it means, and the first thing
+   to look at when there is one. */
+.fm-health {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  margin-bottom: var(--space-8);
+  padding: var(--space-6) var(--space-8);
+  border-radius: var(--radius-md);
+  color: inherit;
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+  text-decoration: none;
+}
+.fm-health:hover {
+  background: var(--color-surface-hover);
+}
+.fm-health:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: calc(-1 * var(--focus-width));
+}
+.fm-health__line {
+  padding-left: var(--space-16);
+  color: var(--color-fg-muted);
+  font-size: var(--text-12);
+  line-height: var(--leading-12);
+  overflow-wrap: anywhere;
+}
+@media (pointer: coarse) {
+  .fm-health {
+    min-height: 44px;
+    justify-content: center;
+  }
+}
+.d3-shell[data-collapsed] .fm-health {
+  align-items: center;
+  padding-inline: 0;
+}
+.d3-shell[data-collapsed] .fm-health__label,
+.d3-shell[data-collapsed] .fm-health__line {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The trail on a flat record page (a requirement, task or finding), drawn by the shell above the
+   screen: on the page's own gutter and width, and pulled down onto the page's header so the two
+   read as one heading block. */
+.fm-trail {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: calc(var(--container-wide) + 2 * var(--page-pad));
+  padding: var(--page-pad) var(--page-pad) 0;
+  margin-bottom: calc(var(--space-6) - var(--page-pad));
+  font-size: var(--text-12);
+  line-height: var(--leading-12);
+}
+/* Drawn as PageHeader's own trail is on the project screens, so the two read as one thing. */
+.fm-trail a {
+  color: var(--color-fg-muted);
+  text-decoration: none;
+  border-radius: var(--radius-xs);
+}
+.fm-trail a:hover {
+  color: var(--color-fg);
+}
+.fm-trail a:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
+}
+.fm-trail__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fm-trail__list li + li::before {
+  content: "/" / "";
+  margin-right: var(--space-8);
+  color: var(--color-fg-faint);
+}
+
 /* The board: one column per status. It scrolls sideways below `md` rather than stacking, because
    stacked columns are a list with extra headings — and the list view already exists. */
 .fm-board {
@@ -61,9 +275,8 @@
    document needs live here — and only the ones a document actually uses.
 
    Every inset in this file — a code block, a diff, a callout, a secret, a screenshot's plate —
-   sits on `--color-fill-quiet`, the 1.5 tone for something set into a card. They were on
-   `surface-raised`, which on the recessed sheet is the card's own white in light mode, so each
-   one vanished into the card it was in. */
+   sits on `--color-fill-quiet`, the 1.5 tone for something set into a card: a fill one step
+   from the card itself, so an inset never vanishes into the card it is in. */
 .fm-markdown > :first-child {
   margin-top: 0;
 }
@@ -352,8 +565,7 @@ dd a {
 /* Status pills. Five tones, from tokens, because the library's Badge has four
    and none of them is green (D-016). Each tinted plate is its tone's `-muted`
    token with the tone itself on it: readable on both themes without a second
-   palette. The neutral plate is the quiet fill (1.5), which reads on a card on
-   the recessed sheet, where `surface-raised` is the card's own white. */
+   palette. The neutral plate is the quiet fill (1.5), which reads on any card. */
 .fm-pill {
   display: inline-flex;
   align-items: center;

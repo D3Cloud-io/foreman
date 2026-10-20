@@ -1,3 +1,4 @@
+import { parseAnyId } from '@foreman/shared';
 import { foreman, type Brief } from './api';
 
 /**
@@ -44,10 +45,85 @@ export function sectionFor(path: string): Section | null {
   return SECTIONS.find((section) => section.slug === parts[2]) ?? null;
 }
 
-/** The project code in the current path, or null when we are not inside a project. */
+/**
+ * The rows a project shows in the sidebar, in order (FRM-ADR-025, FRM-DA-001).
+ *
+ * The reality half comes first — Drift second, under Overview — because it is the reason to open a
+ * project at all; it used to be row 21 of 22 and below the fold of a 900px laptop. Six rows always
+ * shown, then everything you look things up in behind one **Knowledge** row that opens itself when
+ * you are on one of them. Scope of work and Register sit there too: each is a second view of
+ * Phases or Requirements, not a destination of its own.
+ *
+ * The project overview's map of sections still reads `SECTIONS` in its own order; this is only the
+ * sidebar's arrangement.
+ */
+export const PROJECT_ROWS: readonly string[] = ['drift', 'phases', 'requirements', 'activity', 'audits'];
+export const KNOWLEDGE_ROWS: readonly string[] = [
+  'documents',
+  'adrs',
+  'risks',
+  'glossary',
+  'ideas',
+  'screens',
+  'scope-of-work',
+  'register',
+];
+
+export function section(slug: string): Section {
+  const found = SECTIONS.find((candidate) => candidate.slug === slug);
+  if (found === undefined) throw new Error(`no section ${slug}`);
+  return found;
+}
+
+/**
+ * Record pages that live at a flat route and belong to a project by their ID's prefix (ADR-008):
+ * `/requirements/BND-REQ-001`, `/tasks/BND-T-1.2`, `/findings/BND-CR-001`. Each names the project
+ * section it is a page of, for the trail and the sidebar's current row — a task is a page of its
+ * phase, so of Phases; a finding is the cross-project inbox's, so of no project section.
+ */
+const RECORD_ROUTES: Readonly<Record<string, string | null>> = {
+  requirements: 'requirements',
+  tasks: 'phases',
+  findings: null,
+};
+
+/**
+ * The project the current page belongs to, or null when it belongs to none.
+ *
+ * Inside `/projects/CODE/…` it is the path's code. On a record page it is the ID's prefix, read with
+ * `parseAnyId` — the routes stay flat, with no migration and no redirects (FRM-ADR-025), and the
+ * project block, the trail and the phone's project tab follow the record's owner rather than the
+ * URL's first segment. A codeless ID (PI-, GL-, GRP-) belongs to no project.
+ *
+ * This says what the page *claims*. Whether such a project exists is the shell's question: it asks
+ * for the brief, and an unknown code renders the not-found page with no project block.
+ */
 export function projectCodeFor(path: string): string | null {
   const parts = path.split('/').filter((p) => p.length > 0);
-  return parts[0] === 'projects' && parts[1] !== undefined ? parts[1] : null;
+  if (parts[0] === 'projects') return parts[1] ?? null;
+  if (parts[0] !== undefined && Object.hasOwn(RECORD_ROUTES, parts[0]) && parts[1] !== undefined && parts[2] === undefined) {
+    return parseAnyId(decodeURIComponent(parts[1]))?.code ?? null;
+  }
+  return null;
+}
+
+/**
+ * The project section a page is in: its own on `/projects/CODE/<slug>/…`, and on a record page
+ * the section it is a record of. Null on the overview, and on a page belonging to no section.
+ */
+export function currentSectionSlug(path: string): string | null {
+  const parts = path.split('/').filter((p) => p.length > 0);
+  if (parts[0] === 'projects') return parts[2] ?? null;
+  if (parts[0] !== undefined && Object.hasOwn(RECORD_ROUTES, parts[0]) && projectCodeFor(path) !== null) {
+    return RECORD_ROUTES[parts[0]] ?? null;
+  }
+  return null;
+}
+
+/** True on a flat record page that belongs to a project — the pages whose trail the shell draws. */
+export function isRecordPage(path: string): boolean {
+  const first = path.split('/').filter((p) => p.length > 0)[0];
+  return first !== undefined && Object.hasOwn(RECORD_ROUTES, first) && projectCodeFor(path) !== null;
 }
 
 /**

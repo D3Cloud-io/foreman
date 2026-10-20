@@ -1,18 +1,16 @@
 import {
-  Activity as ActivityIcon,
   Compass,
   FolderKanban,
   FolderOpen,
   Home as HomeIcon,
-  KeyRound,
   Lightbulb,
   ListChecks,
+  PlugZap,
   Search,
   Users,
   UsersRound,
   type LucideIcon,
 } from 'lucide-react';
-import { projectCodeFor } from './project';
 
 /** One destination of the console's own: the same list feeds the sidebar and the tab bar. */
 export interface NavItem {
@@ -33,10 +31,10 @@ export interface NavContext {
 const owns = (prefix: string) => (path: string) => path === prefix || path.startsWith(`${prefix}/`);
 
 // "Home" since FRM-T-17.3: it is the portfolio by family now, not a wall of charts.
-const DASHBOARD: NavItem = { to: '/', label: 'Home', Icon: HomeIcon, current: (path) => path === '/' };
+const HOME: NavItem = { to: '/', label: 'Home', Icon: HomeIcon, current: (path) => path === '/' };
 const PROJECTS: NavItem = { to: '/projects', label: 'Projects', Icon: FolderKanban, current: (path) => path === '/projects' };
-const FINDINGS: NavItem = { to: '/findings', label: 'Findings', Icon: ListChecks, current: owns('/findings') };
-const SEARCH: NavItem = { to: '/search', label: 'Search', Icon: Search, current: (path) => path === '/search' };
+export const FINDINGS: NavItem = { to: '/findings', label: 'Findings', Icon: ListChecks, current: owns('/findings') };
+export const SEARCH: NavItem = { to: '/search', label: 'Search', Icon: Search, current: (path) => path === '/search' };
 
 function projectIdeas(ctx: NavContext): NavItem {
   return {
@@ -47,69 +45,70 @@ function projectIdeas(ctx: NavContext): NavItem {
   };
 }
 
+const GUIDELINES: NavItem = { to: '/guidelines', label: 'Guidelines', Icon: Compass, current: (path) => path === '/guidelines' };
+const GROUPS: NavItem = { to: '/groups', label: 'Groups', Icon: UsersRound, current: owns('/groups') };
 const MEMBERS: NavItem = { to: '/members', label: 'Members', Icon: Users, current: (path) => path === '/members' };
+/**
+ * The API tokens screen, under the name of what a person goes there to do (D-09): an agent reaches
+ * Foreman over MCP with a token minted here. It is in the Library and in the account menu, not a
+ * row of its own — it is set up once, then forgotten (FRM-ADR-025).
+ */
+export const CONNECT_AN_AGENT: NavItem = {
+  to: '/tokens',
+  label: 'Connect an agent',
+  Icon: PlugZap,
+  current: (path) => path === '/tokens',
+};
 
 /**
- * The console's own destinations, in sidebar order: a fixed set that does not grow with the data.
- * The project list used to live in the sidebar and would have been unusable at twenty projects —
- * it is a screen of its own now, and project ideas sit beside it because they are what becomes one.
+ * The console's own destinations at the top of the sidebar: what a person reaches for every day.
  *
- * A fund board has submissions, not a portfolio. The ledger's screens are still reachable by URL —
- * the data is the same shape — but leading with them would describe a product nobody there uses.
+ * Inside a project this is three rows — Home, Findings, Search — so the project's own rows fit a
+ * 900px-tall laptop with Drift above the fold (FRM-ADR-025, FRM-DA-001). Projects drops out there:
+ * the trail on every project page climbs back to it, and the scope switcher at the head of the
+ * sidebar (FRM-T-17.4) is the way across to another project. Outside a project it is back, second.
  *
- * The order is the P17 board's: Home, Projects, Findings, Project ideas, Guidelines, Search.
+ * A fund board has submissions, not a portfolio, so Submissions takes Projects' place there.
  */
-export function navItems(ctx: NavContext): readonly NavItem[] {
-  return [
-    DASHBOARD,
-    ...(ctx.board ? [] : [PROJECTS]),
-    FINDINGS,
-    projectIdeas(ctx),
-    ...(ctx.board ? [] : [{ to: '/guidelines', label: 'Guidelines', Icon: Compass, current: (path: string) => path === '/guidelines' }]),
-    ...(ctx.board && ctx.admin ? [MEMBERS] : []),
-    SEARCH,
-  ];
+export function globalItems(ctx: NavContext, inProject: boolean): readonly NavItem[] {
+  const second = ctx.board ? [projectIdeas(ctx)] : inProject ? [] : [PROJECTS];
+  return [HOME, ...second, FINDINGS, SEARCH];
 }
 
 /**
- * The Settings group, last in the sidebar and in the phone's drawer: how the console is arranged
- * (Groups), whether it is well (Health), and what may reach it (API tokens). Groups order a
- * portfolio, which a fund board does not have.
+ * The Library: destinations reached now and then rather than daily — project ideas, the
+ * guidelines, how projects are grouped, and connecting an agent. One row while closed (FRM-DA-001).
+ *
+ * Health is not here: it is the status line in the sidebar's footer, which says whether it needs a
+ * look without being opened. Groups order a portfolio and guidelines govern one, which a fund
+ * board does not have; its admin's Members screen lives here instead.
  */
-export function settingsItems(ctx: NavContext): readonly NavItem[] {
-  return [
-    ...(ctx.board ? [] : [{ to: '/groups', label: 'Groups', Icon: UsersRound, current: owns('/groups') }]),
-    { to: '/system', label: 'Health', Icon: ActivityIcon, current: (path) => path === '/system' },
-    { to: '/tokens', label: 'API tokens', Icon: KeyRound, current: (path) => path === '/tokens' },
-  ];
+export function libraryItems(ctx: NavContext): readonly NavItem[] {
+  if (ctx.board) return [...(ctx.admin ? [MEMBERS] : []), CONNECT_AN_AGENT];
+  return [projectIdeas(ctx), GUIDELINES, GROUPS, CONNECT_AN_AGENT];
 }
 
 /**
  * The phone's tab bar: at most five destinations (FRM-REQ-217, D-088).
  *
- * The sidebar holds eight of the console's own destinations and, inside a project, fourteen more —
- * twenty-two links that cannot sit under a thumb. So below `lg` the console splits them the way
- * Shipyard does, with one difference Shipyard does not need:
+ * - **Four** a person reaches for from anywhere — Home, Projects (Submissions on a board),
+ *   Findings and Search.
+ * - **A fifth that follows where they are**: the project they are in, labelled by its code, so its
+ *   overview is one tap from any of its pages — a requirement, task or finding included, whose
+ *   project comes from its ID's prefix (FRM-ADR-008). Outside a project, Project ideas (Members for
+ *   a board's admin).
  *
- * - **The tab bar** carries the four a person reaches for from anywhere — Home, Projects
- *   (Submissions on a board), Findings and Search — and a fifth that follows where they are:
- *   **the project they are in**, labelled by its code, so its overview is one tap from any of its
- *   sections; outside a project, **Project ideas** (Members for a board's admin).
- * - **The drawer** behind the top bar's menu button keeps the whole sidebar: every global
- *   destination and the current project's sections. Shipyard's three destinations all fit the
- *   bar, so its drawer is down to the account menu; Foreman's do not, and a destination that is
- *   only on a laptop is a destination a phone cannot reach. The drawer is also where the account
- *   menu, the theme and Sign out live on a phone.
+ * `code` is the project the shell has resolved, not whatever the URL claims: an unknown code gets
+ * no tab, so `/projects/ZZZ` does not grow a "ZZZ" tab beside its not-found page.
  *
- * A "More" tab that opened the drawer would have been the textbook fifth slot, but AppShell owns
- * the drawer's open state and offers no way to open it from outside, and TabBar.Item is always a
- * link. A tab that duplicated the menu button would have been a second control for one thing.
+ * The drawer behind the top bar's menu button holds what the bar does not: the project's rows and
+ * the Library. A "More" tab was the textbook fifth slot, but AppShell owns the drawer's open state
+ * and TabBar.Item is always a link, so it would have been a second control for one thing.
  */
-export function tabBarItems(path: string, ctx: NavContext): readonly NavItem[] {
-  const items: NavItem[] = [DASHBOARD, ctx.board ? projectIdeas(ctx) : PROJECTS, FINDINGS, SEARCH];
-  const code = projectCodeFor(path);
+export function tabBarItems(ctx: NavContext, code: string | null): readonly NavItem[] {
+  const items: NavItem[] = [HOME, ctx.board ? projectIdeas(ctx) : PROJECTS, FINDINGS, SEARCH];
   if (code !== null) {
-    items.push({ to: `/projects/${code}`, label: code, Icon: FolderOpen, current: owns(`/projects/${code}`) });
+    items.push({ to: `/projects/${code}`, label: code, Icon: FolderOpen, current: () => true });
   } else if (!ctx.board) {
     items.push(projectIdeas(ctx));
   } else if (ctx.admin) {

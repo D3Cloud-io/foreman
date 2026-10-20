@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useSyncExternalStore, type ReactNode } from 'react';
 import {
   AccountMenu,
   AppShell,
@@ -12,11 +12,13 @@ import {
   ThemeSwitch,
 } from '@d3cloud/ui';
 import {
+  BookMarked,
   BookText,
   CalendarRange,
   FileStack,
   GitBranch,
-  Home as HomeIcon,
+  LayoutDashboard,
+  Library,
   Lightbulb,
   ListChecks,
   ListTodo,
@@ -28,19 +30,39 @@ import {
   Table2,
 } from 'lucide-react';
 import { ForemanMark } from '../brand/ForemanMark';
-import { navItems, settingsItems, tabBarItems, type NavContext } from '../lib/nav';
-import { briefFor, projectCodeFor, SECTIONS } from '../lib/project';
+import { ApiError, type Brief } from '../lib/api';
+import { FINDINGS, globalItems, libraryItems, SEARCH, tabBarItems, type NavContext, type NavItem } from '../lib/nav';
+import {
+  briefFor,
+  currentSectionSlug,
+  isRecordPage,
+  KNOWLEDGE_ROWS,
+  PROJECT_ROWS,
+  projectCodeFor,
+  section,
+} from '../lib/project';
+import { navigate, routeFor } from '../lib/router';
 import { useAsync } from '../lib/useAsync';
+import { HealthLine } from './HealthLine';
+import { NavDisclosure } from './NavDisclosure';
+import { NotFound } from './NotFound';
+import { needsYou, useShellSignals } from './shellSignals';
 
 /**
- * The signed-in frame: the design system's recessed AppShell (FRM-REQ-217), composed the way
- * Shipyard's is. The navigation sinks to the ground and each screen is a sheet laid on it, with
- * every Section a card on the sheet.
+ * The signed-in frame: the design system's AppShell in its default, raised tone, composed as
+ * Shipyard's `apps/web/src/components/Shell.tsx` is (FRM-ADR-025) — the sidebar on `surface`, each
+ * screen's cards straight on the page ground, `AppShellBrand` with the Foreman mark as the home
+ * link, counts only for what needs you, and a health line above the account menu in the footer.
  *
- * - **From `lg` (1024px)** a sidebar: the console's own destinations, then the sections of the
- *   project you are in.
- * - **Below it** a top bar whose menu button opens the same sidebar as a drawer, and a bottom tab
- *   bar of five destinations. `lib/nav.ts` says which five and why the drawer keeps everything.
+ * - **From `lg` (1024px)** a sidebar: the scope switcher's slot, three or four of the console's own
+ *   destinations and the Library, then the project you are in — six rows and Knowledge — which fits
+ *   a 1440×900 laptop with Drift above the fold (FRM-DA-001).
+ * - **Below it** a top bar whose menu button opens a drawer, and a bottom tab bar of five. The tab
+ *   bar carries the everyday destinations, so the drawer holds the rest: the project's rows and the
+ *   Library. `lib/nav.ts` says which five and why.
+ *
+ * The project comes from the page: `/projects/CODE/…`, or a record's ID prefix on the flat record
+ * routes (`lib/project.ts`). A code no project has renders the not-found page with no project block.
  */
 
 /** True from `lg` up — the AppShell's own line between sidebar and drawer, and where the tab bar hides. */
@@ -62,6 +84,64 @@ function useWide(): boolean {
   );
 }
 
+/** The project the page claims, and whether it exists. */
+type ProjectState =
+  | { status: 'none' }
+  | { status: 'unknown'; code: string }
+  /** `name` is the code until the brief arrives: a title that appears late shifts every row under it. */
+  | { status: 'known'; code: string; name: string };
+
+function useProject(path: string): ProjectState {
+  const claimed = projectCodeFor(path);
+  const { state } = useAsync<Brief | 'unknown' | null>(
+    () =>
+      claimed === null
+        ? Promise.resolve(null)
+        : briefFor(claimed).catch((error: unknown) => {
+            if (error instanceof ApiError && (error.status === 404 || error.status === 400)) return 'unknown';
+            throw error;
+          }),
+    [claimed],
+  );
+
+  if (claimed === null) return { status: 'none' };
+  if (state.status !== 'ready' || state.value === null) {
+    // Loading, or a brief that failed for another reason: the project is shown by its code. A
+    // server that is down is not evidence that the project does not exist.
+    return { status: 'known', code: claimed, name: claimed };
+  }
+  if (state.value === 'unknown') return { status: 'unknown', code: claimed };
+  return { status: 'known', code: claimed, name: state.value.project.name };
+}
+
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent);
+
+/**
+ * ⌘K (Ctrl K elsewhere) goes to Search and puts the cursor in it, from anywhere in the console —
+ * the shortcut the sidebar's Search row shows. Foreman has no command palette; Search is the screen
+ * that finds anything by ID or by words, so the key goes there rather than to a second way of doing
+ * the same thing.
+ */
+function useSearchShortcut(): void {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'k' || event.altKey || event.shiftKey) return;
+      // The platform's own modifier only: on a Mac, Control-K in a text field deletes to the end of
+      // the line, and taking it would break that.
+      if (!(IS_MAC ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return;
+      event.preventDefault();
+      if (window.location.pathname !== '/search') navigate('/search');
+      window.setTimeout(() => {
+        document.querySelector<HTMLInputElement>('main input')?.focus();
+      }, 0);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+    };
+  }, []);
+}
+
 export function Shell({
   path,
   user,
@@ -76,48 +156,99 @@ export function Shell({
   children: ReactNode;
 }) {
   const wide = useWide();
+  const project = useProject(path);
+  const code = project.status === 'known' ? project.code : null;
+  const signals = useShellSignals(path, code);
+  useSearchShortcut();
+
+  // countLabel replaces a link's whole accessible name, so it says where the link goes as well.
+  const criticals = needsYou(signals.criticals, (n) => `Findings, ${String(n)} open critical`);
+  const countFor = (item: NavItem) => (item.to === FINDINGS.to ? criticals : {});
+
+  const notFound = project.status === 'unknown' || routeFor(path).screen === 'not-found';
+  const library = libraryItems(nav);
+  const libraryRow = (
+    <NavDisclosure
+      name="library"
+      label="Library"
+      icon={<Library />}
+      holdsCurrent={library.some((item) => item.current(path))}
+    >
+      {library.map((item) => (
+        <NavRow key={item.to} item={item} path={path} />
+      ))}
+    </NavDisclosure>
+  );
+  const projectBlock =
+    project.status === 'known' ? (
+      <ProjectBlock code={project.code} name={project.name} path={path} unconfirmed={signals.unconfirmed} />
+    ) : null;
 
   return (
     <AppShell
       storageKey="foreman.nav"
-      navTone="recessed"
       brand={<AppShellBrand name="Foreman" href="/" mark={<ForemanMark decorative className="fm-brand-mark" />} />}
       nav={
-        <SideNav>
-          {navItems(nav).map((item) => (
-            <SideNavItem
-              key={item.to}
-              href={item.to}
-              icon={<item.Icon />}
-              label={item.label}
-              current={item.current(path)}
-            />
-          ))}
-          <ProjectSections path={path} />
-          <SideNavGroup title="Settings">
-            {settingsItems(nav).map((item) => (
-              <SideNavItem
-                key={item.to}
-                href={item.to}
-                icon={<item.Icon />}
-                label={item.label}
-                current={item.current(path)}
-              />
-            ))}
-          </SideNavGroup>
-        </SideNav>
+        <>
+          <ScopeSlot path={path} />
+          {wide ? (
+            <SideNav>
+              {/* The console's own rows. Titled for a screen reader, which hears the group's name
+                  before its links; a sighted reader has the space under the brand. */}
+              <SideNavGroup title="Foreman" hideTitle>
+                {globalItems(nav, code !== null).map((item) =>
+                  item.to === SEARCH.to ? (
+                    <SearchRow key={item.to} item={item} path={path} />
+                  ) : (
+                    <NavRow key={item.to} item={item} path={path} {...countFor(item)} />
+                  ),
+                )}
+                {libraryRow}
+              </SideNavGroup>
+              {projectBlock}
+            </SideNav>
+          ) : (
+            // On a phone the tab bar carries Home, Projects, Findings and Search, so the drawer is
+            // what it does not: the project's rows, then the Library.
+            <SideNav>
+              {projectBlock}
+              <SideNavGroup title="Foreman" hideTitle>
+                {libraryRow}
+              </SideNavGroup>
+            </SideNav>
+          )}
+        </>
       }
       footer={
-        <AccountMenu name={user.displayName} detail={user.email}>
-          <ThemeSwitch />
-          <MenuSeparator />
-          <MenuItem tone="danger" onSelect={onSignOut}>
-            Sign out
-          </MenuItem>
-        </AccountMenu>
+        <>
+          <HealthLine health={signals.health} />
+          <AccountMenu name={user.displayName} detail={user.email}>
+            <MenuItem
+              onSelect={() => {
+                navigate('/tokens');
+              }}
+            >
+              Connect an agent
+            </MenuItem>
+            <ThemeSwitch label="Theme" />
+            <MenuSeparator />
+            <MenuItem tone="danger" onSelect={onSignOut}>
+              Sign out
+            </MenuItem>
+          </AccountMenu>
+        </>
       }
     >
-      {children}
+      {notFound ? (
+        <NotFound path={path} code={project.status === 'unknown' ? project.code : null} />
+      ) : (
+        <>
+          {project.status === 'known' && isRecordPage(path) ? (
+            <RecordTrail code={project.code} name={project.name} slug={currentSectionSlug(path)} />
+          ) : null}
+          {children}
+        </>
+      )}
       {wide ? null : (
         <>
           {/* The bar is fixed to the screen's foot; this keeps the page's last line clear of it. */}
@@ -125,13 +256,14 @@ export function Shell({
           {/* A tab is a plain link: the router's document-level click handler takes it, as it
               takes every other anchor in the console, so the page does not reload. */}
           <TabBar aria-label="Primary" className="fm-tabbar">
-            {tabBarItems(path, nav).map((item) => (
+            {tabBarItems(nav, code).map((item) => (
               <TabBar.Item
                 key={item.to}
                 href={item.to}
                 icon={<item.Icon />}
                 label={item.label}
                 current={item.current(path)}
+                {...countFor(item)}
               />
             ))}
           </TabBar>
@@ -142,15 +274,55 @@ export function Shell({
 }
 
 /**
- * The sections of the project you are currently in — and nothing when you are not in one.
- *
- * This replaced a list of every project, which had two problems: it grew without bound (nine
- * projects today, and the sidebar is the one surface that cannot scroll away), and it offered the
- * one destination you already had while offering nothing from inside a project. Two clicks into
- * `/projects/BND/adrs` the sidebar showed you ten other projects and no way to Bindery's phases.
- *
- * Grouped the way the tool thinks: what was planned, what was decided, and what is actually there.
+ * The head of the sidebar, under the brand: where FRM-T-17.4 mounts the ScopeSwitcher — the group
+ * scope ("D3 Cloud ▾") and the project switcher ("BND Bindery ▾") of FRM-DA-001. Empty until then.
+ * It is in the drawer too, so a phone gets the same switchers.
  */
+function ScopeSlot(_props: { path: string }): ReactNode {
+  return null;
+}
+
+function NavRow({
+  item,
+  path,
+  count,
+  countLabel,
+}: {
+  item: NavItem;
+  path: string;
+  count?: number;
+  countLabel?: string;
+}) {
+  return (
+    <SideNavItem
+      href={item.to}
+      icon={<item.Icon />}
+      label={item.label}
+      current={item.current(path)}
+      {...(count === undefined ? {} : { count })}
+      {...(countLabel === undefined ? {} : { countLabel })}
+    />
+  );
+}
+
+/**
+ * Search, with its key hint drawn after the label. `SideNavItem` takes a string label, so the hint
+ * is the link's own generated content (`fm-kbd`), with empty alternative text: the key is announced
+ * once, by `aria-keyshortcuts`, rather than read out as part of the link's name.
+ */
+function SearchRow({ item, path }: { item: NavItem; path: string }) {
+  return (
+    <SideNavItem asChild icon={<item.Icon />} label={item.label} current={item.current(path)}>
+      <a
+        href={item.to}
+        className="fm-kbd"
+        data-kbd={IS_MAC ? '⌘K' : 'Ctrl K'}
+        aria-keyshortcuts={IS_MAC ? 'Meta+K' : 'Control+K'}
+      />
+    </SideNavItem>
+  );
+}
+
 const SECTION_ICONS: Record<string, ReactNode> = {
   phases: <CalendarRange />,
   requirements: <ListTodo />,
@@ -167,43 +339,88 @@ const SECTION_ICONS: Record<string, ReactNode> = {
   screens: <MonitorSmartphone />,
 };
 
-function ProjectSections({ path }: { path: string }) {
-  const code = projectCodeFor(path);
-  const { state } = useAsync(
-    () => (code === null ? Promise.resolve(null) : briefFor(code)),
-    [code],
-  );
-
-  if (code === null) return null;
-
-  // The code until the name arrives. A group title that appears a beat late shifts every item
-  // under it, which is worse than a title that is briefly terse.
-  const name = state.status === 'ready' && state.value !== null ? state.value.project.name : code;
-  const groups = ['Plan', 'Knowledge', 'Reality'] as const;
+/**
+ * The project you are in — and nothing when you are not in one.
+ *
+ * Six rows always shown, the reality half first: Overview, Drift, Phases, Requirements, Activity,
+ * Audits. Everything you look things up in — documents, decisions, risks, the glossary, ideas,
+ * screens, and the two generated registers — sits behind one Knowledge row, which opens itself on
+ * any of those pages. It was 14 rows under three headings, with Drift 21st of 22 and below the fold
+ * of a 900px laptop (FRM-DA-001).
+ *
+ * Activity carries the one count a project has: attributions waiting for someone to confirm or
+ * reject them. Drift's total is not a count here: it never reaches zero, and the overview shows it.
+ */
+function ProjectBlock({
+  code,
+  name,
+  path,
+  unconfirmed,
+}: {
+  code: string;
+  name: string;
+  path: string;
+  unconfirmed: number | null;
+}) {
+  const current = currentSectionSlug(path);
+  const row = (slug: string) => {
+    const s = section(slug);
+    return (
+      <SideNavItem
+        key={slug}
+        href={`/projects/${code}/${slug}`}
+        icon={SECTION_ICONS[slug]}
+        label={s.label}
+        current={current === slug}
+        {...(slug === 'activity' ? needsYou(unconfirmed, (n) => `Activity, ${String(n)} waiting for review`) : {})}
+      />
+    );
+  };
 
   return (
-    <>
-      <SideNavGroup title={name}>
-        <SideNavItem
-          href={`/projects/${code}`}
-          icon={<HomeIcon />}
-          label="Overview"
-          current={path === `/projects/${code}`}
-        />
-      </SideNavGroup>
-      {groups.map((group) => (
-        <SideNavGroup key={group} title={group}>
-          {SECTIONS.filter((section) => section.group === group).map((section) => (
-            <SideNavItem
-              key={section.slug}
-              href={`/projects/${code}/${section.slug}`}
-              icon={SECTION_ICONS[section.slug]}
-              label={section.label}
-              current={path.startsWith(`/projects/${code}/${section.slug}`)}
-            />
-          ))}
-        </SideNavGroup>
-      ))}
-    </>
+    <SideNavGroup title={name}>
+      <SideNavItem
+        href={`/projects/${code}`}
+        icon={<LayoutDashboard />}
+        label="Overview"
+        current={path === `/projects/${code}`}
+      />
+      {PROJECT_ROWS.map(row)}
+      <NavDisclosure
+        name="knowledge"
+        label="Knowledge"
+        icon={<BookMarked />}
+        holdsCurrent={current !== null && KNOWLEDGE_ROWS.includes(current)}
+      >
+        {KNOWLEDGE_ROWS.map(row)}
+      </NavDisclosure>
+    </SideNavGroup>
+  );
+}
+
+/**
+ * The trail on a flat record page — a requirement, task or finding — whose project comes from its
+ * ID's prefix (FRM-ADR-025). Those screens draw no trail of their own, so before this the only way
+ * back to the project from `/requirements/BND-REQ-001` was a three-letter link inside a card.
+ * It reads as the project screens' trail does: Projects, the project, then the section the record
+ * belongs to.
+ */
+function RecordTrail({ code, name, slug }: { code: string; name: string; slug: string | null }) {
+  return (
+    <nav aria-label="Breadcrumb" className="fm-trail">
+      <ol role="list" className="fm-trail__list">
+        <li>
+          <a href="/projects">Projects</a>
+        </li>
+        <li>
+          <a href={`/projects/${code}`}>{name}</a>
+        </li>
+        {slug === null ? null : (
+          <li>
+            <a href={`/projects/${code}/${slug}`}>{section(slug).label}</a>
+          </li>
+        )}
+      </ol>
+    </nav>
   );
 }
