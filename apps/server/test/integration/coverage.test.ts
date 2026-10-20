@@ -74,7 +74,11 @@ describe.skipIf(url === undefined)('coverage and the exit gate', () => {
   beforeEach(async () => {
     await db.project.deleteMany({ where: { code: CODE } });
     await post('/projects', { code: CODE, name: 'Coverage Test' });
-    await post(`/projects/${CODE}/phases`, { number: 1, name: 'The phase under test' });
+    await post(`/projects/${CODE}/phases`, {
+      number: 1,
+      name: 'The phase under test',
+      exitDemo: 'Every webhook arrives signed, and an unsigned one is refused.',
+    });
   });
 
   afterAll(async () => {
@@ -115,12 +119,70 @@ describe.skipIf(url === undefined)('coverage and the exit gate', () => {
       expect(phase.status).not.toBe('complete');
     });
 
+    it('refuses to complete a phase whose exit demo is empty, naming the exit demo', async () => {
+      // Blank is as empty as missing: whitespace states nothing about what finishing meant.
+      await patch(`/projects/${CODE}/phases/${CODE}-P-1`, { exitDemo: '   ' });
+
+      const res = await patch(`/projects/${CODE}/phases/${CODE}-P-1`, { status: 'complete' });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as {
+        error: string;
+        gate: { passed: boolean; failures: { kind: string; humanId: string; detail: string }[] };
+      };
+      expect(body.gate.failures).toEqual([
+        expect.objectContaining({ kind: 'no-exit-demo', humanId: `${CODE}-P-1` }),
+      ]);
+      expect(body.gate.failures[0]?.detail).toContain('exit demo');
+
+      const phase = await db.phase.findFirstOrThrow({ where: { humanId: `${CODE}-P-1` } });
+      expect(phase.status).not.toBe('complete');
+    });
+
+    it('refuses over a Must with no acceptance test recorded, naming the requirement', async () => {
+      const id = await phaseId();
+      const created = await post(`/projects/${CODE}/requirements`, {
+        statement: 'Foreman shall verify the signature of every webhook.',
+        priority: 'M',
+        phaseId: id,
+      });
+      const requirement = (await created.json()) as { id: string; humanId: string };
+      // Covered and finished: the only thing missing is a way to check it.
+      await post(`/projects/${CODE}/tasks`, {
+        title: 'Verify the HMAC signature',
+        phaseId: id,
+        status: 'done',
+        requirementIds: [requirement.id],
+      });
+
+      const res = await patch(`/projects/${CODE}/phases/${CODE}-P-1`, { status: 'complete' });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as {
+        gate: { failures: { kind: string; humanId: string; detail: string }[] };
+      };
+      expect(body.gate.failures).toEqual([
+        expect.objectContaining({ kind: 'no-acceptance-test', humanId: requirement.humanId }),
+      ]);
+      expect(body.gate.failures[0]?.detail).toContain('no acceptance test');
+
+      // A Should without one is not a reason to hold the phase; recording the Must's lets it close.
+      await post(`/projects/${CODE}/requirements`, {
+        statement: 'Foreman should log the rejected signature.',
+        priority: 'S',
+        phaseId: id,
+      });
+      await patch(`/projects/${CODE}/requirements/${requirement.humanId}`, {
+        acceptanceTest: 'An unsigned webhook is answered 401 and nothing is ingested.',
+      });
+      expect((await patch(`/projects/${CODE}/phases/${CODE}-P-1`, { status: 'complete' })).status).toBe(200);
+    });
+
     it('completes once a task cites the requirement', async () => {
       const id = await phaseId();
       const created = await post(`/projects/${CODE}/requirements`, {
         statement: 'Foreman shall verify the signature of every webhook.',
         priority: 'M',
         phaseId: id,
+        acceptanceTest: 'An unsigned webhook is answered 401.',
       });
       const requirement = (await created.json()) as { id: string };
 
@@ -197,6 +259,7 @@ describe.skipIf(url === undefined)('coverage and the exit gate', () => {
         statement: 'Foreman shall do the uncovered thing.',
         priority: 'M',
         phaseId: await phaseId(),
+        acceptanceTest: 'The thing is done.',
       });
 
       // The console asks first, so a refusal is never the first anybody hears of it.

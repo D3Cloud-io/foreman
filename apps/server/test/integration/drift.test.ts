@@ -33,6 +33,11 @@ describe.skipIf(url === undefined)('drift', () => {
   };
   const post = (path: string, body?: unknown) =>
     api(path, { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const patch = async (path: string, body: unknown) => {
+    const res = await api(path, { method: 'PATCH', body: JSON.stringify(body) });
+    expect(res.status, path).toBe(200);
+    return res;
+  };
   const get = async <T>(path: string): Promise<T> => {
     const res = await api(path);
     expect(res.status, path).toBe(200);
@@ -205,8 +210,50 @@ describe.skipIf(url === undefined)('drift', () => {
       });
 
       const drift = await get<DriftBody>(`/projects/${CODE}/drift`);
-      const gate = drift.items.find((i) => i.category === 'failed-exit-gate');
-      expect(gate?.detail).toContain('nothing states what finishing meant');
+      const gates = drift.items.filter((i) => i.category === 'failed-exit-gate');
+      // One item, from the gate — not a second, parallel rule beside it (FRM-T-026).
+      expect(gates).toHaveLength(1);
+      expect(gates[0]?.humanId).toBe(`${CODE}-P-1`);
+      expect(gates[0]?.detail).toContain('no exit demo');
+    });
+
+    it('reports exactly what the gate would refuse, so the two never disagree (FRM-T-026)', async () => {
+      await post(`/projects/${CODE}/phases`, { number: 3, name: 'Closed before the gate asked' });
+      const phase = await db.phase.findFirstOrThrow({ where: { humanId: `${CODE}-P-3` } });
+      // Covered and done, but nothing records how to check it.
+      const created = await post(`/projects/${CODE}/requirements`, {
+        statement: 'Foreman shall have a way to check this.',
+        priority: 'M',
+        phaseId: phase.id,
+      });
+      const requirement = (await created.json()) as { id: string; humanId: string };
+      await post(`/projects/${CODE}/tasks`, {
+        title: 'Built it',
+        phaseId: phase.id,
+        status: 'done',
+        requirementIds: [requirement.id],
+      });
+      await db.phase.update({ where: { id: phase.id }, data: { status: 'complete' } });
+
+      const gate = await get<{ failures: { kind: string; humanId: string }[] }>(
+        `/projects/${CODE}/phases/${CODE}-P-3/gate`,
+      );
+      expect(gate.failures.map((f) => f.kind)).toEqual(['no-exit-demo', 'no-acceptance-test']);
+
+      const drift = await get<DriftBody>(`/projects/${CODE}/drift`);
+      const items = drift.items.filter((i) => i.category === 'failed-exit-gate');
+      expect(items).toHaveLength(1);
+      expect(items[0]?.detail).toContain('no exit demo');
+      expect(items[0]?.detail).toContain(`${requirement.humanId} (no acceptance test)`);
+
+      // Give it both, and it leaves drift and passes the gate together.
+      await patch(`/projects/${CODE}/phases/${CODE}-P-3`, { exitDemo: 'It is checked.' });
+      await patch(`/projects/${CODE}/requirements/${requirement.humanId}`, {
+        acceptanceTest: 'A test checks it.',
+      });
+      expect((await get<{ passed: boolean }>(`/projects/${CODE}/phases/${CODE}-P-3/gate`)).passed).toBe(true);
+      const after = await get<DriftBody>(`/projects/${CODE}/drift`);
+      expect(after.items.filter((i) => i.category === 'failed-exit-gate')).toHaveLength(0);
     });
 
     it('finds a completed phase that would not pass its gate today', async () => {

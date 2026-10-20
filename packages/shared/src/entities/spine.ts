@@ -57,6 +57,23 @@ export type ProjectUpdate = z.infer<typeof ProjectUpdate>;
 // ─── Phase ─────────────────────────────────────────────────────────────────
 
 /**
+ * Whether a phase number fits the column that stores it: `numeric(6,2)`, so less than 10000 either
+ * side of zero and at most two decimal places (FRM-T-027).
+ *
+ * Refused here rather than at the database, which answered 123456 with an overflow and the API
+ * with "internal error". A third decimal is refused too: Postgres would round 1.234 to 1.23 while
+ * the human ID kept `P-1.234`, and the ID would name a phase that does not exist.
+ */
+export function isStorablePhaseNumber(n: number): boolean {
+  return Number.isFinite(n) && Math.abs(n) < 10000 && Math.round(n * 100) / 100 === n;
+}
+
+/** A phase number as `phase.number` can hold it. See {@link isStorablePhaseNumber}. */
+export const PhaseNumber = z.number().refine(isStorablePhaseNumber, {
+  message: 'a phase number is less than 10000 either side of zero, with at most two decimal places',
+});
+
+/**
  * Phase numbers are decimal, and `sortOrder` is independent of them. Bindery shipped a Phase 8.5,
  * and built 0–8.5, then 9–11, then 13–16, with 12 still ahead: the order phases were built in is
  * not the order they are numbered (FRM-REQ-034, FRM-REQ-035).
@@ -80,7 +97,7 @@ export const Phase = z
 export type Phase = z.infer<typeof Phase>;
 
 export const PhaseCreate = z.object({
-  number: z.number(),
+  number: PhaseNumber,
   /** Defaults to the end of the project's current order — the usual case, appending a phase. */
   sortOrder: z.number().int().optional(),
   name: z.string().min(1).max(200),
