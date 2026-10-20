@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Modal } from '@d3cloud/ui';
 import { SHORTCUTS, type ShortcutGroup } from '../lib/shortcuts';
 import './CommandPalette.css';
@@ -36,6 +37,43 @@ export function ShortcutList({ groups = SHORTCUTS }: { groups?: readonly Shortcu
   );
 }
 
+/**
+ * Put focus back where it was when the sheet closes. A Modal returns focus to its trigger and
+ * this one has none — a key opens it — so focus would fall to the page. The element that had focus
+ * is remembered as the sheet opens, and given it back once the dialog has let go: Radix moves
+ * focus as the exit animation ends, so this waits for focus to leave the dialog and acts only if it
+ * landed nowhere.
+ */
+function useReturnFocus(open: boolean): void {
+  const from = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (open) {
+      const active = document.activeElement;
+      from.current = active instanceof HTMLElement && active !== document.body ? active : null;
+      return;
+    }
+    const target = from.current;
+    from.current = null;
+    if (target === null) return;
+    let frame = 0;
+    let tries = 0;
+    const settle = () => {
+      const active = document.activeElement;
+      const inDialog = active instanceof HTMLElement && active.closest('[role="dialog"]') !== null;
+      if (inDialog && tries < 60) {
+        tries += 1;
+        frame = window.requestAnimationFrame(settle);
+        return;
+      }
+      if ((active === null || active === document.body) && target.isConnected) target.focus();
+    };
+    frame = window.requestAnimationFrame(settle);
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [open]);
+}
+
 /** `?` — what the keyboard does here (FRM-REQ-244). It lists what is bound and nothing planned. */
 export function ShortcutSheet({
   open,
@@ -44,6 +82,7 @@ export function ShortcutSheet({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  useReturnFocus(open);
   return (
     <Modal
       open={open}

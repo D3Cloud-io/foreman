@@ -93,6 +93,19 @@ describe('/ and ?', () => {
   });
 });
 
+describe('a held key and an input method', () => {
+  it('opens nothing on an auto-repeat', () => {
+    expect(shortcutFor(press('k', { metaKey: true, repeat: true }), open)).toBeNull();
+    expect(shortcutFor(press('/', { repeat: true }), open)).toBeNull();
+    expect(shortcutFor(press('?', { repeat: true }), open)).toBeNull();
+  });
+
+  it('opens nothing for a key an input method is handling', () => {
+    expect(shortcutFor(press('/', { keyCode: 229 }), open)).toBeNull();
+    expect(shortcutFor(press('k', { metaKey: true, isComposing: true }), open)).toBeNull();
+  });
+});
+
 describe('dialogIsOpen', () => {
   it('asks the document for a dialog, an alert dialog or an open <dialog>', () => {
     let asked = '';

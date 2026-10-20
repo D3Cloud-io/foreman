@@ -214,7 +214,7 @@ export function CommandPalette({
         items: [
           {
             id: target.href,
-            label: target.label,
+            label: `Open ${target.label}`,
             description: target.description,
             leading: <ArrowRight />,
             onSelect: go(target.href),
