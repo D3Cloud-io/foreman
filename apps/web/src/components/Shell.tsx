@@ -39,6 +39,7 @@ import {
   KNOWLEDGE_ROWS,
   PROJECT_ROWS,
   projectCodeFor,
+  recordTrailEnd,
   section,
 } from '../lib/project';
 import { navigate, routeFor } from '../lib/router';
@@ -117,6 +118,18 @@ function useProject(path: string): ProjectState {
 const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent);
 
 /**
+ * Whether ⌘K may take the person away from where they are. Not while a dialog is open — an Edit
+ * form, a confirmation, the phone's drawer — since navigating would throw away what is in it; and
+ * not from a multi-line field or an editable region anywhere, which is where an unsaved draft
+ * lives (the idea canvas edits in place, outside any dialog).
+ */
+function shortcutMayLeave(target: EventTarget | null): boolean {
+  if (document.querySelector('[role="dialog"], [role="alertdialog"], dialog[open]') !== null) return false;
+  if (!(target instanceof HTMLElement)) return true;
+  return !(target instanceof HTMLTextAreaElement || target.isContentEditable);
+}
+
+/**
  * ⌘K (Ctrl K elsewhere) goes to Search and puts the cursor in it, from anywhere in the console —
  * the shortcut the sidebar's Search row shows. Foreman has no command palette; Search is the screen
  * that finds anything by ID or by words, so the key goes there rather than to a second way of doing
@@ -129,6 +142,7 @@ function useSearchShortcut(): void {
       // The platform's own modifier only: on a Mac, Control-K in a text field deletes to the end of
       // the line, and taking it would break that.
       if (!(IS_MAC ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)) return;
+      if (event.defaultPrevented || !shortcutMayLeave(event.target)) return;
       event.preventDefault();
       if (window.location.pathname !== '/search') navigate('/search');
       window.setTimeout(() => {
@@ -244,7 +258,7 @@ export function Shell({
       ) : (
         <>
           {project.status === 'known' && isRecordPage(path) ? (
-            <RecordTrail code={project.code} name={project.name} slug={currentSectionSlug(path)} />
+            <RecordTrail code={project.code} name={project.name} end={recordTrailEnd(path)} />
           ) : null}
           {children}
         </>
@@ -403,9 +417,17 @@ function ProjectBlock({
  * ID's prefix (FRM-ADR-025). Those screens draw no trail of their own, so before this the only way
  * back to the project from `/requirements/BND-REQ-001` was a three-letter link inside a card.
  * It reads as the project screens' trail does: Projects, the project, then the section the record
- * belongs to.
+ * belongs to — Findings for a finding, whose own page no longer draws a second trail.
  */
-function RecordTrail({ code, name, slug }: { code: string; name: string; slug: string | null }) {
+function RecordTrail({
+  code,
+  name,
+  end,
+}: {
+  code: string;
+  name: string;
+  end: { label: string; href: string } | null;
+}) {
   return (
     <nav aria-label="Breadcrumb" className="fm-trail">
       <ol role="list" className="fm-trail__list">
@@ -415,9 +437,9 @@ function RecordTrail({ code, name, slug }: { code: string; name: string; slug: s
         <li>
           <a href={`/projects/${code}`}>{name}</a>
         </li>
-        {slug === null ? null : (
+        {end === null ? null : (
           <li>
-            <a href={`/projects/${code}/${slug}`}>{section(slug).label}</a>
+            <a href={end.href}>{end.label}</a>
           </li>
         )}
       </ol>

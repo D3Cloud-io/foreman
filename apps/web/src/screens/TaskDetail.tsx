@@ -92,6 +92,18 @@ export function TaskDetail({ humanId }: { humanId: string }) {
     );
   }
 
+  // `/api/entities/:id` answers for any kind, so `/tasks/EXMP-REQ-001` reads a requirement — which
+  // has no `files` or `dependsOn`, and blanked the console when they were read as a task's.
+  if (state.value.type !== 'task') {
+    return (
+      <Page>
+        <EmptyState kind="no-results" heading={`Nothing here is called ${humanId}`}>
+          {`${humanId} is a ${state.value.type}, not a task.`}
+        </EmptyState>
+      </Page>
+    );
+  }
+
   const task = state.value.entity as unknown as TaskEntity;
   const { backlinks, projectCode } = state.value;
 

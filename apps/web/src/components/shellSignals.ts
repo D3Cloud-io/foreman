@@ -23,6 +23,17 @@ import { foreman, type HealthReport } from '../lib/api';
 
 const FRESH_MS = 15_000;
 
+/**
+ * Screens that change a count call this after the write lands — confirming or rejecting an
+ * attribution on Activity — so the badge answers the action rather than waiting for the next
+ * navigation. It re-reads everything, ignoring `FRESH_MS`: the write is the moment it went stale.
+ */
+const refreshers = new Set<() => void>();
+
+export function refreshSignals(): void {
+  for (const refresh of refreshers) refresh();
+}
+
 export interface ShellSignals {
   /** Open critical findings, or null until the first answer. */
   readonly criticals: number | null;
@@ -49,6 +60,20 @@ export function useShellSignals(path: string, code: string | null): ShellSignals
     };
   }, []);
 
+  // Bumped by `refreshSignals`, which also forgets when each read last ran.
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    const refresh = () => {
+      lastGlobal.current = 0;
+      lastProject.current = null;
+      setNonce((n) => n + 1);
+    };
+    refreshers.add(refresh);
+    return () => {
+      refreshers.delete(refresh);
+    };
+  }, []);
+
   useEffect(() => {
     const live = () => mounted.current;
     const now = Date.now();
@@ -56,9 +81,9 @@ export function useShellSignals(path: string, code: string | null): ShellSignals
     if (now - lastGlobal.current >= FRESH_MS) {
       lastGlobal.current = now;
       foreman
-        .findings({ severity: 'critical', status: 'open' })
-        .then((page) => {
-          if (live()) setCriticals(page.items.length);
+        .openCriticalCount()
+        .then((count) => {
+          if (live()) setCriticals(count);
         })
         .catch(() => {
           // Keep the last count: a badge that vanishes on one failed read reads as "all clear".
@@ -87,7 +112,7 @@ export function useShellSignals(path: string, code: string | null): ShellSignals
           // An unknown project has no Activity row to count, and the shell says not-found instead.
         });
     }
-  }, [path, code]);
+  }, [path, code, nonce]);
 
   return {
     criticals,

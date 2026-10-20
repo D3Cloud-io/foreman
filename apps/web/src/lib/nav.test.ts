@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { needsYou } from '../components/shellSignals';
 import { globalItems, libraryItems, tabBarItems } from './nav';
-import { currentSectionSlug, isRecordPage, KNOWLEDGE_ROWS, PROJECT_ROWS, projectCodeFor, SECTIONS } from './project';
+import {
+  currentSectionSlug,
+  isRecordPage,
+  KNOWLEDGE_ROWS,
+  PROJECT_ROWS,
+  projectCodeFor,
+  recordTrailEnd,
+  SECTIONS,
+} from './project';
 
 /** FRM-T-16.4: the shell's arrangement, from FRM-ADR-025 and FRM-DA-001. */
 describe('the project a page belongs to', () => {
@@ -33,6 +41,15 @@ describe('the project a page belongs to', () => {
     expect(currentSectionSlug('/findings/BND-CR-001')).toBeNull();
     expect(currentSectionSlug('/projects/BND/adrs')).toBe('adrs');
     expect(currentSectionSlug('/projects/BND')).toBeNull();
+  });
+});
+
+describe('a record page’s trail', () => {
+  it('ends with the section the record is in, and a finding’s with the inbox', () => {
+    expect(recordTrailEnd('/requirements/BND-REQ-001')).toEqual({ label: 'Requirements', href: '/projects/BND/requirements' });
+    expect(recordTrailEnd('/tasks/BND-T-1.2')).toEqual({ label: 'Phases', href: '/projects/BND/phases' });
+    expect(recordTrailEnd('/findings/BND-CR-001')).toEqual({ label: 'Findings', href: '/findings' });
+    expect(recordTrailEnd('/projects/BND/adrs')).toBeNull();
   });
 });
 

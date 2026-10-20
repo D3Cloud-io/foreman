@@ -12,9 +12,11 @@ import type { HealthReport } from '../lib/api';
  * words. Before the report arrives it says nothing at all, rather than "healthy" on no evidence.
  */
 export function HealthLine({ health }: { health: HealthReport | 'error' | null }) {
-  if (health === null) return null;
+  // The line's own height, held while the report is on its way, so the account menu under it does
+  // not jump down when it lands. Empty and hidden: there is nothing to say yet.
+  if (health === null) return <div className="fm-health fm-health--pending" aria-hidden="true" />;
 
-  const problems = health === 'error' ? ['The health report did not load.'] : health.problems;
+  const problems = problemsIn(health);
   const first = problems[0];
 
   return (
@@ -27,4 +29,17 @@ export function HealthLine({ health }: { health: HealthReport | 'error' | null }
       {first === undefined ? null : <span className="fm-health__line">{first}</span>}
     </a>
   );
+}
+
+/**
+ * The report's problems, read defensively: the footer is on every screen, so a report missing its
+ * list (an older server, a proxy's error page parsed as JSON) must say so rather than throw and take
+ * the whole console down with it.
+ */
+export function problemsIn(health: unknown): readonly string[] {
+  if (health === 'error') return ['The health report did not load.'];
+  if (typeof health !== 'object' || health === null) return ['The health report could not be read.'];
+  const { problems } = health as { problems?: unknown };
+  if (!Array.isArray(problems)) return ['The health report could not be read.'];
+  return problems.filter((problem): problem is string => typeof problem === 'string');
 }

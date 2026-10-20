@@ -120,6 +120,18 @@ export function currentSectionSlug(path: string): string | null {
   return null;
 }
 
+/**
+ * Where a record page's trail ends: the section it is a record of, or for a finding the inbox,
+ * which is cross-project and where findings are triaged — `Projects / Bindery / Findings`.
+ */
+export function recordTrailEnd(path: string): { label: string; href: string } | null {
+  const code = projectCodeFor(path);
+  if (code === null || !isRecordPage(path)) return null;
+  const slug = currentSectionSlug(path);
+  if (slug !== null) return { label: section(slug).label, href: `/projects/${code}/${slug}` };
+  return { label: 'Findings', href: '/findings' };
+}
+
 /** True on a flat record page that belongs to a project — the pages whose trail the shell draws. */
 export function isRecordPage(path: string): boolean {
   const first = path.split('/').filter((p) => p.length > 0)[0];

@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { createHmac, randomBytes } from 'node:crypto';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 /**
  * The family shell (FRM-T-16.4, FRM-ADR-025, FRM-DA-001).
@@ -147,9 +148,20 @@ test.describe('counts', () => {
     await page.goto('/projects/EXMP');
     await page.waitForLoadState('networkidle');
 
+    // No badge at all: the link's whole text is its label, and its name is the label alone.
     const nav = page.getByRole('navigation', { name: 'Main' });
-    await expect(nav.getByRole('link', { name: 'Findings', exact: true })).toBeVisible();
-    await expect(nav.getByRole('link', { name: 'Activity', exact: true })).toBeVisible();
+    for (const label of ['Findings', 'Activity']) {
+      const link = nav.getByRole('link', { name: label, exact: true });
+      await expect(link).toBeVisible();
+      await expect(link).toHaveText(label);
+      await expect(link).not.toHaveAttribute('aria-label', /.+/);
+    }
+
+    await page.setViewportSize(PHONE);
+    const tab = page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Findings', exact: true });
+    await expect(tab).toBeVisible();
+    await expect(tab).toHaveText('Findings');
+    await expect(tab).not.toHaveAttribute('aria-label', /.+/);
   });
 
   test('say what needs you, and keep the destination in the name', async ({ page }) => {
@@ -178,9 +190,9 @@ test.describe('counts', () => {
 
 test.describe('a record page keeps its project', () => {
   const RECORDS = [
-    { path: '/requirements/EXMP-REQ-001', current: 'Requirements' },
-    { path: '/tasks/EXMP-T-1.1', current: 'Phases' },
-    { path: '/findings/EXMP-CR-001', current: null },
+    { path: '/requirements/EXMP-REQ-001', current: 'Requirements', end: 'Requirements' },
+    { path: '/tasks/EXMP-T-1.1', current: 'Phases', end: 'Phases' },
+    { path: '/findings/EXMP-CR-001', current: null, end: 'Findings' },
   ];
 
   for (const record of RECORDS) {
@@ -195,7 +207,10 @@ test.describe('a record page keeps its project', () => {
         await expect(block.getByRole('link', { name: record.current })).toHaveAttribute('aria-current', 'page');
       }
 
+      // One trail, ending with where the record lives — not the shell's and the screen's both.
       const trail = page.getByRole('navigation', { name: 'Breadcrumb' });
+      await expect(trail.getByRole('link')).toHaveText(['Projects', 'Example Project', record.end]);
+      await expect(page.getByRole('main').getByRole('link', { name: 'Projects', exact: true })).toHaveCount(1);
       await expect(trail.getByRole('link', { name: 'Projects' })).toHaveAttribute('href', '/projects');
       await trail.getByRole('link', { name: 'Example Project' }).click();
       await expect(page).toHaveURL(/\/projects\/EXMP$/);
@@ -239,4 +254,98 @@ test('⌘K goes to Search, with the cursor in it', async ({ page }) => {
   await page.keyboard.press(mac ? 'Meta+k' : 'Control+k');
   await expect(page).toHaveURL(/\/search$/);
   await expect(page.getByRole('textbox', { name: 'Find' })).toBeFocused();
+});
+
+test('a task page given another kind’s ID says so, rather than blanking the console', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.setViewportSize(LAPTOP);
+  await signIn(page);
+  await page.goto('/tasks/EXMP-REQ-001');
+  await expect(page.getByText('Nothing here is called EXMP-REQ-001')).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Main' })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('⌘K does nothing while a dialog is open, so an open edit is not thrown away', async ({ page }) => {
+  await page.setViewportSize(LAPTOP);
+  await signIn(page);
+  await page.goto('/tasks/EXMP-T-1.1');
+  await page.getByRole('button', { name: 'Edit' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('textbox').first().focus();
+  const mac = await page.evaluate(() => /Mac|iPhone|iPad/.test(navigator.userAgent));
+  await page.keyboard.press(mac ? 'Meta+k' : 'Control+k');
+  await expect(dialog).toBeVisible();
+  await expect(page).toHaveURL(/\/tasks\/EXMP-T-1\.1$/);
+});
+
+const WEBHOOK_SECRET = process.env['GITHUB_WEBHOOK_SECRET'] ?? 'dev-webhook-secret';
+
+/** A signed push citing T-0.1, so the attribution pass proposes it — as activity.spec.ts does. */
+async function proposeOne(request: APIRequestContext): Promise<string> {
+  const sha = randomBytes(20).toString('hex');
+  const body = JSON.stringify({
+    repository: { full_name: 'matdemers1/example-project' },
+    ref: 'refs/heads/main',
+    commits: [
+      {
+        id: sha,
+        message: 'Work the shell will count (T-0.1)',
+        timestamp: new Date().toISOString(),
+        author: { name: 'e2e', email: 'e2e@example.com' },
+        added: [],
+        modified: ['apps/web/src/components/Shell.tsx'],
+        removed: [],
+      },
+    ],
+  });
+  const res = await request.post('/webhooks/github', {
+    headers: {
+      'content-type': 'application/json',
+      'x-github-event': 'push',
+      'x-github-delivery': randomBytes(8).toString('hex'),
+      'x-hub-signature-256': `sha256=${createHmac('sha256', WEBHOOK_SECRET).update(body).digest('hex')}`,
+    },
+    data: body,
+  });
+  expect(res.status()).toBe(202);
+  await expect
+    .poll(
+      async () => {
+        const list = await request.get('/api/projects/EXMP/commits?attributed=proposed');
+        const page = (await list.json()) as { items: { sha: string }[] };
+        return page.items.some((commit) => commit.sha === sha);
+      },
+      { timeout: 20_000, message: 'the commit was never proposed' },
+    )
+    .toBe(true);
+  return sha;
+}
+
+test('the Activity count answers a confirmation at once, not on the next page', async ({ page, request }) => {
+  await request.post('/auth/login', { data: { email: EMAIL, password: PASSWORD } });
+  const sha = await proposeOne(request);
+
+  await page.setViewportSize(LAPTOP);
+  await signIn(page);
+  await page.goto('/projects/EXMP/activity');
+  const nav = page.getByRole('navigation', { name: 'Main' });
+  const counted = nav.getByRole('link', { name: /^Activity, \d+ waiting for review$/ });
+  await expect(counted).toBeVisible();
+  const before = Number(/(\d+)/.exec((await counted.getAttribute('aria-label')) ?? '')?.[1]);
+  expect(before).toBeGreaterThan(0);
+
+  const row = page.getByRole('listitem').filter({ hasText: sha.slice(0, 12) });
+  await row.getByRole('button', { name: /^Confirm / }).click();
+  await expect(row).toBeHidden();
+
+  const after = before - 1;
+  await expect(
+    after === 0
+      ? nav.getByRole('link', { name: 'Activity', exact: true })
+      : nav.getByRole('link', { name: `Activity, ${String(after)} waiting for review` }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/\/projects\/EXMP\/activity$/);
 });

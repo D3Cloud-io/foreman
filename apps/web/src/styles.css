@@ -169,6 +169,16 @@
 .fm-health:hover {
   background: var(--color-surface-hover);
 }
+/* The pending block and a healthy line are the same height — one 13px line and its padding — so
+   nothing under it moves when the report lands. */
+.fm-health,
+.fm-health--pending {
+  box-sizing: border-box;
+  min-height: calc(var(--text-13) * var(--leading-13) + 2 * var(--space-6));
+}
+.fm-health--pending:hover {
+  background: none;
+}
 .fm-health:focus-visible {
   outline: var(--focus-width) solid var(--color-focus);
   outline-offset: calc(-1 * var(--focus-width));
