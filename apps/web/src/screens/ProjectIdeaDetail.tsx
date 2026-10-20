@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   Alert,
   Button,
@@ -131,7 +131,7 @@ export function ProjectIdeaDetail({ humanId }: { humanId: string }) {
         onUndone: refresh,
         failure: 'inline',
       });
-      if (!outcome.ok) setSaveError(outcome.message);
+      if (!outcome.ok && outcome.inFlight !== true) setSaveError(outcome.message);
       return outcome.ok;
     },
     [humanId, mutate, refresh],
@@ -382,9 +382,14 @@ function SectionCard({
   const written = value !== null && value.trim().length > 0;
   const allowClose = useDraftGuard(editing ? draftSize({ text: value ?? '' }, { text: draft }) : 0, heading);
 
+  // A ref, not `busy`: two ⌘↵ in one tick both read the state from before either render.
+  const saving = useRef(false);
   const commit = () => {
+    if (saving.current) return;
+    saving.current = true;
     setBusy(true);
     void onSave(draft).then((ok) => {
+      saving.current = false;
       setBusy(false);
       if (ok) setEditing(false);
     });
@@ -503,7 +508,7 @@ function Rating({ humanId, board, disabled }: { humanId: string; board: boolean;
       failure: 'inline',
     }).then((outcome) => {
       if (!outcome.ok) {
-        setError(outcome.message);
+        if (outcome.inFlight !== true) setError(outcome.message);
         return;
       }
       setImpact(null);
@@ -888,8 +893,12 @@ function Thoughts({
   // A half-written thought survives nothing but this: closing the tab asks first.
   useDraftGuard(body.trim().length, board ? 'the discussion' : 'a thought');
 
+  // One post per press: a second ⌘↵ before the first lands is ignored, not stored twice. A ref,
+  // because two key presses in one tick both see the state from before either render.
+  const posting = useRef(false);
   const post = () => {
-    if (body.trim().length === 0) return;
+    if (posting.current || busy || body.trim().length === 0) return;
+    posting.current = true;
     setError(null);
     void mutate({
       subject: humanId,
@@ -900,8 +909,9 @@ function Thoughts({
       undoable: false,
       failure: 'inline',
     }).then((outcome) => {
+      posting.current = false;
       if (!outcome.ok) {
-        setError(outcome.message);
+        if (outcome.inFlight !== true) setError(outcome.message);
         return;
       }
       setBody('');

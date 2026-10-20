@@ -228,6 +228,45 @@ describe.skipIf(url === undefined)('the record', () => {
       expect(stale.status).toBe(412);
       expect((await stale.json()) as { current: unknown }).toHaveProperty('current');
     });
+
+    it('moves the document’s version when a section save is undone, and records a revision (FRM-T-18.4)', async () => {
+      const document = await makeDocument();
+      const saved = await put(`/projects/${CODE}/documents/${document.id}/sections/deployment`, {
+        bodyMd: 'A line to be undone.',
+      });
+      const { auditEventIds } = (await saved.json()) as { auditEventIds: string[] };
+      const afterSave = await api(`/projects/${CODE}/documents/${document.id}`);
+      const savedEtag = afterSave.headers.get('etag') ?? '';
+
+      const undone = await post(`/undo/${auditEventIds[0] ?? ''}`);
+      expect(undone.status, await undone.clone().text()).toBe(200);
+
+      // A conditional read with the version from before the undo is not answered 304 with the
+      // undone body: the version moved, so the restored text comes back.
+      const fresh = await api(`/projects/${CODE}/documents/${document.id}`, {
+        headers: { 'if-none-match': savedEtag },
+      });
+      expect(fresh.status).toBe(200);
+      expect(fresh.headers.get('etag')).not.toBe(savedEtag);
+      const body = (await fresh.json()) as DocumentBody;
+      expect(body.sections.find((s) => s.key === 'deployment')?.bodyMd).toBe(
+        'Behind a Cloudflare Tunnel, with no host ports.',
+      );
+
+      // And a save still holding that version is refused, rather than writing the undone text back.
+      const stale = await api(`/projects/${CODE}/documents/${document.id}/sections/deployment`, {
+        method: 'PUT',
+        headers: { 'if-match': savedEtag, 'content-type': 'application/json' },
+        body: JSON.stringify({ bodyMd: 'A line to be undone.' }),
+      });
+      expect(stale.status).toBe(412);
+
+      const revisions = await get<{ items: { revisionNo: number; note: string | null }[] }>(
+        `/projects/${CODE}/documents/${document.id}/revisions`,
+      );
+      expect(revisions.items).toHaveLength(3);
+      expect(revisions.items[0]?.note).toBe('undo of a change to deployment');
+    });
   });
 
   describe('revisions and diff (T-4.3, FRM-REQ-064, FRM-REQ-065)', () => {

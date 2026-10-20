@@ -262,7 +262,7 @@ function GuidelineBody({
       onUndone,
       failure: 'inline',
     }).then((outcome) => {
-      if (!outcome.ok) setError(outcome.message);
+      if (!outcome.ok && outcome.inFlight !== true) setError(outcome.message);
     });
   };
 
@@ -277,7 +277,7 @@ function GuidelineBody({
       onUndone,
       failure: 'inline',
     }).then((outcome) => {
-      if (!outcome.ok) setError(outcome.message);
+      if (!outcome.ok && outcome.inFlight !== true) setError(outcome.message);
     });
   };
 
@@ -459,7 +459,7 @@ function FormBody({
     })
       .then((outcome) => {
         if (outcome.ok) onSaved(outcome.value);
-        else setError(outcome.message);
+        else if (outcome.inFlight !== true) setError(outcome.message);
       })
       .finally(() => { setBusy(false); });
   };

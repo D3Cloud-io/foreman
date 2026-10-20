@@ -312,7 +312,7 @@ function IdeaForm({
     })
       .then((outcome) => {
         if (outcome.ok) setOpen(false);
-        else setError(outcome.message);
+        else if (outcome.inFlight !== true) setError(outcome.message);
       })
       .finally(() => {
         setBusy(false);

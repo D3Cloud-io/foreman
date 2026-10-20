@@ -44,7 +44,11 @@ export class ApiError extends Error {
  * only in the return position is an unchecked cast wearing a signature.
  */
 async function requestWithEtag(path: string): Promise<{ body: unknown; etag: string | null }> {
-  const res = await fetch(path, { credentials: 'same-origin' });
+  // `no-store`: the version is the row's `updatedAt`, not a hash of the body, so a conditional read
+  // the browser makes on its own can be answered 304 with a body that is no longer what is stored —
+  // and the editor would then save that body back over the change (FRM-T-18.4). What this reads is
+  // what the next write is checked against, so it is always read whole.
+  const res = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
   const text = await res.text();
   const body: unknown = text.length > 0 ? JSON.parse(text) : undefined;
 

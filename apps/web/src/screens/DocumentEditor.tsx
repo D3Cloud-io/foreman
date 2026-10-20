@@ -207,6 +207,7 @@ function SectionEditor({
         onDone();
         return;
       }
+      if (outcome.inFlight === true) return;
       const caught = outcome.error;
       if (caught instanceof ApiError && caught.status === 412) {
         // Never a silent overwrite: the body of the 412 carries the current document, so the
