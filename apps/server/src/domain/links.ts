@@ -94,7 +94,8 @@ export interface LinkResult {
   readonly created: boolean;
 }
 
-export type LinkKind = ReferenceKind | 'extends';
+/** Every link kind is a reference kind, so each writes and removes a reference row of its own. */
+export type LinkKind = ReferenceKind;
 
 /** A link with both ends looked up: what every write below needs, resolved outside the transaction. */
 export interface ResolvedLink {
@@ -108,7 +109,10 @@ export interface ResolvedLink {
   /** Kept for the depends_on check, which only a write makes: removing a bad edge is never refused. */
   readonly fromProjectId: unknown;
   readonly toProjectId: unknown;
-  /** `extends` is an ADR relation and not a reference kind; every other kind is both. */
+  /**
+   * The link's own reference kind, which is its kind. `extends` was stored as `relates` until
+   * FRM-T-11.3, so the two kinds shared a row and undoing either took the other's.
+   */
   readonly referenceKind: ReferenceKind;
 }
 
@@ -137,7 +141,7 @@ export async function resolveLink(
     toId: String(target.entity['id']),
     fromProjectId: source.entity['projectId'],
     toProjectId: target.entity['projectId'],
-    referenceKind: kind === 'extends' ? 'relates' : kind,
+    referenceKind: kind,
   };
 }
 
@@ -159,12 +163,13 @@ function assertDependable(r: ResolvedLink): void {
 /**
  * The rows one link is kept in, as flags: which ones a write made, a removal took away, or exist now.
  *
- * **Every row beside the reference has exactly one owning kind.** Only `satisfies` writes a task's
- * `task_requirement` row, only `depends_on` a `task_dependency`, only `extends` the extends
- * relation, and only `supersedes` the supersedes relation, its `superseded_by` mirror and the
- * replaced ADR's status. Any other kind writes its reference and nothing else. A row two kinds
- * shared had no owner: reversing either link could take it while the other still stood, or leave
- * it behind when both were gone, and coverage counted a `relates` as work done.
+ * **Every row has exactly one owning kind.** Each kind owns its own reference row, of its own
+ * kind. Beside it, only `satisfies` writes a task's `task_requirement` row, only `depends_on` a
+ * `task_dependency`, only `extends` the extends relation, and only `supersedes` the supersedes
+ * relation, its `superseded_by` mirror and the replaced ADR's status. Any other kind writes its
+ * reference and nothing else. A row two kinds shared had no owner: reversing either link could
+ * take it while the other still stood, or leave it behind when both were gone, and coverage
+ * counted a `relates` as work done. So no removal here can reach another kind's row.
  *
  * Recording which rows an event touched is what lets undo reverse that event and nothing else.
  */
@@ -477,8 +482,9 @@ export async function unlink(
   const resolved = await resolveLink(db, from, to, kind);
 
   return db.$transaction(async (tx) => {
-    // When the link's maker is on record, only what it wrote goes; otherwise — a link from before
-    // rows were recorded, or a row with no reference at all — everything the kind owns.
+    // This kind's own reference always goes, and of the rows beside it only what the link's maker
+    // wrote. With no maker on record — a link from before rows were recorded, or a coverage row a
+    // task was created with — every row this kind owns goes; never a row of any other kind.
     const made = await rowsTheLinkWrote(tx, resolved);
     const rows = await removeLink(tx, resolved, made === null ? ALL_ROWS : { ...made, reference: true });
     const removed = anyRow(rows);

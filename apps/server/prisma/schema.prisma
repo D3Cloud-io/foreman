@@ -230,6 +230,10 @@ enum ReferenceKind {
   /// A task that cannot start until another has finished. Kept in `task_dependency` as well, which
   /// is what the brief reads; this row is what makes the edge a backlink like any other.
   depends_on
+  /// An ADR that builds on another. Kept in `adr_relation` as well, which the ADR graph reads. Its
+  /// own kind since FRM-T-11.3: it was stored as `relates`, so an extends link and a relates link
+  /// between the same two ADRs shared one row, and reversing either removed the other.
+  extends
 }
 
 /// The four states the real idea documents already use. Taken from them rather than invented:

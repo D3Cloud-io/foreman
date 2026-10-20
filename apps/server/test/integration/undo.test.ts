@@ -257,11 +257,13 @@ describe.skipIf(url === undefined)('delete and undo', () => {
     const idOf = async (humanId: string): Promise<string> =>
       humanId.includes('-REQ-')
         ? (await db.requirement.findFirstOrThrow({ where: { humanId } })).id
-        : (await db.task.findFirstOrThrow({ where: { humanId } })).id;
+        : humanId.includes('-ADR-')
+          ? (await db.adr.findFirstOrThrow({ where: { humanId } })).id
+          : (await db.task.findFirstOrThrow({ where: { humanId } })).id;
     const reference = async (
       from: string,
       to: string,
-      kind: 'relates' | 'satisfies' | 'depends_on',
+      kind: 'relates' | 'satisfies' | 'depends_on' | 'extends' | 'violates',
     ): Promise<boolean> => {
       const [fromId, toId] = await Promise.all([idOf(from), idOf(to)]);
       return (await db.reference.findFirst({ where: { fromId, toId, kind } })) !== null;
@@ -705,6 +707,117 @@ describe.skipIf(url === undefined)('delete and undo', () => {
         expect(res.body.error).toContain('accepted');
         expect(await relation(newer, older, 'supersedes')).toBe(false);
         expect((await db.adr.findFirstOrThrow({ where: { humanId: older } })).status).toBe('accepted');
+      });
+    });
+
+    /**
+     * `extends` was stored as a `relates` reference, so an extends link and a relates link between
+     * the same two ADRs shared one row: reversing either took the other's, or left the extends
+     * relation with no reference. Every kind now owns a reference row of its own kind.
+     */
+    describe('a relates and an extends between the same two ADRs are two links', () => {
+      const newAdr = async (title: string): Promise<string> => {
+        const res = await post(`/projects/${CODE}/adrs`, { title });
+        expect(res.status).toBe(201);
+        return ((await res.json()) as { humanId: string }).humanId;
+      };
+      const extendsRelation = async (from: string, to: string) => {
+        const [adrId, relatedAdrId] = await Promise.all([idOf(from), idOf(to)]);
+        const row = await db.adrRelation.findUnique({
+          where: { adrId_relatedAdrId_kind: { adrId, relatedAdrId, kind: 'extends' } },
+        });
+        return row !== null;
+      };
+      const eventOf = async (humanId: string, action: 'create' | 'delete', kind: string) =>
+        db.auditEvent.findFirstOrThrow({
+          where: { entityHumanId: humanId, action, after: { path: ['kind'], equals: kind } },
+          orderBy: { createdAt: 'desc' },
+        });
+
+      type Kind = 'relates' | 'extends';
+      const orders: readonly (readonly [Kind, Kind])[] = [
+        ['relates', 'extends'],
+        ['extends', 'relates'],
+      ];
+
+      for (const [first, second] of orders) {
+        for (const target of [first, second]) {
+          const other: Kind = target === 'relates' ? 'extends' : 'relates';
+          const setUp = async () => {
+            const older = await newAdr('Postgres for everything');
+            const newer = await newAdr('Postgres for the queue as well');
+            expect((await links({ from: newer, to: older, kind: first })).status).toBe(200);
+            expect((await links({ from: newer, to: older, kind: second })).status).toBe(200);
+            expect(await reference(newer, older, 'relates')).toBe(true);
+            expect(await reference(newer, older, 'extends')).toBe(true);
+            return { older, newer };
+          };
+          // The other link, whole: its own reference, and the relation when it is the extends.
+          const otherIntact = async (newer: string, older: string) => {
+            expect(await reference(newer, older, other)).toBe(true);
+            expect(await extendsRelation(newer, older)).toBe(other === 'extends');
+          };
+
+          describe(`${first} then ${second}`, () => {
+            it(`undoing the ${target} link leaves the ${other} whole`, async () => {
+              const { older, newer } = await setUp();
+              const event = await eventOf(newer, 'create', target);
+              expect(event.after).toMatchObject({ rows: { reference: true } });
+
+              expect((await undoOf(event.id)).status).toBe(200);
+
+              expect(await reference(newer, older, target)).toBe(false);
+              await otherIntact(newer, older);
+            });
+
+            it(`unlinking the ${target} leaves the ${other} whole`, async () => {
+              const { older, newer } = await setUp();
+              const res = await links({ from: newer, to: older, kind: target, remove: true });
+              expect(((await res.json()) as { removed: boolean }).removed).toBe(true);
+
+              expect(await reference(newer, older, target)).toBe(false);
+              await otherIntact(newer, older);
+            });
+
+            it(`undoing an unlink of the ${target} puts back only the ${target}`, async () => {
+              const { older, newer } = await setUp();
+              await links({ from: newer, to: older, kind: target, remove: true });
+              const event = await eventOf(newer, 'delete', target);
+
+              expect((await undoOf(event.id)).status).toBe(200);
+
+              expect(await reference(newer, older, 'relates')).toBe(true);
+              expect(await reference(newer, older, 'extends')).toBe(true);
+              expect(await extendsRelation(newer, older)).toBe(true);
+              // Two links, two references: nothing was doubled or invented.
+              const [fromId, toId] = await Promise.all([idOf(newer), idOf(older)]);
+              expect(await db.reference.count({ where: { fromId, toId } })).toBe(2);
+            });
+          });
+        }
+      }
+
+      it('unlinking an extends that is not there leaves a relates that is', async () => {
+        const older = await newAdr('Postgres for everything');
+        const newer = await newAdr('Postgres for the queue as well');
+        await links({ from: newer, to: older, kind: 'relates' });
+
+        const res = await links({ from: newer, to: older, kind: 'extends', remove: true });
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as { removed: boolean }).removed).toBe(false);
+        expect(await reference(newer, older, 'relates')).toBe(true);
+      });
+
+      it('unlinking a relates that is not there leaves an extends whole', async () => {
+        const older = await newAdr('Postgres for everything');
+        const newer = await newAdr('Postgres for the queue as well');
+        await links({ from: newer, to: older, kind: 'extends' });
+
+        const res = await links({ from: newer, to: older, kind: 'relates', remove: true });
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as { removed: boolean }).removed).toBe(false);
+        expect(await reference(newer, older, 'extends')).toBe(true);
+        expect(await extendsRelation(newer, older)).toBe(true);
       });
     });
 
