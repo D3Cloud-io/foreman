@@ -291,6 +291,35 @@ describe.skipIf(url === undefined)('build results from Shipyard', () => {
     expect(await builds()).toHaveLength(2);
   });
 
+  it('lets the build that finished later win when two builds of one commit and app post at once', async () => {
+    // Many rounds, each on a fresh commit, alternating which is sent first: the race is between two
+    // transactions that would each read the check run before the other wrote it.
+    const rounds = 20;
+    for (let round = 0; round < rounds; round += 1) {
+      const sha = round.toString(16).padStart(2, '0').repeat(20);
+      const older = shipyardRow({ sha, buildId: `race-${String(round)}-older`, state: 'failed', ...at('2026-10-19T09:00:00Z') });
+      const newer = shipyardRow({ sha, buildId: `race-${String(round)}-newer`, state: 'succeeded', ...at('2026-10-19T10:00:00Z') });
+      const pair = round % 2 === 0 ? [older, newer] : [newer, older];
+      const results = await Promise.all(pair.map((body) => post(body)));
+      expect(results.map((r) => r.status), `round ${String(round)}`).toEqual([201, 201]);
+
+      const run = await db.checkRun.findUniqueOrThrow({
+        where: { repoId_commitSha_name: { repoId, commitSha: sha, name: 'shipyard/build/bld-app' } },
+      });
+      expect(run, `round ${String(round)}`).toMatchObject({
+        conclusion: 'success',
+        externalId: `race-${String(round)}-newer`,
+        completedAt: new Date('2026-10-19T10:00:00Z'),
+      });
+      const recorded = await db.buildResult.findMany({ where: { commitSha: sha }, orderBy: { buildId: 'asc' } });
+      // Both recorded; whichever arrived second either replaced the older or was superseded by the
+      // newer, so the newer is applied and exactly one check run exists.
+      expect(recorded.map((b) => b.buildId)).toEqual([`race-${String(round)}-newer`, `race-${String(round)}-older`]);
+      expect(recorded.find((b) => b.buildId.endsWith('newer'))?.applied).toBe(true);
+    }
+    expect(await checkRuns()).toHaveLength(rounds);
+  });
+
   it('refuses a build ID already recorded for another project', async () => {
     expect((await post(shipyardRow())).status).toBe(201);
     const project = await db.project.create({

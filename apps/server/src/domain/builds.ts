@@ -86,6 +86,13 @@ export async function recordBuildResult(
     const raced = await seen(tx, input.buildId, project.id);
     if (raced !== null) return replayed(tx, raced);
 
+    // Two *different* builds of one commit and app racing each other would both read the check
+    // run before either wrote it, and the one that finished earlier could then overwrite the one
+    // that finished later. So the check run is locked too — always after the build ID, so two
+    // transactions can never each hold the lock the other wants — and read only once it is held.
+    // Read committed takes a fresh snapshot per statement, so the read below sees whatever the
+    // previous holder committed.
+    await tx.$executeRaw`select pg_advisory_xact_lock(hashtext(${`foreman:check_run:${repo.id}:${input.sha}:${name}`}))`;
     const key = { repoId_commitSha_name: { repoId: repo.id, commitSha: input.sha, name } };
     const before = await tx.checkRun.findUnique({ where: key });
     // Strictly later only: a result that finished at the same instant as the one shown is a
