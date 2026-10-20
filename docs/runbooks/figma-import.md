@@ -69,9 +69,11 @@ A Claude session has the Figma MCP but no personal access token.
 
 1. For each frame, call the Figma MCP's `get_screenshot` (or the download it offers) and save the PNG
    next to the mapping file.
-2. Read the file's version from the MCP's file metadata (or the Figma file's version history) and put
-   it in `fileVersion`. The version is what ties these pixels to a moment in the file, so it must be
-   the one the export was taken at.
+2. Put a version in `fileVersion`. The Figma MCP does not expose the file's version number, so either
+   copy it from the file's version history (File → Show version history) or, failing that, use an
+   honest export label such as `mcp-export-2026-10-20`. The version is what ties these pixels to a
+   moment in the file, so it must change whenever the frames are exported again. (The first real
+   import, Shipyard's board on 2026-10-20, used an export label.)
 3. Fill each frame's `png`, then run the command. Every file's first eight bytes are checked to be a
    PNG's before anything is uploaded.
 
