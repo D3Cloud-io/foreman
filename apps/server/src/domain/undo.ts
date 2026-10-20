@@ -169,6 +169,17 @@ export async function undo(db: Db, actor: Actor, auditEventId: string): Promise<
   const before = event.before as Record<string, unknown> | null;
   const after = event.after as Record<string, unknown> | null;
 
+  // A coverage cleanup removed a row no link owned (FRM-T-024). It is recorded on the entity the
+  // row started from, so reversing it as an entity change would restore or delete that entity.
+  // Putting the row back is a link, which the event names.
+  if (after?.['event'] === 'reconcile') {
+    const restoreWith = after['restoreWith'];
+    throw new Conflict(
+      'that was a coverage cleanup, not a change to the entity' +
+        (typeof restoreWith === 'string' ? `; to put the row back, ${restoreWith}` : ''),
+    );
+  }
+
   const linkEvent = linkEventOf(event.action, after);
   if (linkEvent !== null) return undoLink(db, actor, event, linkEvent);
 

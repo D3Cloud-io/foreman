@@ -46,6 +46,7 @@
     "relint": "pnpm --filter @foreman/shared build && node --env-file-if-exists=../../.env --import tsx src/cli/relint.ts",
     "import-figma": "pnpm --filter @foreman/shared build && node --env-file-if-exists=../../.env --import tsx src/cli/import-figma.ts",
     "reconcile-status": "pnpm --filter @foreman/shared build && node --env-file-if-exists=../../.env --import tsx src/cli/reconcile-status.ts",
+    "reconcile-coverage": "pnpm --filter @foreman/shared build && node --env-file-if-exists=../../.env --import tsx src/cli/reconcile-coverage.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
