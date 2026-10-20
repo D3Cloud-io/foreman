@@ -4,13 +4,16 @@ Plan-vs-reality ledger for the D3 Cloud ecosystem. Replaces the Obsidian vault a
 
 ## Where the plan lives
 
-Foreman tracks itself as project **`FRM`** — 178 requirements, 11 phases, 17 ADRs. It has since the
+The repository is **`D3Cloud-io/foreman`** (moved from `matdemers1/foreman` on 2026-10-19, GL-006), and
+its images publish to `ghcr.io/d3cloud-io/foreman/{server,worker}`.
+
+Foreman tracks itself as project **`FRM`** — ask `foreman_coverage FRM` for the counts. It has since the
 P10 cutover on 2026-09-20, which is the point: the tool holds its own remaining work.
 
 - `foreman_brief FRM` — the active phase, what is next, what is blocked, drift.
 - `foreman_coverage FRM` — uncovered Musts, tasks citing nothing, EARS warnings.
 - `foreman://FRM/architecture`, `/data-model`, `/api-contract`, `/ux-flows`, `/glossary`.
-- **ADR-001** Node/Express/Prisma over Python/FastAPI · **ADR-002** a small verb surface over a large graph · **ADR-003** local stdio shim, not a remote MCP server · **ADR-004** dual login as a permanent ecosystem pattern · **ADR-005** attribution is declared, not inferred · **ADR-006** five registers are views, not documents · **ADR-007** database backup as the only escape hatch · **ADR-008** project-prefixed human IDs · **ADR-009** one cutover, not a migration window · **ADR-013** remote MCP uses pre-registration, not DCR or CIMD · **ADR-014** *(proposed)* MCP may delete what nothing cites · **ADR-015** a project idea is its own entity, not an idea with no project · **ADR-016** *(proposed)* Foreman runs as one of two products, chosen by deployment · **ADR-017** a project idea grows through a named canvas, not a blank page · **ADR-018** phase status and project lifecycle are derived from what is beneath them · **ADR-022** deleting an account removes the person and keeps what they wrote attributed.
+- **ADR-001** Node/Express/Prisma over Python/FastAPI · **ADR-002** a small verb surface over a large graph · **ADR-003** local stdio shim, not a remote MCP server · **ADR-004** dual login as a permanent ecosystem pattern · **ADR-005** attribution is declared, not inferred · **ADR-006** five registers are views, not documents · **ADR-007** database backup as the only escape hatch · **ADR-008** project-prefixed human IDs · **ADR-009** one cutover, not a migration window · **ADR-013** remote MCP uses pre-registration, not DCR or CIMD · **ADR-014** *(proposed)* MCP may delete what nothing cites · **ADR-015** a project idea is its own entity, not an idea with no project · **ADR-016** *(proposed)* Foreman runs as one of two products, chosen by deployment · **ADR-017** a project idea grows through a named canvas, not a blank page · **ADR-018** phase status and project lifecycle are derived from what is beneath them · **ADR-022** deleting an account removes the person and keeps what they wrote attributed · **ADR-023** a screen's proposal comes from its Figma frame, not a canvas artboard.
 
 The archived vault at `../D3 Cloud Vault/Foreman/` holds the pre-cutover plan. Read it for history;
 never write to it.
