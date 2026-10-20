@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { PortfolioRow } from '../lib/api';
-import { PortfolioStats, ProjectTile } from './Home';
+import { Ledger } from '../components/Ledger';
+import { PortfolioStats } from './Home';
 
 const COUNTS = {
   'coverage-hole': 0,
@@ -104,11 +105,11 @@ describe('the portfolio figures (FRM-REQ-241)', () => {
   });
 });
 
-describe('a project tile', () => {
+describe('a ledger row', () => {
   it('says what CI said in words, and says drift is not measurable for a project with no plan', () => {
-    const html = renderToStaticMarkup(<ProjectTile row={row('PW', { phase: null, tasks: empty })} />);
-    expect(html).toContain('no CI reported');
+    const html = renderToStaticMarkup(<Ledger rows={[row('PW', { phase: null, tasks: empty })]} />);
+    expect(html).toContain('never');
     expect(html).toContain('drift not measurable yet');
-    expect(html).toContain('critical + high');
+    expect(html).toContain('No plan yet');
   });
 });
