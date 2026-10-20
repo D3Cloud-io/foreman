@@ -1,17 +1,19 @@
-import { PageQuery, parseHumanId } from '@foreman/shared';
+import { BuildResultInput, PageQuery, parseHumanId } from '@foreman/shared';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireScope } from '../auth/middleware.js';
 import type { Db } from '../db.js';
 import { record } from '../domain/audit.js';
 import { confirmAttribution, rejectAttribution } from '../domain/attribution.js';
+import { recordBuildResult } from '../domain/builds.js';
 import { findProject } from '../domain/projects.js';
 import { cadenceFor, ciFor, releaseNotes } from '../domain/reality.js';
 import { enqueue, type JobRegistry } from '../jobs/index.js';
 import { actorOf, handler, param, parseBody, parseQuery } from './helpers.js';
 
 /**
- * Ingested reality over HTTP: commits, their attribution proposals, check runs and releases.
+ * Ingested reality over HTTP: commits, their attribution proposals, check runs, builds reported by
+ * a deployer, and releases.
  *
  * The screen these serve (S-24) exists because of R-02: even with three signals a real share of
  * commits stay unattributed, and a coverage gap nobody can see is one nobody closes.
@@ -328,6 +330,51 @@ export function realityRoutes(db: Db, registry?: JobRegistry): Router {
       });
 
       res.status(201).json({ ...deployment, tasks });
+    }),
+  );
+
+  // ─── Build results from a deployer (FRM-T-008) ───────────────────────────
+
+  /**
+   * Record a build as its commit's CI state (FRM-REQ-182).
+   *
+   * The body is Shipyard's `foreman_build` outbox row as it stands. Its conclusion lands as a check
+   * run named `shipyard/build/<app>` — see `domain/builds.ts` for why — so the brief and the
+   * activity screen show it with no change to either.
+   *
+   * 201 whenever a build ID is new, whatever it did to the check run (`outcome` says: created,
+   * updated, or superseded by a result that finished later). 200 with `replayed: true` and nothing
+   * written when the build ID was recorded before. A write-scoped token is required, as for a
+   * deployment.
+   */
+  router.post(
+    '/:code/builds',
+    canWrite,
+    handler(async (req, res) => {
+      const body = parseBody(BuildResultInput, req, res);
+      if (body === null) return;
+      const result = await recordBuildResult(db, actorOf(req), param(req, 'code'), body);
+      const { checkRun } = result;
+      res.status(result.outcome === 'unchanged' ? 200 : 201).json({
+        buildId: body.buildId,
+        outcome: result.outcome,
+        replayed: result.outcome === 'unchanged',
+        applied: result.applied,
+        repo: result.repo,
+        commitKnown: result.commitKnown,
+        checkRun:
+          checkRun === null
+            ? null
+            : {
+                id: checkRun.id,
+                name: checkRun.name,
+                commitSha: checkRun.commitSha,
+                conclusion: checkRun.conclusion,
+                startedAt: checkRun.startedAt,
+                completedAt: checkRun.completedAt,
+                detailsUrl: checkRun.detailsUrl,
+              },
+      });
     }),
   );
 
