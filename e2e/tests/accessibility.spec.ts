@@ -27,7 +27,7 @@ const PASSWORD = process.env['E2E_PASSWORD'] ?? 'foreman-dev-password-9174';
  * whose address the seed does not fix — a function that finds or makes the record and returns it.
  */
 const SCREENS: { name: string; path: string | ((page: Page) => Promise<string>) }[] = [
-  { name: 'dashboard', path: '/' },
+  { name: 'home', path: '/' },
   { name: 'projects', path: '/projects' },
   { name: 'project ideas', path: '/project-ideas' },
   { name: 'project idea', path: '/project-ideas/PI-001' },
@@ -51,6 +51,8 @@ const SCREENS: { name: string; path: string | ((page: Page) => Promise<string>) 
   { name: 'screens', path: '/projects/EXMP/screens' },
   { name: 'screen detail', path: screenPath },
   { name: 'guidelines', path: '/guidelines' },
+  { name: 'groups', path: '/groups' },
+  { name: 'group page', path: groupPath },
   { name: 'findings', path: '/findings' },
   { name: 'finding detail', path: '/findings/EXMP-CR-001' },
   { name: 'search', path: '/search?q=decision' },
@@ -65,6 +67,30 @@ async function documentPath(page: Page): Promise<string> {
   const href = await page.getByRole('link', { name: 'Architecture' }).getAttribute('href');
   expect(href, 'the seeded Architecture document').toMatch(/^\/projects\/EXMP\/documents\/.+/);
   return href ?? '';
+}
+
+const SWEEP_GROUP = 'Accessibility sweep';
+
+/**
+ * The seed has no groups, so the sweep keeps one of its own, found by name or made once, holding
+ * the seeded project — so the group page, Home's sections and the grouped Projects table all have
+ * something in them to check.
+ */
+async function groupPath(page: Page): Promise<string> {
+  const list = await page.request.get('/api/groups');
+  expect(list.ok(), await list.text()).toBe(true);
+  const { items } = (await list.json()) as { items: { name: string; slug: string }[] };
+  const existing = items.find((item) => item.name === SWEEP_GROUP);
+  if (existing !== undefined) return `/groups/${existing.slug}`;
+
+  const created = await page.request.post('/api/groups', {
+    data: { name: SWEEP_GROUP, accent: 'foreman', description: 'Kept by the accessibility sweep', siteUrl: 'https://example.com' },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const { humanId, slug } = (await created.json()) as { humanId: string; slug: string };
+  const moved = await page.request.post(`/api/groups/${humanId}/projects`, { data: { projects: ['NBR'] } });
+  expect(moved.ok(), await moved.text()).toBe(true);
+  return `/groups/${slug}`;
 }
 
 /** One 8×8 PNG, so the screen's page has a design to show beside nothing built yet. */

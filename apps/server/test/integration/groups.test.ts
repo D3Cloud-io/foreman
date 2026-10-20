@@ -358,6 +358,33 @@ describe.skipIf(url === undefined)('groups', () => {
     });
   });
 
+  describe("a create and a rename answer with their events, for the console's Undo (FRM-T-17.3)", () => {
+    it('names the create event, and undoing it removes the group', async () => {
+      const made = await ok<Group & { auditEventIds: string[] }>(
+        await send('POST', '/api/groups', { name: `${PREFIX}Undone` }),
+        201,
+      );
+      const create = await lastEvent('group', made.id);
+      expect(made.auditEventIds.at(-1)).toBe(create.id);
+      expect(create.action).toBe('create');
+
+      await ok(await undo(create.id));
+      expect((await listing()).items.some((g) => g.id === made.id)).toBe(false);
+    });
+
+    it('names the rename event, and undoing it puts the name back', async () => {
+      const group = await create({ name: `${PREFIX}Before` });
+      const renamed = await ok<Group & { auditEventIds: string[] }>(
+        await send('PATCH', `/api/groups/${group.humanId}`, { name: `${PREFIX}After` }),
+      );
+      expect(renamed.auditEventIds).toEqual([(await lastEvent('group', group.id)).id]);
+
+      await ok(await undo(renamed.auditEventIds[0] ?? ''));
+      const back = await ok<Group>(await api(`/api/groups/${group.humanId}`));
+      expect(back.name).toBe(`${PREFIX}Before`);
+    });
+  });
+
   describe('a move is audited and undoable (FRM-REQ-225)', () => {
     it('writes an update event on the project, and POST /api/undo puts it back', async () => {
       const a = await create({ name: `${PREFIX}From` });

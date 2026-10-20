@@ -128,7 +128,7 @@ test.describe('D3 Auth unreachable (FRM-REQ-017)', () => {
     await page.getByRole('button', { name: 'Sign in' }).click();
 
     await expect(page.getByRole('navigation').first()).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Dashboard' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible();
     await expect(page.getByText(email)).toBeVisible();
 
     // A real session, made by the password path, with D3 Auth still down.

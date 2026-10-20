@@ -38,7 +38,7 @@ test.describe('the tab bar', () => {
     const bar = page.getByRole('navigation', { name: 'Primary' });
     await expect(bar).toBeVisible();
     expect(await hrefsIn(page, 'Primary')).toEqual(['/', '/projects', '/findings', '/search', '/project-ideas']);
-    await expect(bar.getByRole('link', { name: 'Dashboard' })).toHaveAttribute('aria-current', 'page');
+    await expect(bar.getByRole('link', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
 
     // Inside a project the fifth tab is that project, so its overview is a tap from any section.
     await page.goto('/projects/EXMP/adrs');
@@ -121,6 +121,8 @@ test.describe('a thumb, not a cursor', () => {
     '/projects/EXMP',
     '/projects/EXMP/screens',
     '/findings',
+    '/projects',
+    '/groups',
   ];
 
   test('every control the console draws is at least 44 by 44', async ({ page }) => {
@@ -155,7 +157,26 @@ test.describe('a thumb, not a cursor', () => {
 test.describe('no sideways scroll at 390', () => {
   test.use({ viewport: PHONE });
 
-  for (const path of ['/', '/projects', '/projects/EXMP', '/projects/EXMP/requirements', '/findings', '/tokens']) {
+  // A family's site can be a long address with no break in it; it must not push the page wide.
+  test('a group with a long site address', async ({ page }) => {
+    await signIn(page);
+    const name = `Long site ${Date.now().toString(36)}`;
+    const created = await page.request.post('/api/groups', {
+      data: { name, siteUrl: `https://example.com/${'a-very-long-unbroken-path-segment'.repeat(3)}` },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const { slug } = (await created.json()) as { slug: string };
+    for (const path of ['/', '/groups', `/groups/${slug}`]) {
+      await page.goto(path);
+      await page.waitForLoadState('networkidle');
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `${path} scrolls sideways by ${String(overflow)}px`).toBeLessThanOrEqual(0);
+    }
+  });
+
+  for (const path of ['/', '/projects', '/projects/EXMP', '/projects/EXMP/requirements', '/findings', '/tokens', '/groups']) {
     test(path, async ({ page }) => {
       await signIn(page);
       await page.goto(path);

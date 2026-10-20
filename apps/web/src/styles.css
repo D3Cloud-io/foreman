@@ -1115,3 +1115,594 @@ dd a {
     r: 22px;
   }
 }
+
+/* ─── Groups (FRM-T-17.3, the P17 board) ──────────────────────────────────────
+
+   Families of projects. Everything here is drawn from tokens: an accent is a design-system token
+   chosen in `lib/groups.ts`, and is never the only signal — the group's name sits beside every
+   dot. Where the board composes something the library lacks (a radio row, a progress bar, the
+   selection bar), it is built here, small, and filed as DS-REQ-014…025 rather than forked. */
+
+/* Hidden from sight, never from a screen reader. */
+.fm-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.fm-icon-sm {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: none;
+  vertical-align: -0.125rem;
+}
+.fm-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-accent {
+  display: inline-block;
+  flex: none;
+  border-radius: var(--radius-full);
+}
+.fm-accent--sm { width: 0.5rem; height: 0.5rem; }
+.fm-accent--md { width: 0.625rem; height: 0.625rem; }
+.fm-accent--lg { width: 1.25rem; height: 1.25rem; }
+/* Ungrouped's place in a list of dots: the space, with nothing in it. */
+.fm-accent--none { background: transparent; }
+
+.fm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  height: 1.375rem;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-full);
+  background: var(--color-fill-quiet);
+  color: var(--color-fg);
+  /* The lifecycle Pill it sits beside does the same, so the two line up. */
+  align-self: flex-start;
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  text-decoration: none;
+  width: fit-content;
+}
+.fm-chip--link:hover {
+  background: var(--color-surface-hover);
+}
+.fm-chip--link:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
+}
+.fm-chip--quiet {
+  color: var(--color-fg-muted);
+}
+
+/* A project's code as the board sets it: mono, on a plate. */
+.fm-code-chip,
+.fm-id-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-6);
+  height: 1.375rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-fill-quiet);
+  font-family: var(--font-mono);
+  font-size: var(--text-12);
+  color: var(--color-fg);
+  flex: none;
+}
+.fm-id-chip {
+  color: var(--color-fg-muted);
+  font-size: var(--text-11);
+}
+
+/* The board's Progress: a track and a fill. The words beside it say the number. */
+.fm-progress {
+  display: block;
+  height: 0.25rem;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  overflow: hidden;
+}
+.fm-progress__fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+}
+
+/* A group's section on Home (17.01). */
+.fm-gsection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  min-width: 0;
+}
+.fm-gsection__head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-8) var(--space-12);
+  padding-bottom: var(--space-12);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+.fm-gsection__titles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.fm-gsection__titleline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4) var(--space-8);
+  min-height: 2rem;
+}
+.fm-gsection__title {
+  margin: 0;
+  font-size: var(--text-16);
+  line-height: var(--leading-16);
+  font-weight: var(--weight-semibold);
+  color: var(--color-fg);
+}
+.fm-gsection__site {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* A long site (a path of forty characters) truncates, with the whole address in its title,
+     rather than pushing the page sideways at 390. */
+  max-width: 100%;
+  min-width: 0;
+  font-size: var(--text-13);
+  color: var(--color-accent);
+}
+.fm-gsection__counts {
+  padding-top: var(--space-6);
+  white-space: nowrap;
+}
+/* Ungrouped: the same shape, said more quietly — it is the remainder, not a family. */
+.fm-gsection--quiet .fm-gsection__title {
+  font-weight: var(--weight-medium);
+  color: var(--color-fg-muted);
+}
+@media (max-width: 40rem) {
+  .fm-gsection__head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .fm-gsection__counts {
+    grid-column: 2;
+    padding-top: 0;
+    white-space: normal;
+  }
+}
+.fm-first-run__icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: var(--space-2);
+  color: var(--color-accent);
+  flex: none;
+}
+
+/* Projects (17.04): filters, the selection bar, and the grouped table. */
+.fm-filters {
+  flex: 1 1 32rem;
+  min-width: 0;
+}
+.fm-filters > * {
+  flex: 1 1 14rem;
+  min-width: 0;
+  max-width: 20rem;
+}
+.fm-selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8) var(--space-16);
+  padding: var(--space-8) var(--space-12);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-muted);
+  color: var(--color-fg);
+  position: sticky;
+  top: var(--space-8);
+  z-index: 1;
+}
+.fm-selection__count {
+  font-weight: var(--weight-medium);
+}
+.fm-selection__codes {
+  font-family: var(--font-mono);
+  font-size: var(--text-12);
+  color: var(--color-fg-muted);
+}
+@media (min-width: 64rem) {
+  .fm-selection-clear {
+    display: none;
+  }
+}
+.fm-selection-clear {
+  height: var(--space-64);
+}
+@media (max-width: 63.99rem) {
+  /* On a phone the bar sits where a thumb is, just above the tab bar, wherever the list has
+     scrolled to (17.04 phone). */
+  .fm-selection {
+    position: fixed;
+    top: auto;
+    left: var(--space-16);
+    right: var(--space-16);
+    bottom: calc(var(--space-64) + env(safe-area-inset-bottom) + var(--space-8));
+    z-index: 2;
+    background: var(--color-surface-raised);
+    border: var(--border-width) solid var(--color-border-float);
+  }
+}
+
+.fm-gtable-wrap {
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-card);
+  overflow: hidden;
+}
+.fm-gtable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-14);
+  line-height: var(--leading-14);
+}
+.fm-gtable th,
+.fm-gtable td {
+  padding: var(--cell-pad-y) var(--cell-pad-x);
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+.fm-gtable thead th {
+  font-size: var(--text-13);
+  font-weight: var(--weight-medium);
+  color: var(--color-fg-muted);
+}
+.fm-gtable tbody:last-child tr:last-child td {
+  border-bottom: 0;
+}
+.fm-gtable__select {
+  width: 2.75rem;
+}
+.fm-gtable__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.fm-gtable .fm-gtable__num {
+  text-align: right;
+}
+/* The section row: the group, and how it is doing, on the sunken ground. */
+.fm-gtable__group th {
+  background: var(--color-bg-sunken);
+  font-weight: var(--weight-regular);
+}
+.fm-gtable__groupname {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-right: var(--space-8);
+  font-weight: var(--weight-medium);
+  color: var(--color-fg);
+}
+.fm-gtable__group--quiet .fm-gtable__groupname {
+  color: var(--color-fg-muted);
+}
+.fm-gtable__row--on td {
+  background: var(--color-accent-muted);
+}
+.fm-gtable__code {
+  font-family: var(--font-mono);
+  font-size: var(--text-13);
+}
+.fm-gtable__name {
+  color: var(--color-fg);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+.fm-gtable__name:hover {
+  text-decoration: underline;
+}
+.fm-gtable__name:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--radius-xs);
+}
+.fm-gtable__sub {
+  display: none;
+}
+@media (max-width: 40rem) {
+  .fm-gtable__wide {
+    display: none;
+  }
+  .fm-gtable__sub {
+    display: block;
+  }
+  .fm-gtable th,
+  .fm-gtable td {
+    padding-inline: var(--space-8);
+  }
+}
+
+/* The board's Radio, as rows (17.05). */
+.fm-radiolist {
+  gap: var(--space-2);
+}
+.fm-radiolist__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-height: 2.5rem;
+  padding: var(--space-6) var(--space-12);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.fm-radiolist__row:hover {
+  background: var(--color-surface-hover);
+}
+.fm-radiolist__row--on {
+  background: var(--color-fill-quiet);
+}
+.fm-radiolist__row input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  flex: none;
+  accent-color: var(--color-accent);
+}
+.fm-radiolist__label {
+  font-size: var(--text-14);
+  color: var(--color-fg);
+}
+.fm-radiolist__trailing {
+  margin-left: auto;
+  display: inline-flex;
+}
+
+/* The Groups list (17.07) and a group's project list (17.10). */
+.fm-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin: 0;
+  font-size: var(--text-13);
+  color: var(--color-fg-muted);
+}
+.fm-glist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-card);
+}
+.fm-glist--plain {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.fm-glist__item + .fm-glist__item {
+  border-top: var(--border-width) solid var(--color-border);
+}
+.fm-glist__row {
+  display: grid;
+  grid-template-columns: 4.5rem auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-12) var(--space-16);
+}
+.fm-glist--plain .fm-glist__row {
+  grid-template-columns: 4.5rem minmax(0, 1fr) auto auto;
+  padding-inline: 0;
+}
+.fm-glist__reorder {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+.fm-glist__text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.fm-glist__name {
+  font-size: var(--text-14);
+  font-weight: var(--weight-medium);
+  color: var(--color-fg);
+  text-decoration: none;
+}
+a.fm-glist__name:hover {
+  text-decoration: underline;
+}
+a.fm-glist__name:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--radius-xs);
+}
+.fm-glist__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  white-space: nowrap;
+}
+.fm-glist__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.fm-glist__item--quiet .fm-glist__name {
+  color: var(--color-fg-muted);
+}
+.fm-glist__refusal {
+  padding: 0 var(--space-16) var(--space-12) calc(4.5rem + var(--space-16) + var(--space-12));
+}
+@media (max-width: 48rem) {
+  .fm-glist__row,
+  .fm-glist--plain .fm-glist__row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding-inline: var(--space-12);
+  }
+  .fm-glist--plain .fm-glist__row {
+    padding-inline: 0;
+  }
+  .fm-glist__row > .fm-accent {
+    display: none;
+  }
+  .fm-glist__meta {
+    grid-column: 2 / -1;
+    grid-row: 2;
+    white-space: normal;
+    flex-wrap: wrap;
+  }
+  .fm-glist__refusal {
+    padding: 0 var(--space-12) var(--space-12);
+  }
+}
+
+/* The accent picker (17.08): a swatch with its name, as a radio. */
+.fm-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+.fm-swatch {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 3.5rem;
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: var(--text-12);
+  color: var(--color-fg-muted);
+}
+.fm-swatch__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.fm-swatch__dot {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--radius-full);
+  outline: var(--border-width) solid transparent;
+  outline-offset: var(--space-2);
+}
+.fm-swatch:has(input:checked) .fm-swatch__dot {
+  outline: var(--focus-width) solid var(--color-fg);
+}
+.fm-swatch:has(input:checked) .fm-swatch__label {
+  color: var(--color-fg);
+  font-weight: var(--weight-medium);
+}
+.fm-swatch:has(input:focus-visible) {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
+}
+
+/* A group's page (17.10). */
+.fm-group-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  margin: 0;
+  font-size: var(--text-13);
+  color: var(--color-fg-muted);
+}
+.fm-group-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 24rem);
+  gap: var(--grid-gutter);
+  align-items: start;
+}
+@media (max-width: 60rem) {
+  .fm-group-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.fm-gl-line {
+  display: grid;
+  grid-template-columns: 4rem minmax(0, 1fr);
+  gap: var(--space-8);
+  font-size: var(--text-14);
+}
+
+@media (pointer: coarse) {
+  .fm-radiolist__row,
+  .fm-swatch {
+    min-height: 44px;
+  }
+  /* The links these screens draw themselves, each grown to a thumb (FRM-REQ-219). */
+  .fm-chip--link,
+  .fm-gsection__site,
+  .fm-gtable__name,
+  a.fm-glist__name {
+    display: inline-flex;
+    align-items: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .fm-chip--link {
+    height: auto;
+  }
+  .fm-glist__text {
+    align-items: flex-start;
+  }
+}
+
+/* Project tiles keep their column width when a group has one or two: `auto-fill`, where the
+   library's Grid stretches a lone tile across the row. */
+.fm-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr));
+  gap: var(--grid-gutter);
+}
+
+.fm-group-note {
+  margin: 0;
+}
+
+/* A tile's first line: the code and name take the room, truncating, and CI keeps its end. */
+.fm-tile__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  min-width: 0;
+}
+.fm-tile__name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+}
+.fm-tile__head .fm-pill {
+  align-self: center;
+  flex: none;
+}
+
+/* Text that may hold a long unbroken address: it breaks anywhere rather than overflowing. */
+.fm-break {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

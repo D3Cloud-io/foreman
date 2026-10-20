@@ -6,6 +6,10 @@
  */
 
 import type {
+  Group,
+  GroupAccent,
+  GroupDetail,
+  GroupListing,
   Screen,
   ScreenDetail,
   ScreenProposalCreate,
@@ -185,6 +189,26 @@ export interface PortfolioRow {
   /** `counts` is the drift engine's own breakdown and sums to `total`. */
   drift: { counts: Record<DriftItem['category'], number>; total: number };
   lastActivityAt: string | null;
+  /** Its group, or null for Ungrouped (FRM-T-17.2). */
+  group: ProjectGroupRef | null;
+}
+
+/** One section of the grouped portfolio: a group, and its projects' rows in the group's order. */
+export interface PortfolioGroup extends ProjectGroupRef {
+  siteUrl: string | null;
+  projects: PortfolioRow[];
+}
+
+/**
+ * `GET /api/portfolio` (FRM-REQ-237): `items` flat in code order as it always was, and the same
+ * rows again under `groups` in group order, then `ungrouped` — null only when narrowed to a group.
+ */
+export interface PortfolioResponse {
+  items: PortfolioRow[];
+  nextCursor: null;
+  total: number;
+  groups: PortfolioGroup[];
+  ungrouped: { humanId: null; name: 'Ungrouped'; slug: 'ungrouped'; projects: PortfolioRow[] } | null;
 }
 
 export interface ProjectDetail {
@@ -192,7 +216,38 @@ export interface ProjectDetail {
   name: string;
   lifecycle: string;
   pitch: string | null;
+  /** The group it is in, or null for Ungrouped (FRM-REQ-223). */
+  group: ProjectGroupRef | null;
   counts: { phases: number; requirements: number; tasks: number; openFindings: number };
+}
+
+/** A project's group, as `GET /api/projects/:code` names it. */
+export interface ProjectGroupRef {
+  humanId: string;
+  name: string;
+  slug: string;
+  accent: GroupAccent;
+}
+
+/** What a group write takes. Empty strings clear the optional fields. */
+export interface GroupInput {
+  name: string;
+  description: string;
+  siteUrl: string;
+  accent: GroupAccent;
+}
+
+/** A write's answer with the audit events it recorded — what `POST /api/undo/:id` reverses. */
+export type Audited<T> = T & { auditEventIds: string[] };
+
+/** A write that moved or reordered: the listing after it, and the events that undo it. */
+export type GroupWrite = GroupListing & { auditEventIds: string[] };
+
+/** The 409 a refused delete answers with: what still holds the group. */
+export interface GroupDeleteRefusal {
+  error: string;
+  projects: string[];
+  guidelines: string[];
 }
 
 export interface PhaseRow {
@@ -442,9 +497,15 @@ export interface GuidelineRow {
   rationale: string | null;
   guidance: string | null;
   status: 'active' | 'retired';
+  /** Every project, or only the projects in the groups named (FRM-REQ-235). */
+  appliesTo: GuidelineScope;
+  /** The groups it applies to, in group order — empty when `appliesTo` is `all`. */
+  groups: string[];
   createdAt: string;
   updatedAt: string;
 }
+
+export type GuidelineScope = 'all' | 'groups';
 
 export interface GuidelineInput {
   title: string;
@@ -453,6 +514,9 @@ export interface GuidelineInput {
   rationale: string;
   guidance: string;
 }
+
+/** A guideline's scope as a write gives it: `groups` only with `appliesTo: 'groups'`. */
+export type GuidelineScopeInput = { appliesTo: 'all' } | { appliesTo: 'groups'; groups: string[] };
 
 export interface ProjectIdeaRow {
   id: string;
@@ -807,7 +871,7 @@ interface Page<T> {
 }
 
 export const foreman = {
-  portfolio: () => api.get<Page<PortfolioRow>>('/api/portfolio'),
+  portfolio: () => api.get<PortfolioResponse>('/api/portfolio'),
   project: (code: string) => api.get<ProjectDetail>(`/api/projects/${code}`),
   phases: (code: string) => api.get<Page<PhaseRow>>(`/api/projects/${code}/phases`),
   tasks: (code: string, phaseHumanId?: string) =>
@@ -902,10 +966,11 @@ export const foreman = {
   // --- Project ideas --------------------------------------------------------
   // No project in any of these paths, because a project idea has none. That is the feature.
   guidelines: () => api.get<Page<GuidelineRow>>('/api/guidelines'),
-  createGuideline: (body: GuidelineInput) => api.post<GuidelineRow>('/api/guidelines', body),
+  createGuideline: (body: GuidelineInput & Partial<GuidelineScopeInput>) =>
+    api.post<GuidelineRow>('/api/guidelines', body),
   updateGuideline: (
     humanId: string,
-    body: Partial<GuidelineInput> & { status?: GuidelineRow['status'] },
+    body: Partial<GuidelineInput> & { status?: GuidelineRow['status'] } & Partial<GuidelineScopeInput>,
   ) => api.patch<GuidelineRow>(`/api/guidelines/${humanId}`, body),
   deleteGuideline: (humanId: string) => api.del(`/api/guidelines/${humanId}`),
   projectIdeas: (status?: string) =>
@@ -928,6 +993,25 @@ export const foreman = {
       body,
     ),
   audits: (code: string) => api.get<Page<AuditRow>>(`/api/projects/${code}/audits`),
+
+  // --- Groups (FRM-ADR-024) -------------------------------------------------
+  // `target` is a GRP-n or a slug, or null for the projects in no group — `ungrouped` in the path.
+  groups: () => api.get<GroupListing>('/api/groups'),
+  group: (idOrSlug: string) => api.get<GroupDetail>(`/api/groups/${encodeURIComponent(idOrSlug)}`),
+  createGroup: (body: GroupInput) => api.post<Audited<Group>>('/api/groups', groupBody(body)),
+  updateGroup: (humanId: string, body: GroupInput) =>
+    api.patch<Audited<Group>>(`/api/groups/${humanId}`, groupBody(body)),
+  deleteGroup: (humanId: string) => api.del(`/api/groups/${humanId}`),
+  orderGroups: (order: readonly string[]) => api.post<GroupWrite>('/api/groups/order', { order }),
+  moveToGroup: (target: string | null, projects: readonly string[]) =>
+    api.post<GroupWrite>(`/api/groups/${target ?? 'ungrouped'}/projects`, { projects }),
+  orderGroupProjects: (target: string | null, order: readonly string[]) =>
+    api.post<GroupWrite>(`/api/groups/${target ?? 'ungrouped'}/projects/order`, { order }),
+  /** A project's group, set directly — for a project made somewhere that cannot name one. */
+  setProjectGroup: (code: string, group: string | null) =>
+    api.patch<unknown>(`/api/projects/${code}`, { group }),
+  /** Reverses one audited mutation (409 when the state has moved on since). */
+  undo: (auditEventId: string) => api.post<unknown>(`/api/undo/${auditEventId}`),
   search: (q: string, types: string[], project: string | null) => {
     const query = new URLSearchParams({ q, limit: '50' });
     if (types.length > 0) query.set('types', types.join(','));
@@ -996,6 +1080,16 @@ export const foreman = {
       body,
     ),
 };
+
+/** Empty optional fields go as null, which clears them, rather than as `''`. */
+function groupBody(body: GroupInput) {
+  return {
+    name: body.name.trim(),
+    description: body.description.trim() === '' ? null : body.description.trim(),
+    siteUrl: body.siteUrl.trim() === '' ? null : body.siteUrl.trim(),
+    accent: body.accent,
+  };
+}
 
 /** What `POST /api/blobs` answers: the stored file, addressed by its hash. */
 export interface UploadedBlob {

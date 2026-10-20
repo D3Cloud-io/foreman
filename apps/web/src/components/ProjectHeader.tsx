@@ -24,6 +24,7 @@ export function ProjectHeader({
   actions,
   count,
   countNoun,
+  badge,
 }: {
   code: string;
   /** The section slug, or undefined on the project's own overview. */
@@ -33,6 +34,11 @@ export function ProjectHeader({
   count?: number;
   /** What the count counts. `countLabel` replaces the accessible name instead, which is not this. */
   countNoun?: { one: string; other: string };
+  /**
+   * Sits first in the row beside the title — the project's group chip on its overview (17.12).
+   * The board puts it against the title itself; `PageHeader` has no slot there yet (DS-REQ-014…025).
+   */
+  badge?: ReactNode;
 }) {
   const { state } = useAsync(() => briefFor(code), [code]);
   const here = SECTIONS.find((candidate) => candidate.slug === section);
@@ -50,6 +56,7 @@ export function ProjectHeader({
         // The lifecycle belongs beside the title, not in the trail: in the trail it reads as a
         // third crumb, and "Projects / planned" is not a path.
         <Cluster gap="8" align="center">
+          {badge}
           {lifecycle !== null && <Pill tone={lifecycleTone(lifecycle)}>{lifecycle}</Pill>}
           {section === undefined && <OpenInConstellation path={`project/${code}`} />}
           {actions}

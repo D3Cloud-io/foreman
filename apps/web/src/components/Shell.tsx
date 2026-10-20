@@ -28,7 +28,7 @@ import {
   Table2,
 } from 'lucide-react';
 import { ForemanMark } from '../brand/ForemanMark';
-import { navItems, tabBarItems, type NavContext } from '../lib/nav';
+import { navItems, settingsItems, tabBarItems, type NavContext } from '../lib/nav';
 import { briefFor, projectCodeFor, SECTIONS } from '../lib/project';
 import { useAsync } from '../lib/useAsync';
 
@@ -94,6 +94,17 @@ export function Shell({
             />
           ))}
           <ProjectSections path={path} />
+          <SideNavGroup title="Settings">
+            {settingsItems(nav).map((item) => (
+              <SideNavItem
+                key={item.to}
+                href={item.to}
+                icon={<item.Icon />}
+                label={item.label}
+                current={item.current(path)}
+              />
+            ))}
+          </SideNavGroup>
         </SideNav>
       }
       footer={

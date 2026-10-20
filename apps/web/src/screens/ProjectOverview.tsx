@@ -1,16 +1,26 @@
+import { useEffect, useRef, useState } from 'react';
 import {
   Button,
   Card,
   Cluster,
   EmptyState,
   Grid,
+  IconButton,
   Link,
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuTrigger,
   Page,
   Section,
   Skeleton,
   Stack,
 } from '@d3cloud/ui';
-import { foreman, type Brief } from '../lib/api';
+import { Ellipsis, UsersRound } from 'lucide-react';
+import { foreman, type Brief, type ProjectGroupRef } from '../lib/api';
+import { applicableGuidelines, listJoin } from '../lib/groups';
+import { GroupChip, MoveToGroupDialog, useMoveToast } from '../ui/groups';
+import { useLocation } from '../lib/router';
 import { useAsync } from '../lib/useAsync';
 import { percentClosed } from '../lib/completion';
 import { EditForm, LIFECYCLES } from './EditForms';
@@ -48,6 +58,27 @@ function CiLine({ ci }: { ci: Brief['ci'] }) {
 
 export function ProjectOverview({ code }: { code: string }) {
   const { state, reload } = useAsync(() => foreman.brief(code), [code]);
+  // The brief does not carry the group (FRM-T-17.2 adds scope to it); the project row does.
+  const project = useAsync(() => foreman.project(code), [code]);
+  const groups = useAsync(() => foreman.groups(), []);
+  const guidelines = useAsync(() => foreman.guidelines(), []);
+  const [moving, setMoving] = useState(false);
+  // `?move=1` opens Move to group… — where a toast elsewhere sends you to finish a move that did
+  // not happen (a converted idea whose group did not stick). Once, then the address is cleaned.
+  const { search } = useLocation();
+  const askedToMove = useRef(false);
+  const listingReady = groups.state.status === 'ready';
+  useEffect(() => {
+    if (askedToMove.current || !listingReady) return;
+    if (new URLSearchParams(search).get('move') !== '1') return;
+    askedToMove.current = true;
+    setMoving(true);
+    window.history.replaceState({}, '', `/projects/${code}`);
+  }, [search, listingReady, code]);
+  const toastMove = useMoveToast(() => {
+    project.reload();
+    groups.reload();
+  });
 
   if (state.status === 'loading') {
     return (
@@ -76,13 +107,27 @@ export function ProjectOverview({ code }: { code: string }) {
   const cancelled = phase?.tasks.cancelled ?? 0;
   const total = phase?.tasks.total ?? 0;
   const percent = percentClosed(done, cancelled, total);
+  const group: ProjectGroupRef | null = project.state.status === 'ready' ? project.state.value.group : null;
+  const listing = groups.state.status === 'ready' ? groups.state.value : null;
 
   return (
     <Page>
       <ProjectHeader
         code={code}
         {...(brief.project.pitch === null ? {} : { description: brief.project.pitch })}
+        {...(project.state.status === 'ready'
+          ? {
+              // Beside the lifecycle: the library's PageHeader has no slot beside its title yet.
+              badge:
+                group === null ? (
+                  <span className="fm-chip fm-chip--quiet">Ungrouped</span>
+                ) : (
+                  <GroupChip name={group.name} accent={group.accent} href={`/groups/${group.slug}`} />
+                ),
+            }
+          : {})}
         actions={
+          <>
           <EditForm
             title={`Edit ${brief.project.name}`}
             // The code is absent on purpose: it is immutable, and every human ID embeds it.
@@ -106,6 +151,19 @@ export function ProjectOverview({ code }: { code: string }) {
               { name: 'pitch', label: 'Pitch', kind: 'textarea', optional: true },
             ]}
           />
+          {listing !== null && (
+            <Menu>
+              <MenuTrigger>
+                <IconButton icon={<Ellipsis />} label={`More for ${brief.project.name}`} variant="secondary" />
+              </MenuTrigger>
+              <MenuContent align="end">
+                <MenuItem icon={<UsersRound />} onSelect={() => { setMoving(true); }}>
+                  Move to group…
+                </MenuItem>
+              </MenuContent>
+            </Menu>
+          )}
+          </>
         }
       />
 
@@ -212,6 +270,29 @@ export function ProjectOverview({ code }: { code: string }) {
           </Section>
         </Grid>
 
+        {project.state.status === 'ready' && (
+          <Section
+            title="Group"
+            surface="card"
+            actions={
+              listing === null ? undefined : (
+                <Button variant="ghost" size="sm" onClick={() => { setMoving(true); }}>
+                  Move to group…
+                </Button>
+              )
+            }
+          >
+            <GroupSummary
+              group={group}
+              guidelines={
+                guidelines.state.status === 'ready'
+                  ? applicableGuidelines(guidelines.state.value.items, group?.humanId ?? null)
+                  : null
+              }
+            />
+          </Section>
+        )}
+
         {brief.blocked.length > 0 && (
           <Section title="Blocked" surface="card" description="Work to unblock, not work to do.">
             <Stack gap="8">
@@ -262,7 +343,54 @@ export function ProjectOverview({ code }: { code: string }) {
           <SectionMap code={code} />
         </Section>
       </Stack>
+
+      {listing !== null && (
+        <MoveToGroupDialog
+          open={moving}
+          onOpenChange={setMoving}
+          projects={[{ code, name: brief.project.name }]}
+          listing={listing}
+          onMoved={(result, codes, targetName, origin) => {
+            project.reload();
+            groups.reload();
+            toastMove(result, codes, targetName, origin);
+          }}
+        />
+      )}
     </Page>
+  );
+}
+
+/** Which family the project is in, and what that binds it to (17.12). */
+function GroupSummary({
+  group,
+  guidelines,
+}: {
+  group: ProjectGroupRef | null;
+  guidelines: readonly { humanId: string; appliesTo: string }[] | null;
+}) {
+  const ids = (guidelines ?? []).map((row) => row.humanId);
+  const own = (guidelines ?? []).filter((row) => row.appliesTo === 'groups').map((row) => row.humanId);
+  return (
+    <Stack gap="8">
+      <Cluster gap="8" align="center">
+        {group === null ? (
+          <span className="fm-chip fm-chip--quiet">Ungrouped</span>
+        ) : (
+          <GroupChip name={group.name} accent={group.accent} href={`/groups/${group.slug}`} />
+        )}
+      </Cluster>
+      {guidelines !== null && (
+        <span className="fm-muted">
+          {ids.length === 0
+            ? 'No active guideline applies.'
+            : `${String(ids.length)} ${ids.length === 1 ? 'guideline applies' : 'guidelines apply'}: ${listJoin(ids)}${
+                own.length > 0 && group !== null ? `, including the ${group.name}-only ${listJoin(own)}` : ''
+              }.`}
+          {group === null ? ' In no group, only the guidelines for every project apply.' : ''}
+        </span>
+      )}
+    </Stack>
   );
 }
 
