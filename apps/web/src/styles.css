@@ -1321,11 +1321,26 @@ dd a {
   font-size: var(--text-12);
   color: var(--color-fg-muted);
 }
+@media (min-width: 64rem) {
+  .fm-selection-clear {
+    display: none;
+  }
+}
+.fm-selection-clear {
+  height: var(--space-64);
+}
 @media (max-width: 63.99rem) {
-  /* On a phone the bar sits where a thumb is, above the tab bar. */
+  /* On a phone the bar sits where a thumb is, just above the tab bar, wherever the list has
+     scrolled to (17.04 phone). */
   .fm-selection {
+    position: fixed;
     top: auto;
+    left: var(--space-16);
+    right: var(--space-16);
     bottom: calc(var(--space-64) + env(safe-area-inset-bottom) + var(--space-8));
+    z-index: 2;
+    background: var(--color-surface-raised);
+    border: var(--border-width) solid var(--color-border-float);
   }
 }
 
@@ -1661,4 +1676,23 @@ a.fm-glist__name:focus-visible {
 
 .fm-group-note {
   margin: 0;
+}
+
+/* A tile's first line: the code and name take the room, truncating, and CI keeps its end. */
+.fm-tile__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  min-width: 0;
+}
+.fm-tile__name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+}
+.fm-tile__head .fm-pill {
+  align-self: center;
+  flex: none;
 }

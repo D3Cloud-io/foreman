@@ -1,5 +1,5 @@
-import type { GroupAccent, GroupListing, GroupWithProjects } from '@foreman/shared';
-import type { GuidelineRow, PortfolioRow } from './api';
+import type { GroupAccent, GroupListing } from '@foreman/shared';
+import type { GuidelineRow, PortfolioResponse, PortfolioRow } from './api';
 
 /**
  * Groups, as the console reasons about them (FRM-ADR-024): the families one Foreman holds.
@@ -123,50 +123,57 @@ export function applicableGuidelines(
     .sort((a, b) => byGuidelineNumber(a.humanId, b.humanId));
 }
 
+/** A group as a section heading needs it. `description` comes from `/api/groups`, when read. */
+export interface SectionGroup {
+  readonly humanId: string;
+  readonly name: string;
+  readonly slug: string;
+  readonly accent: GroupAccent;
+  readonly siteUrl: string | null;
+  readonly description: string | null;
+}
+
 /** One section of Home or Projects: a group, or the ungrouped (`group: null`), with its rows. */
 export interface Section<Row> {
   readonly key: string;
-  readonly group: GroupWithProjects | null;
+  readonly group: SectionGroup | null;
   readonly name: string;
   readonly rows: readonly Row[];
 }
 
 /**
- * Home's and Projects' sections: one per group in the group order, then the ungrouped last
- * (FRM-REQ-224), each holding its rows in the group's own order.
+ * Home's and Projects' sections, straight from the grouped portfolio (FRM-T-17.2): one per group
+ * in the group order, each holding its rows in the group's own order, then the ungrouped last
+ * (FRM-REQ-224). The server sections them, so the console never re-derives membership or order.
  *
- * Membership and order come from `/api/groups`; the figures come from the portfolio, joined by
- * code. A row the listing does not mention — a project made between the two reads — joins the
- * ungrouped rather than vanishing, because a project missing from Home is the worse mistake.
+ * The portfolio's groups carry no description, so it is joined from `/api/groups` by ID when that
+ * has been read; a heading without one is still a heading.
  */
-export function sectionsOf<Row extends { code: string }>(
-  listing: GroupListing,
-  rows: readonly Row[],
-): Section<Row>[] {
-  const byCode = new Map(rows.map((row) => [row.code, row]));
-  const placed = new Set<string>();
-  const pick = (codes: readonly string[]): Row[] =>
-    codes.flatMap((code) => {
-      const row = byCode.get(code);
-      if (row === undefined) return [];
-      placed.add(code);
-      return [row];
-    });
-
-  const groups = [...listing.items]
-    .sort((a, b) => a.position - b.position)
-    .map((group) => ({
-      key: group.humanId,
-      group,
+export function portfolioSections(
+  portfolio: PortfolioResponse,
+  descriptions: ReadonlyMap<string, string | null> = new Map(),
+): Section<PortfolioRow>[] {
+  const groups = portfolio.groups.map((group) => ({
+    key: group.humanId,
+    group: {
+      humanId: group.humanId,
       name: group.name,
-      rows: pick([...group.projects].sort((a, b) => a.position - b.position).map((p) => p.code)),
-    }));
-  const ungrouped = pick(
-    [...listing.ungrouped.projects].sort((a, b) => a.position - b.position).map((p) => p.code),
-  );
-  const strays = rows.filter((row) => !placed.has(row.code));
+      slug: group.slug,
+      accent: group.accent,
+      siteUrl: group.siteUrl,
+      description: descriptions.get(group.humanId) ?? null,
+    },
+    name: group.name,
+    rows: group.projects,
+  }));
+  return portfolio.ungrouped === null
+    ? groups
+    : [...groups, { key: 'ungrouped', group: null, name: 'Ungrouped', rows: portfolio.ungrouped.projects }];
+}
 
-  return [...groups, { key: 'ungrouped', group: null, name: 'Ungrouped', rows: [...ungrouped, ...strays] }];
+/** Each group's description, by ID, from a `/api/groups` listing. */
+export function descriptionsOf(listing: GroupListing | null): Map<string, string | null> {
+  return new Map((listing?.items ?? []).map((group) => [group.humanId, group.description]));
 }
 
 /** The figures a group's heading carries: "11 projects · 5 building · 139 drift". */

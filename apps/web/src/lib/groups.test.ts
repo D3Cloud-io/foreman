@@ -1,6 +1,5 @@
-import type { GroupListing, GroupWithProjects } from '@foreman/shared';
 import { describe, expect, it } from 'vitest';
-import type { GuidelineRow } from './api';
+import type { GuidelineRow, PortfolioGroup, PortfolioResponse, PortfolioRow } from './api';
 import {
   ACCENTS,
   accentColor,
@@ -9,7 +8,8 @@ import {
   guidelineChange,
   listJoin,
   moveBy,
-  sectionsOf,
+  portfolioSections,
+  sectionSummary,
   siteLabel,
 } from './groups';
 import { navItems, settingsItems } from './nav';
@@ -95,42 +95,57 @@ describe('applicable guidelines', () => {
 });
 
 describe('sections', () => {
-  const group = (humanId: string, name: string, position: number, codes: string[]): GroupWithProjects => ({
-    id: humanId,
+  const row = (code: string): PortfolioRow => ({
+    code,
+    name: code,
+    lifecycle: 'building',
+    phase: null,
+    tasks: { open: 0, blocked: 0, done: 0, cancelled: 0 },
+    openCriticals: 0,
+    ci: { conclusion: null, unknown: true },
+    unconfirmedAttributions: 0,
+    drift: {
+      counts: { 'coverage-hole': 0, 'stale-task': 0, 'fired-tripwire': 0, 'failed-exit-gate': 0, 'orphan-adr': 0, 'screen-drift': 0 },
+      total: 2,
+    },
+    lastActivityAt: null,
+    group: null,
+  });
+  const group = (humanId: string, name: string, codes: string[]): PortfolioGroup => ({
     humanId,
     name,
     slug: name.toLowerCase(),
-    description: null,
-    siteUrl: null,
     accent: 'neutral',
-    position,
-    createdAt: '',
-    updatedAt: '',
-    projects: codes.map((code, index) => ({ code, name: code, slug: code, lifecycle: 'building', pitch: null, position: index })),
-    counts: { projects: codes.length, guidelines: 0 },
+    siteUrl: null,
+    projects: codes.map(row),
   });
-  const listing: GroupListing = {
-    // Out of order on purpose: the position decides, not the array.
-    items: [group('GRP-002', 'Dormice', 1, ['KURO', 'BURR']), group('GRP-001', 'D3 Cloud', 0, ['FRM'])],
-    ungrouped: {
-      humanId: null,
-      name: 'Ungrouped',
-      slug: 'ungrouped',
-      projects: [{ code: 'PW', name: 'PW', slug: 'pw', lifecycle: 'planned', pitch: null, position: 0 }],
-      counts: { projects: 1 },
-    },
-    total: 2,
+  const portfolio: PortfolioResponse = {
+    items: [],
+    nextCursor: null,
+    total: 0,
+    groups: [group('GRP-001', 'D3 Cloud', ['FRM']), group('GRP-002', 'Dormice', ['KURO', 'BURR'])],
+    ungrouped: { humanId: null, name: 'Ungrouped', slug: 'ungrouped', projects: [row('PW')] },
   };
-  const rows = ['BURR', 'FRM', 'KURO', 'NEW', 'PW'].map((code) => ({ code }));
 
-  it('puts the groups in their order, each in its own order, and Ungrouped last (FRM-REQ-224)', () => {
-    const sections = sectionsOf(listing, rows);
+  it('keeps the server’s group order and each group’s own order, Ungrouped last (FRM-REQ-224)', () => {
+    const sections = portfolioSections(portfolio);
     expect(sections.map((s) => s.name)).toEqual(['D3 Cloud', 'Dormice', 'Ungrouped']);
     expect(sections[1]?.rows.map((r) => r.code)).toEqual(['KURO', 'BURR']);
+    expect(sections.at(-1)?.group).toBeNull();
   });
 
-  it('keeps a project the listing does not know yet, in Ungrouped, rather than dropping it', () => {
-    expect(sectionsOf(listing, rows).at(-1)?.rows.map((r) => r.code)).toEqual(['PW', 'NEW']);
+  it('joins descriptions by ID, and does without them', () => {
+    const sections = portfolioSections(portfolio, new Map([['GRP-002', 'A burrow for pointless projects']]));
+    expect(sections[1]?.group?.description).toBe('A burrow for pointless projects');
+    expect(sections[0]?.group?.description).toBeNull();
+  });
+
+  it('has no Ungrouped section when narrowed to a group', () => {
+    expect(portfolioSections({ ...portfolio, ungrouped: null }).map((s) => s.name)).toEqual(['D3 Cloud', 'Dormice']);
+  });
+
+  it('sums a heading’s figures from its rows', () => {
+    expect(sectionSummary(portfolio.groups[1]?.projects ?? [])).toBe('2 projects · 2 building · 4 drift');
   });
 });
 

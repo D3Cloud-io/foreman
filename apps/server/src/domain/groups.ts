@@ -397,9 +397,9 @@ export async function createGroup(db: Db, actor: Actor, input: GroupCreate) {
       },
       select: { id: true, humanId: true },
     });
-    await settleGroups(tx, actor, { cause: `${group.humanId} created`, place: { id: group.id } });
+    const shift = await settleGroups(tx, actor, { cause: `${group.humanId} created`, place: { id: group.id } });
     const created = await tx.projectGroup.findUniqueOrThrow({ where: { id: group.id }, select: GROUP_SELECT });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'group',
@@ -407,7 +407,8 @@ export async function createGroup(db: Db, actor: Actor, input: GroupCreate) {
       entityHumanId: created.humanId,
       after: created,
     });
-    return asGroup(created);
+    // The events, as a move answers them, so the console's toast can offer Undo (FRM-T-17.3).
+    return { ...asGroup(created), auditEventIds: [...(shift === null ? [] : [shift]), event] };
   });
 }
 
@@ -441,7 +442,7 @@ export async function updateGroup(db: Db, actor: Actor, ref: string, input: Grou
       },
       select: GROUP_SELECT,
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'group',
@@ -450,7 +451,7 @@ export async function updateGroup(db: Db, actor: Actor, ref: string, input: Grou
       before: editable(before),
       after: editable(after),
     });
-    return asGroup(after);
+    return { ...asGroup(after), auditEventIds: [event] };
   });
 }
 

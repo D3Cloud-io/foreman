@@ -117,6 +117,9 @@ test.describe('groups', () => {
       await dialog.getByRole('button', { name: 'Create group' }).click();
       await expect(dialog).toBeHidden();
       await expect(page.getByRole('link', { name, exact: true })).toBeVisible();
+      // Every write says what it did, with Undo beside it.
+      await expect(page.getByText(`Created ${name}`)).toBeVisible();
+      await expect(page.getByRole('button', { name: /^Undo/ })).toBeVisible();
     }
 
     // A name is unique ignoring case, and the editor says so before the server has to.
@@ -158,6 +161,19 @@ test.describe('groups', () => {
     // And the list on screen is in the new order too.
     const names = await page.getByRole('list', { name: 'Groups, in order' }).getByRole('link').allTextContents();
     expect(names.indexOf(BETA)).toBeLessThan(names.indexOf(ALPHA));
+    // The toast's Undo puts the order back, through POST /api/undo.
+    await expect(page.getByText(`Moved ${BETA} up`)).toBeVisible();
+    await page.getByRole('button', { name: /^Undo/ }).click();
+    await expect(page.getByText('Put the order back')).toBeVisible();
+    await expect
+      .poll(async () => {
+        const order = (await listing(page.request)).items.sort((a, b) => a.position - b.position).map((g) => g.name);
+        return order.indexOf(BETA) === order.indexOf(ALPHA) + 1;
+      })
+      .toBe(true);
+    const restored = await page.getByRole('list', { name: 'Groups, in order' }).getByRole('link').allTextContents();
+    expect(restored.indexOf(BETA)).toBe(restored.indexOf(ALPHA) + 1);
+
     // No drag anywhere: nothing on the screen is draggable.
     await expect(page.locator('[draggable="true"]')).toHaveCount(0);
   });

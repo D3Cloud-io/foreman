@@ -15,7 +15,7 @@ import {
 import { Check, Minus } from 'lucide-react';
 import { foreman, type PortfolioRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
-import { sectionsOf, sectionSummary } from '../lib/groups';
+import { descriptionsOf, portfolioSections, sectionSummary } from '../lib/groups';
 import { AccentDot, MoveToGroupDialog, useMoveToast } from '../ui/groups';
 import { Pill } from '../ui/viz';
 import { ciTone, lifecycleTone } from '../ui/tone';
@@ -107,7 +107,7 @@ export function Projects() {
   const needle = query.trim().toLowerCase();
   const matches = (row: PortfolioRow) =>
     needle === '' || row.code.toLowerCase().includes(needle) || row.name.toLowerCase().includes(needle);
-  const sections = sectionsOf(listing, rows)
+  const sections = portfolioSections(portfolio.state.value, descriptionsOf(listing))
     .filter((section) =>
       groupFilter === ALL ? true : groupFilter === UNGROUPED ? section.group === null : section.group?.humanId === groupFilter,
     )
@@ -277,6 +277,8 @@ export function Projects() {
           </div>
         )}
       </Stack>
+      {/* On a phone the bar is fixed over the foot of the list; this keeps the last row clear of it. */}
+      {chosen.length > 0 && <div className="fm-selection-clear" aria-hidden="true" />}
 
       <MoveToGroupDialog
         open={moving}

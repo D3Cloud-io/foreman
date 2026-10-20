@@ -189,6 +189,26 @@ export interface PortfolioRow {
   /** `counts` is the drift engine's own breakdown and sums to `total`. */
   drift: { counts: Record<DriftItem['category'], number>; total: number };
   lastActivityAt: string | null;
+  /** Its group, or null for Ungrouped (FRM-T-17.2). */
+  group: ProjectGroupRef | null;
+}
+
+/** One section of the grouped portfolio: a group, and its projects' rows in the group's order. */
+export interface PortfolioGroup extends ProjectGroupRef {
+  siteUrl: string | null;
+  projects: PortfolioRow[];
+}
+
+/**
+ * `GET /api/portfolio` (FRM-REQ-237): `items` flat in code order as it always was, and the same
+ * rows again under `groups` in group order, then `ungrouped` — null only when narrowed to a group.
+ */
+export interface PortfolioResponse {
+  items: PortfolioRow[];
+  nextCursor: null;
+  total: number;
+  groups: PortfolioGroup[];
+  ungrouped: { humanId: null; name: 'Ungrouped'; slug: 'ungrouped'; projects: PortfolioRow[] } | null;
 }
 
 export interface ProjectDetail {
@@ -216,6 +236,9 @@ export interface GroupInput {
   siteUrl: string;
   accent: GroupAccent;
 }
+
+/** A write's answer with the audit events it recorded — what `POST /api/undo/:id` reverses. */
+export type Audited<T> = T & { auditEventIds: string[] };
 
 /** A write that moved or reordered: the listing after it, and the events that undo it. */
 export type GroupWrite = GroupListing & { auditEventIds: string[] };
@@ -848,7 +871,7 @@ interface Page<T> {
 }
 
 export const foreman = {
-  portfolio: () => api.get<Page<PortfolioRow>>('/api/portfolio'),
+  portfolio: () => api.get<PortfolioResponse>('/api/portfolio'),
   project: (code: string) => api.get<ProjectDetail>(`/api/projects/${code}`),
   phases: (code: string) => api.get<Page<PhaseRow>>(`/api/projects/${code}/phases`),
   tasks: (code: string, phaseHumanId?: string) =>
@@ -975,9 +998,9 @@ export const foreman = {
   // `target` is a GRP-n or a slug, or null for the projects in no group — `ungrouped` in the path.
   groups: () => api.get<GroupListing>('/api/groups'),
   group: (idOrSlug: string) => api.get<GroupDetail>(`/api/groups/${encodeURIComponent(idOrSlug)}`),
-  createGroup: (body: GroupInput) => api.post<Group>('/api/groups', groupBody(body)),
+  createGroup: (body: GroupInput) => api.post<Audited<Group>>('/api/groups', groupBody(body)),
   updateGroup: (humanId: string, body: GroupInput) =>
-    api.patch<Group>(`/api/groups/${humanId}`, groupBody(body)),
+    api.patch<Audited<Group>>(`/api/groups/${humanId}`, groupBody(body)),
   deleteGroup: (humanId: string) => api.del(`/api/groups/${humanId}`),
   orderGroups: (order: readonly string[]) => api.post<GroupWrite>('/api/groups/order', { order }),
   moveToGroup: (target: string | null, projects: readonly string[]) =>

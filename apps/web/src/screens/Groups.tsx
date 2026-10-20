@@ -20,10 +20,12 @@ import {
   useToast,
 } from '@d3cloud/ui';
 import { ChevronDown, ChevronUp, Ellipsis, Info, Plus } from 'lucide-react';
-import type { GroupAccent, GroupListing, GroupWithProjects } from '@foreman/shared';
+import type { Group, GroupAccent, GroupListing, GroupWithProjects } from '@foreman/shared';
+import { useUndoToast } from '../lib/undo';
 import {
   ApiError,
   foreman,
+  type Audited,
   type GroupDeleteRefusal,
   type GroupInput,
   type GuidelineRow,
@@ -111,6 +113,7 @@ export function Groups({ search }: { search: string }) {
   const { ref, focusAfter } = useReorderFocus();
   const toast = useToast();
   const toastMove = useMoveToast(refresh);
+  const toastUndoable = useUndoToast();
 
   const allGuidelines = guidelines.state.status === 'ready' ? guidelines.state.value.items : [];
 
@@ -160,7 +163,15 @@ export function Groups({ search }: { search: string }) {
     setFailure(null);
     foreman
       .orderGroups(next.map((g) => g.humanId))
-      .then((result) => { setListing(result); })
+      .then((result) => {
+        setListing(result);
+        toastUndoable({
+          message: `Moved ${group.name} ${delta < 0 ? 'up' : 'down'}`,
+          auditEventIds: result.auditEventIds,
+          undone: 'Put the order back',
+          reload: refresh,
+        });
+      })
       .catch((caught: unknown) => {
         setFailure(caught instanceof Error ? caught.message : String(caught));
         refresh();
@@ -350,10 +361,15 @@ export function Groups({ search }: { search: string }) {
         listing={listing}
         guidelines={allGuidelines}
         onClose={() => { setEditing(null); }}
-        onSaved={(name, created) => {
+        onSaved={(saved, created) => {
           setEditing(null);
           refresh();
-          toast.show({ message: created ? `Created ${name}` : `Saved ${name}` });
+          toastUndoable({
+            message: created ? `Created ${saved.name}` : `Saved ${saved.name}`,
+            auditEventIds: saved.auditEventIds,
+            undone: created ? `Removed ${saved.name}` : `Put ${saved.name} back as it was`,
+            reload: refresh,
+          });
         }}
       />
 
@@ -467,7 +483,7 @@ export function GroupEditor({
   listing: GroupListing;
   guidelines: readonly GuidelineRow[];
   onClose: () => void;
-  onSaved: (name: string, created: boolean) => void;
+  onSaved: (saved: Audited<Group>, created: boolean) => void;
 }) {
   return (
     <Modal
@@ -501,7 +517,7 @@ function EditorBody({
   listing: GroupListing;
   guidelines: readonly GuidelineRow[];
   onClose: () => void;
-  onSaved: (name: string, created: boolean) => void;
+  onSaved: (saved: Audited<Group>, created: boolean) => void;
 }) {
   const [draft, setDraft] = useState<GroupInput>(
     editing === 'new'
@@ -538,7 +554,7 @@ function EditorBody({
     setError(null);
     setServerNameError(null);
     (editing === 'new' ? foreman.createGroup(draft) : foreman.updateGroup(editing.humanId, draft))
-      .then((saved) => { onSaved(saved.name, editing === 'new'); })
+      .then((saved) => { onSaved(saved, editing === 'new'); })
       .catch((caught: unknown) => {
         if (caught instanceof ApiError && caught.status === 409) {
           setServerNameError(`${caught.message}. Names are unique, ignoring case.`);

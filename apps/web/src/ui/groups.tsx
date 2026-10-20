@@ -1,8 +1,9 @@
 import { useEffect, useId, useState, type ReactNode } from 'react';
-import { Alert, Button, FormActions, Modal, Stack, useToast } from '@d3cloud/ui';
+import { Alert, Button, FormActions, Modal, Stack } from '@d3cloud/ui';
 import { TriangleAlert } from 'lucide-react';
 import type { GroupAccent, GroupListing } from '@foreman/shared';
-import { ApiError, foreman, type GroupWrite } from '../lib/api';
+import { foreman, type GroupWrite } from '../lib/api';
+import { useUndoToast } from '../lib/undo';
 import {
   accentColor,
   changes,
@@ -98,58 +99,15 @@ export function RadioList({
   );
 }
 
-/**
- * The server's refusal for a renumbering that a move caused: positions are dense, so it is reversed
- * by undoing the move itself, never on its own (`undoReorder` in the server's domain/groups.ts).
- */
-const FOLLOWED_A_CHANGE = /renumbering followed a change/;
-
-/**
- * Reverse a write: its audit events undone last-first, as the server recorded them.
- *
- * A move's events are the moved projects' own, then the renumberings it caused in the groups it
- * touched. Those renumberings answer 409 "undo that change instead" — undoing a project's move
- * restores its old place and settles the group around it — so that one refusal is passed over
- * and every other one still fails the undo.
- */
-export async function undoAll(auditEventIds: readonly string[]): Promise<void> {
-  for (const id of [...auditEventIds].reverse()) {
-    try {
-      await foreman.undo(id);
-    } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 409 && FOLLOWED_A_CHANGE.test(caught.message)) continue;
-      throw caught;
-    }
-  }
-}
-
-/**
- * The toast after a move, with Undo (17.06). Undo puts every project back where it was — group and
- * place — and says so; if the ledger has moved on since, it says that instead of pretending.
- */
+/** The toast after a move, with Undo (17.06): every project goes back to its group and place. */
 export function useMoveToast(reload: () => void) {
-  const toast = useToast();
+  const show = useUndoToast();
   return (result: GroupWrite, codes: readonly string[], targetName: string) => {
-    toast.show({
+    show({
       message: `Moved ${listJoin(codes)} to ${targetName}`,
-      action: {
-        label: 'Undo',
-        onAction: () => {
-          void undoAll(result.auditEventIds)
-            .then(() => {
-              toast.show({ message: `Put ${listJoin(codes)} back` });
-            })
-            .catch((caught: unknown) => {
-              toast.show({
-                message:
-                  caught instanceof ApiError && caught.status === 409
-                    ? 'Not undone — something has changed since the move'
-                    : 'The move was not undone',
-              });
-            })
-            .finally(reload);
-        },
-      },
+      auditEventIds: result.auditEventIds,
+      undone: `Put ${listJoin(codes)} back`,
+      reload,
     });
   };
 }

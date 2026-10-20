@@ -12,13 +12,13 @@ import {
   Stack,
 } from '@d3cloud/ui';
 import { ArrowUpRight, ChevronDown, ChevronRight, UsersRound } from 'lucide-react';
-import type { GroupListing } from '@foreman/shared';
 import { foreman, type PortfolioRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import {
+  descriptionsOf,
+  portfolioSections,
   readCollapsed,
   readIntroDismissed,
-  sectionsOf,
   sectionSummary,
   siteLabel,
   writeCollapsed,
@@ -67,15 +67,15 @@ export function ProjectTile({ row }: { row: PortfolioRow }) {
   return (
     <Card padding="md" href={`/projects/${row.code}`} interactive>
       <Stack gap="8">
-        <Cluster gap="8" align="center" justify="between">
-          <Cluster gap="8" align="center">
+        <div className="fm-tile__head">
+          <span className="fm-tile__name">
             <code className="fm-code-chip">{row.code}</code>
-            <span className="fm-card__title">{row.name}</span>
-          </Cluster>
+            <span className="fm-card__title fm-truncate">{row.name}</span>
+          </span>
           <Pill tone={ciTone(row.ci.conclusion, row.ci.unknown)} dot>
             {ciLabel(row)}
           </Pill>
-        </Cluster>
+        </div>
         <Pill tone={lifecycleTone(row.lifecycle)}>{row.lifecycle}</Pill>
         <span className="fm-muted fm-truncate">{phaseLabel(row)}</span>
         {/* The figure below says it in words; the bar is how fast you see it. */}
@@ -222,10 +222,9 @@ function plural(n: number, one: string, other: string): string {
 
 const WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
-function groupsDetail(listing: GroupListing): string {
-  const n = listing.items.length;
+function groupsDetail(n: number, ungrouped: number): string {
   const count = n < WORDS.length ? `${WORDS[n] ?? String(n)} ${n === 1 ? 'group' : 'groups'}` : plural(n, 'group', 'groups');
-  return `${count} · ${String(listing.ungrouped.counts.projects)} ungrouped`;
+  return `${count} · ${String(ungrouped)} ungrouped`;
 }
 
 export function Home() {
@@ -236,7 +235,7 @@ export function Home() {
 
   const header = (description: string) => <PageHeader title="Home" description={description} />;
 
-  if (portfolio.state.status === 'loading' || groups.state.status === 'loading') {
+  if (portfolio.state.status === 'loading') {
     return (
       <Page>
         {header('Where everything stands.')}
@@ -245,13 +244,8 @@ export function Home() {
     );
   }
 
-  if (portfolio.state.status === 'error' || groups.state.status === 'error') {
-    const message =
-      portfolio.state.status === 'error'
-        ? portfolio.state.message
-        : groups.state.status === 'error'
-          ? groups.state.message
-          : '';
+  if (portfolio.state.status === 'error') {
+    const message = portfolio.state.message;
     return (
       <Page>
         {header('Where everything stands.')}
@@ -262,8 +256,11 @@ export function Home() {
     );
   }
 
-  const rows = portfolio.state.value.items;
-  const listing = groups.state.value;
+  const grouped = portfolio.state.value;
+  const rows = grouped.items;
+  // Only the descriptions come from here: the portfolio's sections carry none. Home renders
+  // without them rather than waiting on a second read.
+  const listing = groups.state.status === 'ready' ? groups.state.value : null;
   const isCollapsed = (key: string) => collapsed[key] ?? readCollapsed(key);
   const toggle = (key: string) => {
     const next = !isCollapsed(key);
@@ -271,7 +268,7 @@ export function Home() {
     setCollapsed((current) => ({ ...current, [key]: next }));
   };
 
-  if (listing.items.length === 0) {
+  if (grouped.groups.length === 0) {
     return (
       <Page>
         {header(`${plural(rows.length, 'project', 'projects')}, and what needs looking at.`)}
@@ -303,11 +300,11 @@ export function Home() {
     );
   }
 
-  const sections = sectionsOf(listing, rows).filter(
+  const sections = portfolioSections(grouped, descriptionsOf(listing)).filter(
     // An empty Ungrouped says nothing worth a heading; an empty group is still a family.
     (section) => section.group !== null || section.rows.length > 0,
   );
-  const n = listing.items.length;
+  const n = grouped.groups.length;
 
   return (
     <Page>
@@ -317,7 +314,7 @@ export function Home() {
         }, and what needs looking at.`,
       )}
       <Stack gap="32">
-        <PortfolioStats rows={rows} projectsDetail={groupsDetail(listing)} />
+        <PortfolioStats rows={rows} projectsDetail={groupsDetail(n, grouped.ungrouped?.projects.length ?? 0)} />
         {sections.map((section) => (
           <GroupSection
             key={section.key}

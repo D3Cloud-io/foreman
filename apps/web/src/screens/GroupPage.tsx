@@ -18,6 +18,7 @@ import { ApiError, foreman, type GuidelineRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { accentLabel, listJoin, moveBy, siteLabel } from '../lib/groups';
 import { AccentDot, MoveToGroupDialog, useMoveToast, type MovingProject } from '../ui/groups';
+import { useUndoToast } from '../lib/undo';
 import { GroupEditor, useGroupListing, useReorderFocus } from './Groups';
 import { PortfolioStats } from './Home';
 
@@ -79,6 +80,7 @@ export function GroupPage({ slug }: { slug: string }) {
     portfolio.reload();
   };
   const toastMove = useMoveToast(refresh);
+  const toastUndoable = useUndoToast();
 
   const back = <a href="/groups">Groups</a>;
 
@@ -134,7 +136,15 @@ export function GroupPage({ slug }: { slug: string }) {
     setFailure(null);
     foreman
       .orderGroupProjects(detail.humanId, next.map((p) => p.code))
-      .then(load)
+      .then((result) => {
+        load();
+        toastUndoable({
+          message: `Moved ${project.name} ${delta < 0 ? 'up' : 'down'}`,
+          auditEventIds: result.auditEventIds,
+          undone: 'Put the order back',
+          reload: refresh,
+        });
+      })
       .catch((caught: unknown) => {
         setFailure(caught instanceof Error ? caught.message : String(caught));
         load();
@@ -287,9 +297,15 @@ export function GroupPage({ slug }: { slug: string }) {
             listing={listing}
             guidelines={allGuidelines}
             onClose={() => { setEditing(false); }}
-            onSaved={() => {
+            onSaved={(saved) => {
               setEditing(false);
               refresh();
+              toastUndoable({
+                message: `Saved ${saved.name}`,
+                auditEventIds: saved.auditEventIds,
+                undone: `Put ${saved.name} back as it was`,
+                reload: refresh,
+              });
             }}
           />
           <MoveToGroupDialog
