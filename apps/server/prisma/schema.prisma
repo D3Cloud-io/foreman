@@ -191,6 +191,14 @@ enum CheckConclusion {
   stale
 }
 
+/// Shipyard's terminal build states (FRM-T-008), mirrored from `BuildState` in packages/shared.
+enum BuildState {
+  succeeded
+  failed
+  cancelled
+  refused
+}
+
 /// How a commit came to be attributed to a task. Declared beats message beats overlap (ADR-005).
 enum AttributionSource {
   declared
@@ -267,6 +275,7 @@ enum EntityType {
   screen_version
   screen_verdict
   screen_component
+  build
 }
 
 enum AuditAction {
@@ -335,6 +344,7 @@ model Project {
   audits       Audit[]
   findings     Finding[]
   deployments  Deployment[]
+  builds       BuildResult[]
   techItems    TechItem[]
   ideas        Idea[]
   screens      Screen[]
@@ -364,6 +374,7 @@ model Repo {
   commits   Commit[]
   checkRuns CheckRun[]
   releases  Release[]
+  builds    BuildResult[]
 
   @@index([projectId])
   @@map("repo")
@@ -1161,11 +1172,50 @@ model CheckRun {
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  repo   Repo          @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  builds BuildResult[]
 
   @@unique([repoId, commitSha, name])
   @@index([repoId, completedAt])
   @@map("check_run")
+}
+
+/// A build result a deployer reported (FRM-T-008, FRM-REQ-182). **One row per build ID, ever**:
+/// it is the durable record that a build was heard of, so a replay — even of a build a later one
+/// has since superseded on its check run — is recognised and changes nothing. The check run is
+/// the CI state the brief reads; this is the history of what was reported, including what has no
+/// column there (the environment, the failed stage).
+model BuildResult {
+  id         String  @id @default(uuid(7)) @db.Uuid
+  buildId    String  @unique @map("build_id")
+  projectId  String  @map("project_id") @db.Uuid
+  repoId     String  @map("repo_id") @db.Uuid
+  /// The check run this build reports on. Null only if that row is ever removed.
+  checkRunId String? @map("check_run_id") @db.Uuid
+
+  app         String
+  commitSha   String          @map("commit_sha")
+  state       BuildState
+  conclusion  CheckConclusion
+  environment String?
+  failedStage String?         @map("failed_stage")
+  startedAt   DateTime?       @map("started_at") @db.Timestamptz(6)
+  completedAt DateTime        @map("completed_at") @db.Timestamptz(6)
+  detailsUrl  String?         @map("details_url")
+  /// False when a result for the same commit and app that finished later was already stored: the
+  /// build is recorded, and the check run keeps the newer conclusion.
+  applied     Boolean
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  repo     Repo      @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  checkRun CheckRun? @relation(fields: [checkRunId], references: [id], onDelete: SetNull)
+
+  @@index([repoId, commitSha])
+  @@index([checkRunId])
+  @@index([projectId])
+  @@map("build_result")
 }
 
 model Release {

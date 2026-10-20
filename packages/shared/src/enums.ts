@@ -201,6 +201,10 @@ export const CheckConclusion = z.enum([
 ]);
 export type CheckConclusion = z.infer<typeof CheckConclusion>;
 
+/** A deployer's terminal build states — Shipyard's `BuildResultEvent` (FRM-T-008). */
+export const BuildState = z.enum(['succeeded', 'failed', 'cancelled', 'refused']);
+export type BuildState = z.infer<typeof BuildState>;
+
 /** How a commit came to be attributed to a task (ADR-005 — declared beats inferred). */
 export const AttributionSource = z.enum(['declared', 'message', 'file_overlap']);
 export type AttributionSource = z.infer<typeof AttributionSource>;
@@ -255,6 +259,7 @@ export const EntityType = z.enum([
   'screen_version',
   'screen_verdict',
   'screen_component',
+  'build',
 ]);
 export type EntityType = z.infer<typeof EntityType>;
 
