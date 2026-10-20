@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type SyntheticEvent } from 'react';
+import { useMemo, useState, type SyntheticEvent } from 'react';
 import {
   Alert,
   Button,
@@ -16,8 +16,9 @@ import {
   Stack,
   Textarea,
 } from '@d3cloud/ui';
-import { foreman, ApiError, type DocumentRow, type IdeaRow } from '../lib/api';
+import { foreman, type DocumentRow, type IdeaRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
+import { draftSize, useDraftGuard, useMutate } from '../lib/mutate';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { Pill, SegmentBar, StatCard } from '../ui/viz';
 import { relativeDay, SERIES, type Tone } from '../ui/tone';
@@ -36,6 +37,9 @@ import { relativeDay, SERIES, type Tone } from '../ui/tone';
  * **Parking or rejecting an idea requires a reason**, enforced by the server and asked for here.
  * Without it a rejected idea is indistinguishable from a forgotten one, and the list slowly
  * refills with things that were already decided.
+ *
+ * **Every write lands in place, with Undo** (FRM-T-18.4). A delete is soft and undoable, so it acts
+ * at once and the toast offers the way back — no dialog asking whether you meant it.
  */
 
 const STATUSES = [
@@ -80,11 +84,9 @@ const MEANING: Record<Status, string> = {
 };
 
 export function Ideas({ code }: { code: string }) {
-  const [nonce, setNonce] = useState(0);
   const [filter, setFilter] = useState<Status | null>(null);
-  const refresh = useCallback(() => { setNonce((n) => n + 1); }, []);
-
-  const { state } = useAsync(() => foreman.ideas(code), [code, nonce]);
+  // `refresh` re-reads in place, so a write never drops the grid back to a skeleton.
+  const { state, refresh } = useAsync(() => foreman.ideas(code), [code]);
   // The prose document this screen succeeds, if the project has one. Its absence is normal — five
   // of the nine projects never wrote one — so a failure here must not take the screen with it.
   const { state: docs } = useAsync(
@@ -256,8 +258,18 @@ function IdeaForm({
   const [reason, setReason] = useState(idea?.reason ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { mutate } = useMutate();
 
   const needsReason = editing && NEEDS_REASON.includes(status);
+  const allowClose = useDraftGuard(
+    open
+      ? draftSize(
+          { title: idea?.title ?? '', body: idea?.body ?? '', status: idea?.status ?? 'new', reason: idea?.reason ?? '' },
+          { title, body, status, reason },
+        )
+      : 0,
+    editing ? idea.humanId : 'the new idea',
+  );
 
   const reset = () => {
     setTitle(idea?.title ?? '');
@@ -278,23 +290,29 @@ function IdeaForm({
     setBusy(true);
     setError(null);
 
-    const done = () => {
-      setOpen(false);
-      onSaved();
-    };
-    const request = editing
-      ? foreman.updateIdea(code, idea.humanId, {
-          title,
-          body,
-          status,
-          ...(reason.trim().length === 0 ? {} : { reason }),
-        })
-      : foreman.createIdea(code, { title, ...(body.trim().length === 0 ? {} : { body }) });
-
-    void request
-      .then(done)
-      .catch((caught: unknown) => {
-        setError(caught instanceof ApiError ? caught.message : 'That did not save.');
+    void mutate({
+      subject: editing ? idea.humanId : 'the new idea',
+      run: () =>
+        editing
+          ? foreman.updateIdea(code, idea.humanId, {
+              title,
+              body,
+              status,
+              ...(reason.trim().length === 0 ? {} : { reason }),
+            })
+          : foreman.createIdea(code, { title, ...(body.trim().length === 0 ? {} : { body }) }),
+      message: (saved) =>
+        !editing
+          ? `${saved.humanId} added`
+          : saved.status !== idea.status
+            ? `${saved.humanId} marked ${saved.status}`
+            : `Saved ${saved.humanId}`,
+      refresh: onSaved,
+      failure: 'inline',
+    })
+      .then((outcome) => {
+        if (outcome.ok) setOpen(false);
+        else setError(outcome.message);
       })
       .finally(() => {
         setBusy(false);
@@ -305,6 +323,8 @@ function IdeaForm({
     <Modal
       open={open}
       onOpenChange={(next) => {
+        // Escape or the scrim with a draft asks first; Cancel is the person saying discard.
+        if (!next && !allowClose()) return;
         setOpen(next);
         if (next) reset();
       }}
@@ -384,6 +404,11 @@ function IdeaForm({
   );
 }
 
+/**
+ * Delete, at once. It is a soft delete the server can undo, so the toast offers Undo instead of a
+ * dialog asking first (FRM-T-18.4, the destructive ladder). Turning an idea down is still Edit →
+ * Rejected with a reason; Delete is for one written down by mistake.
+ */
 function DeleteIdea({
   code,
   idea,
@@ -393,56 +418,24 @@ function DeleteIdea({
   idea: IdeaRow;
   onDeleted: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const remove = () => {
-    setBusy(true);
-    setError(null);
-    void foreman
-      .deleteIdea(code, idea.humanId)
-      .then(() => {
-        setOpen(false);
-        onDeleted();
-      })
-      .catch((caught: unknown) => {
-        setError(caught instanceof ApiError ? caught.message : 'That did not delete.');
-      })
-      .finally(() => {
-        setBusy(false);
-      });
-  };
+  const { mutate, pending } = useMutate();
 
   return (
-    <Modal
-      open={open}
-      onOpenChange={setOpen}
-      trigger={<Button>Delete</Button>}
-      title={`Delete ${idea.humanId}?`}
-      description="Hidden, not destroyed — the audit event can undo it, and the ID is never reused."
+    <Button
+      loading={pending}
+      aria-label={`Delete ${idea.humanId}`}
+      onClick={() => {
+        if (pending) return;
+        void mutate({
+          subject: idea.humanId,
+          run: () => foreman.deleteIdea(code, idea.humanId),
+          message: () => `${idea.humanId} deleted`,
+          undone: `Undone — ${idea.humanId} is back`,
+          refresh: onDeleted,
+        });
+      }}
     >
-      <Stack gap="16">
-        {error !== null && (
-          <Alert tone="danger" title="That did not delete" dynamic>
-            {error}
-          </Alert>
-        )}
-        <p>
-          {/* Deleting and rejecting are different acts, and the difference is worth one sentence
-              at the moment somebody is choosing between them. */}
-          If this was considered and turned down, mark it <strong>rejected</strong> with a reason
-          instead — that is what stops it coming back.
-        </p>
-        <FormActions>
-          <Button type="button" onClick={() => { setOpen(false); }}>
-            Cancel
-          </Button>
-          <Button type="button" variant="danger" disabled={busy} onClick={remove}>
-            {busy ? 'Deleting…' : 'Delete'}
-          </Button>
-        </FormActions>
-      </Stack>
-    </Modal>
+      Delete
+    </Button>
   );
 }

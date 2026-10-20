@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -21,6 +21,7 @@ import {
 import { Markdown } from '../components/Markdown';
 import { ApiError, foreman, type DiffResult, type DocumentSection } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
+import { draftSize, useDraftGuard, useMutate } from '../lib/mutate';
 import { OpenInConstellation } from '../components/OpenInConstellation';
 
 /**
@@ -32,11 +33,20 @@ import { OpenInConstellation } from '../components/OpenInConstellation';
  *
  * A save that has been overtaken shows the diff. It never silently overwrites — the version the
  * editor loaded travels with the write, and a 412 comes back with what it lost to.
+ *
+ * A save lands in place with an Undo toast (FRM-T-18.4) — the page re-reads without a skeleton,
+ * so the version the next save sends is the one now stored. A draft is guarded: switching to
+ * another section or closing the tab asks first; Cancel is the person saying discard.
  */
 
 export function DocumentEditor({ code, id }: { code: string; id: string }) {
-  const { state, reload } = useAsync(() => foreman.document(code, id), [code, id]);
+  const { state, refresh } = useAsync(() => foreman.document(code, id), [code, id]);
   const [editing, setEditing] = useState<string | null>(null);
+  // What the open section editor would lose, so leaving it for another can ask first.
+  const [unsaved, setUnsaved] = useState(0);
+  const editingHeading =
+    state.status === 'ready' ? state.value.body.sections.find((s) => s.key === editing)?.heading : undefined;
+  const allowLeave = useDraftGuard(editing === null ? 0 : unsaved, editingHeading);
 
   if (state.status === 'loading') {
     return (
@@ -99,9 +109,15 @@ export function DocumentEditor({ code, id }: { code: string; id: string }) {
                   section={section}
                   onDone={() => {
                     setEditing(null);
-                    reload();
+                    setUnsaved(0);
+                    refresh();
                   }}
-                  onCancel={() => { setEditing(null); }}
+                  onUndone={refresh}
+                  onCancel={() => {
+                    setEditing(null);
+                    setUnsaved(0);
+                  }}
+                  onDraft={setUnsaved}
                 />
               ) : (
                 <>
@@ -115,7 +131,11 @@ export function DocumentEditor({ code, id }: { code: string; id: string }) {
                   )}
                   <div>
                     <Button
-                      onClick={() => { setEditing(section.key); }}
+                      onClick={() => {
+                        if (editing !== null && !allowLeave()) return;
+                        setUnsaved(0);
+                        setEditing(section.key);
+                      }}
                       aria-label={`Edit ${section.heading}`}
                     >
                       Edit
@@ -138,47 +158,66 @@ function SectionEditor({
   etag,
   section,
   onDone,
+  onUndone,
   onCancel,
+  onDraft,
 }: {
   code: string;
   documentId: string;
   etag: string | null;
   section: DocumentSection;
   onDone: () => void;
+  /** After the save's Undo: re-read in place. */
+  onUndone: () => void;
   onCancel: () => void;
+  /** How many characters would be lost if the editor closed now. */
+  onDraft: (characters: number) => void;
 }) {
   const [body, setBody] = useState(section.bodyMd);
   const [note, setNote] = useState('');
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<DocumentSection[] | null>(null);
+  const { mutate, pending: busy } = useMutate();
+
+  const unsaved = draftSize({ body: section.bodyMd, note: '' }, { body, note });
+  useEffect(() => {
+    onDraft(unsaved);
+  }, [unsaved, onDraft]);
 
   const save = () => {
-    setBusy(true);
     setError(null);
     setConflict(null);
 
-    void foreman
-      .saveSection(
-        code,
-        documentId,
-        section.key,
-        { bodyMd: body, ...(note.trim() === '' ? {} : { note: note.trim() }) },
-        etag,
-      )
-      .then(onDone)
-      .catch((caught: unknown) => {
-        if (caught instanceof ApiError && caught.status === 412) {
-          // Never a silent overwrite: the body of the 412 carries the current document, so the
-          // editor can show what it lost to without a second request.
-          const current = (caught.body as { current?: { sections?: DocumentSection[] } } | undefined)
-            ?.current;
-          setConflict(current?.sections ?? []);
-          return;
-        }
-        setError(caught instanceof Error ? caught.message : String(caught));
-      })
-      .finally(() => { setBusy(false); });
+    void mutate({
+      subject: `“${section.heading}”`,
+      run: () =>
+        foreman.saveSection(
+          code,
+          documentId,
+          section.key,
+          { bodyMd: body, ...(note.trim() === '' ? {} : { note: note.trim() }) },
+          etag,
+        ),
+      message: () => `Saved “${section.heading}”`,
+      undone: `Undone — “${section.heading}” is as it was`,
+      onUndone,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (outcome.ok) {
+        onDone();
+        return;
+      }
+      const caught = outcome.error;
+      if (caught instanceof ApiError && caught.status === 412) {
+        // Never a silent overwrite: the body of the 412 carries the current document, so the
+        // editor can show what it lost to without a second request.
+        const current = (caught.body as { current?: { sections?: DocumentSection[] } } | undefined)
+          ?.current;
+        setConflict(current?.sections ?? []);
+        return;
+      }
+      setError(outcome.message);
+    });
   };
 
   const theirs = conflict?.find((s) => s.key === section.key);

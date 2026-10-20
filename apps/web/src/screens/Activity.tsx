@@ -20,7 +20,7 @@ import {
 import { foreman, type CommitRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
-import { refreshSignals } from '../components/shellSignals';
+import { useMutate } from '../lib/mutate';
 
 /**
  * S-24 — what actually happened: commits, their attribution proposals, CI and what is deployed.
@@ -44,15 +44,30 @@ export function Activity({ code }: { code: string }) {
   const cadence = useAsync(() => foreman.cadence(code), [code]);
   const deployments = useAsync(() => foreman.deployments(code), [code]);
   const [busy, setBusy] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const { mutate } = useMutate();
 
+  // One write, the one way (FRM-T-18.4): the button waits, the list re-reads in place — no
+  // skeleton, the scroll and the rest of the queue where they were — and a toast says what was
+  // decided. A failure is an Alert here (INT-08), not a toast that leaves.
   const act = (sha: string, task: string, confirm: boolean) => {
     setBusy(`${sha}:${task}`);
+    setFailure(null);
     const call = confirm ? foreman.confirmAttribution : foreman.rejectAttribution;
-    void call(code, sha, task)
-      .then(() => {
-        commits.reload();
-        // The sidebar's "Activity, N waiting for review" changed with this answer.
-        refreshSignals();
+    void mutate({
+      subject: `${sha.slice(0, 7)} → ${task}`,
+      run: () => call(code, sha, task),
+      message: () => `${sha.slice(0, 7)} ${confirm ? 'confirmed as' : 'rejected for'} ${task}`,
+      refresh: commits.refresh,
+      // The sidebar's "Activity, N waiting for review" changed with this answer.
+      signals: true,
+      // The server's undo does not reach a commit's attribution (`commit` is not an undoable
+      // entity), so no Undo is offered that would only be refused.
+      undoable: false,
+      failure: 'inline',
+    })
+      .then((outcome) => {
+        if (!outcome.ok) setFailure(outcome.message);
       })
       .finally(() => { setBusy(null); });
   };
@@ -153,6 +168,12 @@ export function Activity({ code }: { code: string }) {
           />
         </FormField>
       </FilterBar>
+
+      {failure === null ? null : (
+        <Alert tone="danger" title="That was not recorded" dynamic>
+          {failure}
+        </Alert>
+      )}
 
       {commits.state.status === 'loading' ? (
         <Skeleton lines={10} />

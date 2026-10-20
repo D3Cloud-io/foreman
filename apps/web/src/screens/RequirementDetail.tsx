@@ -17,6 +17,7 @@ import { foreman } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { EditForm } from './EditForms';
 import { OpenInConstellation } from '../components/OpenInConstellation';
+import { HistoryDrawer } from '../components/HistoryDrawer';
 
 /**
  * S-14 — one requirement: what it says, how the lint read it, what would prove it, and what
@@ -47,7 +48,8 @@ const PRIORITY_LABEL: Record<string, string> = {
 };
 
 export function RequirementDetail({ humanId }: { humanId: string }) {
-  const { state, reload } = useAsync(() => foreman.entity(humanId), [humanId]);
+  // `refresh`, not `reload`: after a save or an undo the page re-reads in place (FRM-T-18.4).
+  const { state, refresh } = useAsync(() => foreman.entity(humanId), [humanId]);
 
   if (state.status === 'loading') {
     return (
@@ -89,11 +91,12 @@ export function RequirementDetail({ humanId }: { humanId: string }) {
               {PRIORITY_LABEL[requirement.priority] ?? requirement.priority}
             </Badge>
             <OpenInConstellation path={`item/${humanId}`} />
+            <HistoryDrawer entity={humanId} onUndone={refresh} />
             <EditForm
               title={`Edit ${humanId}`}
               path={`/api/projects/${projectCode}/requirements/${humanId}`}
               trigger={<Button>Edit</Button>}
-              onSaved={reload}
+              onSaved={refresh}
               initial={{
                 statement: requirement.statement,
                 priority: requirement.priority,
