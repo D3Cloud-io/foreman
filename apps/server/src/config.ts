@@ -79,6 +79,14 @@ const Env = z.object({
   BACKUP_DIR: z.string().default('./backups'),
   BACKUP_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
 
+  /**
+   * Where uploaded files live, each once, named by its SHA-256 (FRM-REQ-190). A directory on the
+   * host's disk rather than a column, so images never bloat the database or its nightly dump.
+   */
+  FOREMAN_BLOB_DIR: z.string().min(1).default('./blobs'),
+  /** The largest upload accepted, in bytes (FRM-REQ-191). 10 MiB unless a deployment says otherwise. */
+  FOREMAN_BLOB_MAX_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+
   /** Where the built console lives. Set in the image; absent in development, where Vite serves it. */
   CONSOLE_DIST: z.string().optional(),
 

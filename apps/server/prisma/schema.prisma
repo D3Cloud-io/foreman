@@ -262,6 +262,7 @@ enum EntityType {
   user
   api_token
   job
+  blob
 }
 
 enum AuditAction {
@@ -1548,4 +1549,23 @@ model RelayRegistration {
   @@unique([relayUrl, registration])
   @@index([userId])
   @@map("relay_registration")
+}
+
+/// An uploaded image or source file (FRM-REQ-190). **The bytes are not here**: they live once on
+/// the host's disk, under `FOREMAN_BLOB_DIR`, in a file named by `sha256`. This row says what the
+/// file is and who first sent it; uploading the same bytes again finds it rather than adding one.
+model Blob {
+  id String @id @default(uuid(7)) @db.Uuid
+
+  /// Lowercase hex, and the file's name on disk. Unique, which is what makes storage once-only.
+  sha256    String @unique
+  /// What the bytes were sniffed as, never what the client declared.
+  mediaType String @map("media_type")
+  byteSize  Int    @map("byte_size")
+  /// The actor who first uploaded it, as the audit trail names them.
+  createdBy String @map("created_by")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("blob")
 }

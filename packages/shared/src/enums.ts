@@ -250,6 +250,7 @@ export const EntityType = z.enum([
   'user',
   'api_token',
   'job',
+  'blob',
 ]);
 export type EntityType = z.infer<typeof EntityType>;
 

@@ -27,11 +27,15 @@ services:
       # the only writable path in the image. A developer's .env points at the host instead.
       DATABASE_URL: postgresql://foreman:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/foreman
       BACKUP_DIR: /backups
+      # Uploaded files, each once and named by its SHA-256 (FRM-REQ-190). A volume, not the image:
+      # the bytes are not in PostgreSQL, so the database dump does not carry them either.
+      FOREMAN_BLOB_DIR: /blobs
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - backups:/backups
+      - blobs:/blobs
     healthcheck:
       test: ["CMD", "node", "dist/healthcheck.js"]
       interval: 30s
@@ -47,11 +51,15 @@ services:
     environment:
       DATABASE_URL: postgresql://foreman:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/foreman
       BACKUP_DIR: /backups
+      # Uploaded files, each once and named by its SHA-256 (FRM-REQ-190). A volume, not the image:
+      # the bytes are not in PostgreSQL, so the database dump does not carry them either.
+      FOREMAN_BLOB_DIR: /blobs
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - backups:/backups
+      - blobs:/blobs
     healthcheck:
       test: ["CMD-SHELL", "test -f /tmp/worker-heartbeat && find /tmp/worker-heartbeat -mmin -2 | grep -q ."]
       interval: 60s
@@ -61,3 +69,4 @@ services:
 volumes:
   pgdata:
   backups:
+  blobs:
