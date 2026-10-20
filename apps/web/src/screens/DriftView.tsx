@@ -126,6 +126,10 @@ export function DriftView({ code }: { code: string }) {
   const drift = state.value;
   const counts = project.state.status === 'ready' ? project.state.value.counts : null;
   const planned = counts !== null && measurable(counts).hasPlan;
+  // Clean only when every check could run on what is recorded (FRM-REQ-241); otherwise each check
+  // says whether it ran.
+  const ran = (key: string) => counts !== null && checkMeasurable(key, counts);
+  const allRan = counts !== null && CATEGORIES.every((category) => ran(category.key));
 
   return (
     <Page>
@@ -140,7 +144,7 @@ export function DriftView({ code }: { code: string }) {
           Nothing drifts that the engine found, but the project's plan could not be read, so whether
           the checks had anything to run on is not known. Reload to try again.
         </EmptyState>
-      ) : drift.total === 0 && !planned ? (
+      ) : drift.total === 0 && !allRan ? (
         <Card padding="md">
           <Stack gap="12">
             <Cluster gap="8" align="center">
@@ -150,18 +154,19 @@ export function DriftView({ code }: { code: string }) {
               </Badge>
             </Cluster>
             <span className="fm-muted">
-              No phases, tasks or requirements are recorded, so none of the six drift checks can run on
-              this project. Each needs something that is not recorded yet.
+              {planned
+                ? `${String(CATEGORIES.filter((category) => ran(category.key)).length)} of ${String(CATEGORIES.length)} drift checks could run on what is recorded and found nothing; the others need something that is not recorded yet.`
+                : 'No phases, tasks or requirements are recorded, so none of the six drift checks can run on this project. Each needs something that is not recorded yet.'}
             </span>
             <ul className="fm-unmeasured__checks">
               {CATEGORIES.map((category) => (
                 <li key={category.key} className="fm-unmeasured__check">
                   <span>
                     <strong>{category.label}</strong>{' '}
-                    <span className="fm-muted">{NEEDS[category.key]}</span>
+                    {!ran(category.key) && <span className="fm-muted">{NEEDS[category.key]}</span>}
                   </span>
                   <Badge tone="neutral" size="sm">
-                    did not run
+                    {ran(category.key) ? 'ran · nothing found' : 'did not run'}
                   </Badge>
                 </li>
               ))}

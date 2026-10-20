@@ -1,4 +1,7 @@
+import { mkdtemp, rm } from 'node:fs/promises';
 import type { Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AuditEventEntry, AuditEventsResponse } from '@foreman/shared';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
@@ -28,6 +31,10 @@ describe.skipIf(url === undefined)('audit event ids and history', () => {
   let server: Server;
   let origin: string;
   let cookie: string;
+  // Its own blob directory, and every blob it uploads removed again: the backup drill that runs
+  // after this file reads every blob row and fails on one whose file is not in its directory.
+  let blobDir: string;
+  const uploaded = new Set<string>();
   /** Records outside the project, which `beforeEach` cannot reach through the project code. */
   const strays = { guidelines: [] as string[], projectIdeas: [] as string[], tokens: [] as string[] };
 
@@ -67,7 +74,9 @@ describe.skipIf(url === undefined)('audit event ids and history', () => {
   const idsOf = (res: Response) => (res.headers.get('audit-event-ids') ?? '').split(',').filter((s) => s !== '');
 
   beforeAll(async () => {
+    blobDir = await mkdtemp(join(tmpdir(), 'foreman-audit-events-blobs-'));
     const config: Config = loadConfig({
+      FOREMAN_BLOB_DIR: blobDir,
       NODE_ENV: 'test',
       BASE_URL: 'http://localhost:3200',
       DATABASE_URL: url ?? '',
@@ -112,6 +121,10 @@ describe.skipIf(url === undefined)('audit event ids and history', () => {
     await db.auditEvent.deleteMany({
       where: { entityHumanId: { in: [...strays.guidelines, ...strays.projectIdeas, ...strays.tokens] } },
     });
+    const blobs = await db.blob.findMany({ where: { sha256: { in: [...uploaded] } }, select: { id: true } });
+    const ids = blobs.map((b) => b.id);
+    await db.auditEvent.deleteMany({ where: { entityType: 'blob', entityId: { in: ids } } });
+    await db.blob.deleteMany({ where: { id: { in: ids } } });
   };
 
   beforeEach(async () => {
@@ -122,6 +135,7 @@ describe.skipIf(url === undefined)('audit event ids and history', () => {
   afterAll(async () => {
     await clean();
     await db.user.deleteMany({ where: { email: EMAIL } });
+    await rm(blobDir, { recursive: true, force: true });
     await new Promise<void>((resolve) =>
       server.close(() => {
         resolve();
@@ -437,7 +451,9 @@ describe.skipIf(url === undefined)('audit event ids and history', () => {
       form.append('file', new File([bytes], 'screen.png', { type: 'image/png' }));
       const res = await fetch(`${origin}/api/blobs`, { method: 'POST', headers: { cookie }, body: form });
       expect(res.status, await res.clone().text()).toBeLessThan(300);
-      return (await res.json()) as { sha256: string; auditEventIds: string[] };
+      const body = (await res.json()) as { sha256: string; auditEventIds: string[] };
+      uploaded.add(body.sha256);
+      return body;
     };
     /** The verdict history gives an event, found by the ID the write returned. */
     const verdictOf = async (eventId: string) => {

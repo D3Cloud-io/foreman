@@ -35,6 +35,7 @@ import {
   ciTone,
   ciWord,
   CRITICAL_PLUS_HIGH,
+  checkMeasurable,
   measurable,
   plural,
   readCount,
@@ -141,7 +142,11 @@ export function ProjectOverview({ code }: { code: string }) {
   const planUnknown = counts === null;
   const holes = brief.drift.counts['coverage-hole'];
   const coverageSignal = readCount(holes, { measured: can.coverage });
-  const driftSignal = readCount(brief.drift.total, { measured: can.drift });
+  // Drift is clean only when every drift check could run on what is recorded: a project with one
+  // phase and nothing else ran two of six, and "0 · clean" would claim all six (FRM-REQ-241).
+  const allDriftChecks =
+    counts !== 'loading' && counts !== null && CATEGORIES.every((c) => checkMeasurable(c.key, counts));
+  const driftSignal = readCount(brief.drift.total, { measured: can.drift && allDriftChecks });
   const blockedSignal = readCount(brief.blocked.length, { measured: can.blocked });
   const unmeasuredWhy = (nothing: string) =>
     planUnknown ? "The project's plan could not be read, so this is not measured" : nothing;
@@ -164,7 +169,7 @@ export function ProjectOverview({ code }: { code: string }) {
       ? { href: `/tasks/${brief.blocked[0].humanId}`, action: 'Open the blocked task' }
       : brief.blocked.length > 1 && phase !== null
         ? { href: `/projects/${code}/phases/${phase.humanId}`, action: 'Open the phase board' }
-        : {};
+        : { href: `/projects/${code}/phases`, action: 'Open the phases' };
 
   return (
     <Page>

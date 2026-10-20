@@ -111,6 +111,23 @@ test.describe('honest signals', () => {
     await expect(main.getByText('No drift')).toHaveCount(0);
   });
 
+  test('a project with only a phase never reads its drift as clean: most checks could not run', async ({ page }) => {
+    await page.goto(`/projects/${PLANNED}`);
+    const main = page.getByRole('main');
+    // The figure's row sits beside its label: the signal word there must not be "clean".
+    const driftRow = main
+      .locator('.fm-stat__label', { hasText: /^Drift$/ })
+      .locator('xpath=following-sibling::span[contains(@class, "fm-stat__row")]');
+    await expect(driftRow).toBeVisible();
+    await expect(driftRow.getByText('clean', { exact: true })).toHaveCount(0);
+
+    await page.goto(`/projects/${PLANNED}/drift`);
+    await expect(main.getByRole('heading', { name: 'Not measurable yet' })).toBeVisible();
+    await expect(main.getByText(/of 6 drift checks could run/)).toBeVisible();
+    await expect(main.getByText('did not run').first()).toBeVisible();
+    await expect(main.getByText('0 drift')).toHaveCount(0);
+  });
+
   test('a phase shows the server status and a neutral "no exit demo" chip that links to drift', async ({ page }) => {
     await page.goto(`/projects/${PLANNED}/phases`);
     const main = page.getByRole('main');

@@ -176,7 +176,7 @@ test.describe('screens (FRM-T-12.3)', () => {
     await note.fill(what);
     await submit.click();
     await expect(built.getByText('Recorded: Drifted — fix.')).toBeVisible();
-    await expect(built.locator('.fm-pill', { hasText: 'Drifted — fix' })).toBeVisible();
+    await expect(built.locator('.fm-badge', { hasText: 'Drifted — fix' })).toBeVisible();
     await expect(built.getByText(what)).toBeVisible();
 
     // And it is the record, not only the page: kind, reviewer and note stored.
