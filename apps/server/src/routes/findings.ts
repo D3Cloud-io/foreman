@@ -20,8 +20,7 @@ import {
   updateAudit,
   updateFinding,
 } from '../domain/findings.js';
-import { findProject, listPhases } from '../domain/projects.js';
-import { phaseProgress } from '../domain/wherewestand.js';
+import { findProject } from '../domain/projects.js';
 import { resolveScope, scopeCodes } from '../domain/scope.js';
 import { recurrencesOf, regressionWatch } from '../domain/recurrence.js';
 import { actorOf, handler, param, parseBody, parseQuery } from './helpers.js';
@@ -78,8 +77,9 @@ export function findingRoutes(db: Db): Router {
       // Narrowed to a group's projects when `?group=` names one (FRM-T-17.4); unknown is a 404.
       const scope = await resolveScope(db, query.group);
       // `total` counts the whole matching set, not the page: the sidebar's badge reads it with
-      // `limit=1` (FRM-REQ-242).
-      const { items, total } = await inbox(db, {
+      // `limit=1` (FRM-REQ-242). `counts` is the same set per severity, ignoring the severity
+      // filter, for the chips above the table.
+      const { items, total, counts } = await inbox(db, {
         project: query.project,
         codes: scopeCodes(scope),
         severity: query.severity,
@@ -87,7 +87,7 @@ export function findingRoutes(db: Db): Router {
         lens: query.lens,
         limit: query.limit,
       });
-      res.json({ items, nextCursor: null, total });
+      res.json({ items, nextCursor: null, total, counts });
     }),
   );
 
@@ -179,28 +179,6 @@ export function projectFindingRoutes(db: Db): Router {
       ]);
 
       res.json({ items, nextCursor: null, total });
-    }),
-  );
-
-  /**
-   * Every phase of the project with its task counts, from the same grouped read the overview's
-   * numbers come from (FRM-REQ-242). The Phases screen draws from this and counts nothing itself;
-   * a page of `/tasks` is capped at 200 and a project can be larger.
-   */
-  router.get(
-    '/:code/phase-progress',
-    handler(async (req, res) => {
-      const code = param(req, 'code');
-      const project = await findProject(db, code);
-      const [phases, progress] = await Promise.all([
-        listPhases(db, code),
-        phaseProgress(db, project.id),
-      ]);
-      const items = phases.map((phase) => ({
-        ...phase,
-        tasks: progress.get(phase.id) ?? { done: 0, cancelled: 0, total: 0 },
-      }));
-      res.json({ items, nextCursor: null, total: items.length });
     }),
   );
 

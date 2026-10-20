@@ -5,6 +5,7 @@ import { setPassword } from '../../src/auth/native.js';
 import { loadConfig, type Config } from '../../src/config.js';
 import { createDb, type Db } from '../../src/db.js';
 import type { Brief } from '../../src/domain/brief.js';
+import { phaseProgress } from '../../src/domain/wherewestand.js';
 
 /**
  * FRM-REQ-242 / FRM-DA-003: a count is computed from the complete set it describes.
@@ -126,7 +127,7 @@ describe.skipIf(url === undefined)('per-phase progress (FRM-REQ-242)', () => {
   });
 
   it('counts every phase from the whole set, past the 200-task page', async () => {
-    const progress = await get<{ items: ProgressItem[]; total: number }>(`/projects/${CODE}/phase-progress`);
+    const progress = await get<{ items: ProgressItem[]; total: number }>(`/projects/${CODE}/phases`);
     const byId = new Map(progress.items.map((item) => [item.humanId, item.tasks]));
 
     expect(progress.total).toBe(3);
@@ -137,18 +138,21 @@ describe.skipIf(url === undefined)('per-phase progress (FRM-REQ-242)', () => {
 
   it('agrees with the overview, which reads the same phase', async () => {
     const brief = await get<Brief>(`/brief/${CODE}`);
-    const progress = await get<{ items: ProgressItem[] }>(`/projects/${CODE}/phase-progress`);
+    const progress = await get<{ items: ProgressItem[] }>(`/projects/${CODE}/phases`);
 
     expect(brief.activePhase?.humanId).toBe(`${CODE}-P-9`);
     const phase = progress.items.find((item) => item.humanId === brief.activePhase?.humanId);
     expect(phase?.tasks).toEqual(brief.activePhase?.tasks);
   });
 
-  it('keeps the phases in build order and every field the phases list carries', async () => {
-    const phases = await get<{ items: { humanId: string; name: string; status: string }[] }>(
-      `/projects/${CODE}/phases`,
-    );
-    const progress = await get<{ items: ProgressItem[] }>(`/projects/${CODE}/phase-progress`);
-    expect(progress.items.map((item) => item.humanId)).toEqual(phases.items.map((item) => item.humanId));
+  it('serves the same counts on the phases list as phaseProgress() computes, for every phase', async () => {
+    const project = await db.project.findFirstOrThrow({ where: { code: CODE } });
+    const expected = await phaseProgress(db, project.id);
+    const phases = await get<{ items: (ProgressItem & { id: string })[] }>(`/projects/${CODE}/phases`);
+
+    expect(phases.items.map((item) => item.humanId)).toEqual([`${CODE}-P-1`, `${CODE}-P-9`, `${CODE}-P-10`]);
+    for (const item of phases.items) {
+      expect(item.tasks).toEqual(expected.get(item.id) ?? { done: 0, cancelled: 0, total: 0 });
+    }
   });
 });

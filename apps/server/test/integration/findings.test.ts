@@ -380,6 +380,38 @@ describe.skipIf(url === undefined)('findings', () => {
       const open = await get<{ total: number }>(`/findings?project=${B}&limit=1`);
       expect(open.total).toBe(2);
     });
+
+    it('totals and counts under the lens and status filters, over the whole set', async () => {
+      await makeFinding(A, { title: 'Contrast', severity: 'critical', lenses: ['accessibility'] });
+      await makeFinding(A, { title: 'Focus order', severity: 'high', lenses: ['accessibility'] });
+      await makeFinding(A, { title: 'Labels', severity: 'high', lenses: ['accessibility'] });
+      await makeFinding(A, { title: 'Slow query', severity: 'low', lenses: ['performance'] });
+      const done = await makeFinding(A, { title: 'Fixed a11y', severity: 'high', lenses: ['accessibility'] });
+      await patch(`/projects/${A}/findings/${done.humanId}`, { status: 'fixed' });
+
+      type Counted = {
+        items: unknown[];
+        total: number;
+        counts: Record<'critical' | 'high' | 'medium' | 'low', number>;
+      };
+      const lens = await get<Counted>(`/findings?project=${A}&lens=accessibility&limit=1`);
+      expect(lens.items).toHaveLength(1);
+      expect(lens.total).toBe(3);
+      expect(lens.counts).toEqual({ critical: 1, high: 2, medium: 0, low: 0 });
+
+      // A severity filter narrows the total and the page, never the counts the chips show.
+      const high = await get<Counted>(`/findings?project=${A}&lens=accessibility&severity=high&limit=1`);
+      expect(high.total).toBe(2);
+      expect(high.counts).toEqual({ critical: 1, high: 2, medium: 0, low: 0 });
+
+      const fixed = await get<Counted>(`/findings?project=${A}&status=fixed&limit=1`);
+      expect(fixed.total).toBe(1);
+      expect(fixed.counts).toEqual({ critical: 0, high: 1, medium: 0, low: 0 });
+
+      const open = await get<Counted>(`/findings?project=${A}&limit=1`);
+      expect(open.total).toBe(4);
+      expect(open.counts).toEqual({ critical: 1, high: 2, medium: 0, low: 1 });
+    });
   });
 
   describe('recurrence (T-6.7, FRM-REQ-121, FRM-REQ-122)', () => {

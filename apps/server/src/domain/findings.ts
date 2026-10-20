@@ -368,18 +368,23 @@ export interface InboxQuery {
  * vaults, and "what is the worst thing outstanding anywhere" was not a question anybody could ask.
  */
 export async function inbox(db: Db, query: InboxQuery = {}) {
-  const where = {
+  // Everything but the severity: it is the set the severity chips count over, so a chip still
+  // shows how many there are when another severity is the one selected.
+  const base = {
     deletedAt: null,
     // Open by default. An inbox showing everything ever found is an archive.
     status: query.status ?? 'open',
-    ...(query.severity === undefined ? {} : { severity: query.severity }),
     ...(query.lens === undefined ? {} : { lenses: { has: query.lens } }),
     project: { deletedAt: null, ...codeFilter(query.codes, query.project) },
   } as const;
+  const where = {
+    ...base,
+    ...(query.severity === undefined ? {} : { severity: query.severity }),
+  };
 
   // The count and the page share one `where`, so `total` is the size of the set the page is cut
   // from (FRM-REQ-242), not the number of rows that survived `take`.
-  const [findings, total] = await Promise.all([
+  const [findings, total, grouped] = await Promise.all([
     db.finding.findMany({
       where,
       include: {
@@ -390,7 +395,11 @@ export async function inbox(db: Db, query: InboxQuery = {}) {
       take: query.limit ?? 50,
     }),
     db.finding.count({ where }),
+    db.finding.groupBy({ by: ['severity'], where: base, _count: { _all: true } }),
   ]);
+
+  const counts: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0 };
+  for (const row of grouped) counts[row.severity] = row._count._all;
 
   const items = findings
     .map((finding) => ({
@@ -412,5 +421,5 @@ export async function inbox(db: Db, query: InboxQuery = {}) {
         a.project.localeCompare(b.project) ||
         a.humanId.localeCompare(b.humanId),
     );
-  return { items, total };
+  return { items, total, counts };
 }
