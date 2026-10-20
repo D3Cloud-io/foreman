@@ -17,6 +17,7 @@ import { Markdown } from '../components/Markdown';
 import { foreman, type FindingDetail as Detail } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { OpenInConstellation } from '../components/OpenInConstellation';
+import { HistoryDrawer } from '../components/HistoryDrawer';
 
 /**
  * S-16 — one finding: where it is, what was observed, whether the fix held, and where else it
@@ -76,7 +77,7 @@ function FixVerdict({ fix }: { fix: Detail['fix'] }) {
 }
 
 export function FindingDetail({ humanId }: { humanId: string }) {
-  const { state } = useAsync(() => foreman.finding(humanId), [humanId]);
+  const { state, refresh } = useAsync(() => foreman.finding(humanId), [humanId]);
   const recurrences = useAsync(() => foreman.recurrences(humanId), [humanId]);
 
   if (state.status === 'loading') {
@@ -114,6 +115,7 @@ export function FindingDetail({ humanId }: { humanId: string }) {
               {finding.status}
             </Badge>
             <OpenInConstellation path={`item/${finding.humanId}`} />
+            <HistoryDrawer entity={finding.humanId} onUndone={refresh} />
           </>
         }
       />

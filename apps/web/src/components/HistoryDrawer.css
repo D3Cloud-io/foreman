@@ -1,0 +1,140 @@
+/* The History drawer (FRM-T-18.4, board D-04). Tokens only (d3-check-usage).
+   @d3cloud/ui 1.7 has no Drawer (DS-REQ-030), so this is its Modal — focus trap, Escape, focus
+   return and the labelled dialog come with it — laid out as a side sheet on the end edge, and the
+   whole screen below md. */
+
+.d3-modal.fm-history {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: auto;
+  transform: none;
+  width: min(28rem, 100vw);
+  max-height: none;
+  height: 100dvh;
+  border-radius: 0;
+  border-left: var(--border-width) solid var(--color-border-float);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: fm-history-in var(--motion-drawer) backwards;
+}
+.d3-modal.fm-history[data-state='closed'] {
+  animation: fm-history-out var(--motion-modal-exit) forwards;
+}
+.d3-modal.fm-history::before {
+  display: none;
+}
+/* A close control at every width, not only on a phone: a sheet has no Cancel of its own. */
+.fm-history .d3-modal__head .d3-modal__close {
+  display: inline-flex;
+}
+.fm-history .d3-modal__head,
+.fm-history .d3-modal__footer {
+  flex: none;
+}
+.fm-history .d3-modal__body {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@keyframes fm-history-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+@keyframes fm-history-out {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (max-width: 767.98px) {
+  .d3-modal.fm-history {
+    width: 100%;
+    border-left: 0;
+    padding-bottom: max(var(--space-20), env(safe-area-inset-bottom));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .d3-modal.fm-history,
+  .d3-modal.fm-history[data-state='closed'] {
+    animation-duration: 0.01ms;
+  }
+}
+
+/* ─── The events ─────────────────────────────────────────────────────── */
+
+.fm-history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fm-history__event {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-block: var(--space-12);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+.fm-history__event:last-child {
+  border-bottom: 0;
+}
+.fm-history__who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: var(--text-12);
+  color: var(--color-fg-muted);
+}
+.fm-history__actor {
+  font-weight: var(--weight-semibold);
+  color: var(--color-fg);
+}
+.fm-history__when {
+  margin-left: auto;
+}
+.fm-history__summary {
+  margin: 0;
+  font-size: var(--text-13);
+}
+.fm-history__verdict {
+  margin: 0;
+  font-size: var(--text-12);
+  color: var(--color-fg-muted);
+}
+.fm-history__refusal {
+  margin: 0;
+  font-size: var(--text-12);
+  color: var(--color-danger);
+}
+.fm-history__actions {
+  display: flex;
+  gap: var(--space-8);
+}
+
+@media (pointer: coarse) {
+  .fm-history__actions .d3-btn {
+    min-height: 44px;
+  }
+}
+
+/* ─── A write in flight (the undo flow's step 1) ──────────────────────────
+   Shared with the status control: while the server has the change, the control shows what was
+   asked for, dimmed, beside a spinner — and stays where it is, focus included. */
+
+.fm-status-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+}
+.fm-status-control--pending .d3-sel__value {
+  color: var(--color-fg-muted);
+}

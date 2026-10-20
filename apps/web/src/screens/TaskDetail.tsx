@@ -1,6 +1,5 @@
 import {
   Alert,
-  Badge,
   Button,
   Card,
   CardTitle,
@@ -18,6 +17,8 @@ import { Markdown } from '../components/Markdown';
 import { useAsync } from '../lib/useAsync';
 import { EditForm, SIZES } from './EditForms';
 import { OpenInConstellation } from '../components/OpenInConstellation';
+import { HistoryDrawer } from '../components/HistoryDrawer';
+import { StatusControl } from './StatusControl';
 
 /**
  * S-12 — one task: what it is for, what it declares, what it satisfies, and what cites it.
@@ -77,7 +78,8 @@ export function startedWhenMissing(status: string): string {
 }
 
 export function TaskDetail({ humanId }: { humanId: string }) {
-  const { state, reload } = useAsync(() => foreman.entity(humanId), [humanId]);
+  // `refresh`, not `reload`: after a write or an undo the page re-reads in place (FRM-T-18.4).
+  const { state, refresh } = useAsync(() => foreman.entity(humanId), [humanId]);
 
   if (state.status === 'loading') {
     return (
@@ -122,13 +124,15 @@ export function TaskDetail({ humanId }: { humanId: string }) {
         description={humanId}
         actions={
           <>
-            <Badge tone={task.status === 'blocked' ? 'danger' : 'neutral'}>{task.status}</Badge>
+            {/* A control, not a badge: the status changes here as on the phase, with Undo. */}
+            <StatusControl task={task} code={projectCode} onChanged={refresh} />
             <OpenInConstellation path={`item/${humanId}`} />
+            <HistoryDrawer entity={humanId} onUndone={refresh} />
             <EditForm
               title={`Edit ${humanId}`}
               path={`/api/projects/${projectCode}/tasks/${humanId}`}
               trigger={<Button>Edit</Button>}
-              onSaved={reload}
+              onSaved={refresh}
               initial={{
                 title: task.title,
                 size: task.size ?? '',

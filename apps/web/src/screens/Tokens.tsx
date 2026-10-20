@@ -19,6 +19,7 @@ import {
 } from '@d3cloud/ui';
 import { foreman, type IssuedToken, type SignedInSession, type TokenRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
+import { useDraftGuard, useMutate } from '../lib/mutate';
 import { Pill, StatCard } from '../ui/viz';
 import { relativeDay } from '../ui/tone';
 
@@ -41,7 +42,15 @@ import { relativeDay } from '../ui/tone';
  * - **Revoked is a state, not a deletion.** A revoked row stays visible: "this token existed and
  *   was turned off" is what you want to read six months later, and a row that vanishes tells you
  *   nothing about whether it was ever there.
+ * - **Revoking asks first, because it cannot be undone** (FRM-T-18.4, the destructive ladder). The
+ *   server's undo does not reach `api_token`, so the one thing the console can do is say what is
+ *   about to stop working before it does. Everything that *can* be undone acts at once instead.
  */
+
+/** The confirm's sentence: what stops working, and that there is no way back. */
+export function revokeConsequence(prefix: string): string {
+  return `Agents using ${prefix}… stop working at once. This cannot be undone.`;
+}
 
 const SCOPES = [
   { value: 'read', label: 'Read', detail: 'Answer questions. Every GET.' },
@@ -63,9 +72,10 @@ function stateOf(row: TokenRow): { label: string; tone: 'success' | 'neutral' | 
 }
 
 export function Tokens() {
-  const { state, reload } = useAsync(() => foreman.tokens(), []);
+  const { state, refresh } = useAsync(() => foreman.tokens(), []);
   const [creating, setCreating] = useState(false);
   const [issued, setIssued] = useState<IssuedToken | null>(null);
+  const [revoking, setRevoking] = useState<TokenRow | null>(null);
 
   const rows = state.status === 'ready' ? state.value.items : [];
   const active = rows.filter((row) => stateOf(row).label === 'active');
@@ -75,9 +85,9 @@ export function Tokens() {
     (token: IssuedToken) => {
       setCreating(false);
       setIssued(token);
-      reload();
+      refresh();
     },
-    [reload],
+    [refresh],
   );
 
   return (
@@ -157,9 +167,8 @@ export function Tokens() {
                       </Stack>
                       {row.revokedAt === null && (
                         <Button
-                          onClick={() => {
-                            void foreman.revokeToken(row.id).then(reload);
-                          }}
+                          aria-label={`Revoke ${row.name}`}
+                          onClick={() => { setRevoking(row); }}
                         >
                           Revoke
                         </Button>
@@ -176,6 +185,7 @@ export function Tokens() {
       <SignedIn />
 
       <IssueDialog open={creating} onClose={() => { setCreating(false); }} onIssued={onIssued} />
+      <RevokeDialog row={revoking} onClose={() => { setRevoking(null); }} onRevoked={refresh} />
       <ShownOnceDialog issued={issued} onClose={() => { setIssued(null); }} />
     </Page>
   );
@@ -194,6 +204,8 @@ function IssueDialog({
   const [scopes, setScopes] = useState<string[]>(['read']);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { mutate } = useMutate();
+  const allowClose = useDraftGuard(open ? name.trim().length : 0, 'the new token');
 
   const toggle = (scope: string, on: boolean) => {
     setScopes((current) =>
@@ -204,15 +216,22 @@ function IssueDialog({
   const submit = () => {
     setBusy(true);
     setError(null);
-    foreman
-      .issueToken({ name: name.trim(), scopes })
-      .then((token) => {
+    // No toast: the shown-once dialog that follows is the answer, and it is not one to miss.
+    void mutate({
+      subject: name.trim(),
+      run: () => foreman.issueToken({ name: name.trim(), scopes }),
+      message: () => null,
+      undoable: false,
+      failure: 'inline',
+    })
+      .then((outcome) => {
+        if (!outcome.ok) {
+          setError(outcome.message);
+          return;
+        }
         setName('');
         setScopes(['read']);
-        onIssued(token);
-      })
-      .catch((caught: unknown) => {
-        setError(caught instanceof Error ? caught.message : String(caught));
+        onIssued(outcome.value);
       })
       .finally(() => { setBusy(false); });
   };
@@ -220,7 +239,8 @@ function IssueDialog({
   return (
     <Modal
       open={open}
-      onOpenChange={(next) => { if (!next) onClose(); }}
+      // Escape or the scrim with a name typed asks first; Cancel is the person saying discard.
+      onOpenChange={(next) => { if (!next && allowClose()) onClose(); }}
       title="Issue an API token"
       description="Named, scoped, and shown exactly once."
     >
@@ -266,6 +286,82 @@ function IssueDialog({
           </Button>
         </FormActions>
       </Stack>
+    </Modal>
+  );
+}
+
+/**
+ * Revoke, asked first — the one write on this screen that cannot be undone. It names the token and
+ * what stops working, and Keep token is where focus lands (`destructive`), so Enter keeps it.
+ */
+function RevokeDialog({
+  row,
+  onClose,
+  onRevoked,
+}: {
+  row: TokenRow | null;
+  onClose: () => void;
+  onRevoked: () => void;
+}) {
+  const { mutate, pending } = useMutate();
+  const [error, setError] = useState<string | null>(null);
+
+  const revoke = (target: TokenRow) => {
+    setError(null);
+    void mutate({
+      subject: target.name,
+      run: () => foreman.revokeToken(target.id),
+      message: () => `Revoked “${target.name}”`,
+      refresh: onRevoked,
+      // The server cannot put a token back, so the toast offers nothing to press.
+      undoable: false,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (outcome.ok) onClose();
+      else setError(outcome.message);
+    });
+  };
+
+  return (
+    <Modal
+      open={row !== null}
+      onOpenChange={(next) => {
+        if (!next) {
+          setError(null);
+          onClose();
+        }
+      }}
+      destructive
+      title={row === null ? '' : `Revoke “${row.name}”?`}
+      description={row === null ? undefined : revokeConsequence(row.prefix)}
+      footer={
+        row === null ? undefined : (
+          <>
+            <Button onClick={onClose}>Keep token</Button>
+            <Button
+              variant="danger"
+              loading={pending}
+              onClick={() => { revoke(row); }}
+            >
+              {`Revoke ${row.name}`}
+            </Button>
+          </>
+        )
+      }
+    >
+      {row === null ? null : (
+        <Stack gap="12">
+          <p>
+            To give an agent access again, issue a new token and hand it over. The revoked one stays
+            in the list, so the history still reads.
+          </p>
+          {error === null ? null : (
+            <Alert tone="danger" title="It was not revoked" dynamic>
+              {error}
+            </Alert>
+          )}
+        </Stack>
+      )}
     </Modal>
   );
 }
@@ -327,7 +423,8 @@ function sessionName(row: SignedInSession): string {
  * once; a phone finds out at its next refresh.
  */
 function SignedIn() {
-  const { state, reload } = useAsync(() => foreman.sessions(), []);
+  const { state, refresh } = useAsync(() => foreman.sessions(), []);
+  const { mutate } = useMutate();
   return (
     <Section title="Signed in" description="Everywhere this account is signed in. End any you don’t recognise." surface="card">
       {state.status === 'loading' ? <Skeleton lines={2} /> : null}
@@ -352,7 +449,15 @@ function SignedIn() {
                     size="sm"
                     aria-label={`Sign out ${sessionName(row)}`}
                     onClick={() => {
-                      void foreman.endSession(row.id).then(reload);
+                      // Not undoable — a session ended is ended — but signing in again is the way
+                      // back, so it acts at once and says so.
+                      void mutate({
+                        subject: sessionName(row),
+                        run: () => foreman.endSession(row.id),
+                        message: () => `Signed out ${sessionName(row)}`,
+                        refresh,
+                        undoable: false,
+                      });
                     }}
                   >
                     Sign out

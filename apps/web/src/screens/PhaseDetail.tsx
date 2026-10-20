@@ -15,7 +15,7 @@ import {
   Table,
   type TableColumn,
 } from '@d3cloud/ui';
-import { foreman, type TaskRow } from '../lib/api';
+import { foreman, type StatusWrite, type TaskRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { EditForm, PHASE_STATUSES, SIZES } from './EditForms';
 import { PhaseBoard } from './PhaseBoard';
@@ -33,6 +33,24 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
   const phases = useAsync(() => foreman.phases(code), [code]);
   const tasks = useAsync(() => foreman.tasks(code, phaseHumanId), [code, phaseHumanId]);
   const [view, setView] = useState<'list' | 'board'>('list');
+
+  // A status write lands in place (FRM-T-18.4): the row takes the server's answer, and the tasks
+  // and the phase — whose status and counts may have rolled up — are re-read without a skeleton,
+  // so the table keeps its sort and the select keeps focus.
+  const onStatusChanged = (result?: StatusWrite) => {
+    if (result !== undefined) {
+      tasks.update((page) => ({
+        ...page,
+        items: page.items.map((row) =>
+          row.humanId === result.humanId
+            ? { ...row, status: result.status, blockedReason: result.blockedReason ?? null }
+            : row,
+        ),
+      }));
+    }
+    tasks.refresh();
+    phases.refresh();
+  };
 
   const phase =
     phases.state.status === 'ready'
@@ -72,7 +90,7 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
       sortable: true,
       width: '11rem',
       // A control, not a badge: status is changeable from every screen that shows it.
-      cell: (row) => <StatusControl task={row} code={code} onChanged={tasks.reload} />,
+      cell: (row) => <StatusControl task={row} code={code} onChanged={onStatusChanged} />,
     },
     { key: 'size', header: 'Size', width: '5rem', cell: (row) => row.size ?? '—' },
     {
@@ -131,7 +149,7 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
                 description="A phase cannot be renumbered — its ID embeds the number."
                 path={`/api/projects/${code}/phases/${phase.humanId}`}
                 trigger={<Button>Edit</Button>}
-                onSaved={phases.reload}
+                onSaved={phases.refresh}
                 initial={{
                   name: phase.name,
                   status: phase.status,
@@ -174,7 +192,7 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
           {tasks.state.message}
         </EmptyState>
       ) : view === 'board' ? (
-        <PhaseBoard tasks={tasks.state.value.items} code={code} onChanged={tasks.reload} />
+        <PhaseBoard tasks={tasks.state.value.items} code={code} onChanged={onStatusChanged} />
       ) : (
         <Table
           caption={`Tasks in ${phaseHumanId}`}
