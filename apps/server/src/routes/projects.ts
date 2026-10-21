@@ -7,7 +7,9 @@ import {
   RequirementCreate,
   RequirementUpdate,
   TaskCreate,
+  TasksAcrossQuery,
   TaskUpdate,
+  type TaskAcrossRow,
 } from '@foreman/shared';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -27,6 +29,7 @@ import {
   updateTask,
 } from '../domain/projects.js';
 import { phaseProgress } from '../domain/wherewestand.js';
+import { codeFilter, resolveScope, scopeCodes } from '../domain/scope.js';
 import { requireAuth, requireScope } from '../auth/middleware.js';
 import { assertFresh, setEtag } from './concurrency.js';
 import {
@@ -484,6 +487,58 @@ export function projectRoutes(db: Db): Router {
     handler(async (req, res) => {
       const { auditEventIds } = await softDelete(db, actorOf(req), 'phase', param(req, 'humanId'));
       noContentWithEvents(res, auditEventIds);
+    }),
+  );
+
+  return router;
+}
+
+/**
+ * Tasks in one status across a scope (FRM-T-18.7): `GET /api/tasks?status=blocked&group=` — the
+ * Blocked tab of `/findings`. Each project's own list stays at `/api/projects/:code/tasks`; this is
+ * the read that has no project in it, so it is mounted at `/api`, and its guards sit on the route
+ * so mounting it there puts nothing in front of any other `/api` route.
+ *
+ * Ordered by project, then ID, so a family's blocked work reads project by project.
+ */
+export function taskAcrossRoutes(db: Db): Router {
+  const router = Router();
+
+  router.get(
+    '/tasks',
+    requireAuth,
+    requireScope(db, 'read'),
+    handler(async (req, res) => {
+      const query = parseQuery(TasksAcrossQuery, req, res);
+      if (query === null) return;
+      // An unknown, deleted or `all` group is a 404, never "everyone" (FRM-ADR-024).
+      const scope = await resolveScope(db, query.group);
+      const where = {
+        deletedAt: null,
+        status: query.status,
+        project: { deletedAt: null, ...codeFilter(scopeCodes(scope), query.project) },
+      };
+      const [rows, total] = await Promise.all([
+        db.task.findMany({
+          where,
+          orderBy: [{ project: { code: 'asc' } }, { humanId: 'asc' }],
+          take: query.limit,
+          select: {
+            humanId: true,
+            title: true,
+            status: true,
+            blockedReason: true,
+            size: true,
+            doneWhen: true,
+            updatedAt: true,
+            phase: { select: { humanId: true, name: true } },
+            project: { select: { code: true, name: true } },
+          },
+        }),
+        db.task.count({ where }),
+      ]);
+      const items: TaskAcrossRow[] = rows.map((row) => ({ ...row, updatedAt: row.updatedAt.toISOString() }));
+      res.json({ items, nextCursor: null, total });
     }),
   );
 

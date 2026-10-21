@@ -1,6 +1,9 @@
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  ActionBar,
   Alert,
   Badge,
+  Button,
   Card,
   CardTitle,
   Cluster,
@@ -13,11 +16,15 @@ import {
   Skeleton,
   Stack,
 } from '@d3cloud/ui';
+import { Ban, CircleCheck, Eye, RotateCcw } from 'lucide-react';
 import { Markdown } from '../components/Markdown';
-import { foreman, type FindingDetail as Detail } from '../lib/api';
+import { api, foreman, type Audited, type FindingDetail as Detail } from '../lib/api';
+import { statusWords, useMutate } from '../lib/mutate';
 import { useAsync } from '../lib/useAsync';
 import { OpenInConstellation } from '../components/OpenInConstellation';
 import { HistoryDrawer } from '../components/HistoryDrawer';
+import { findingStatusTone, severityTone } from '../ui/status';
+import { KeyHint, ReasonDialog } from './triage';
 
 /**
  * S-16 — one finding: where it is, what was observed, whether the fix held, and where else it
@@ -28,12 +35,186 @@ import { HistoryDrawer } from '../components/HistoryDrawer';
  * by overlap and says so; the judging is done by whoever has the other repository open.
  */
 
-const SEVERITY_TONE: Record<string, 'danger' | 'attention' | 'neutral'> = {
-  critical: 'danger',
-  high: 'danger',
-  medium: 'attention',
-  low: 'neutral',
+// ─── Verdicts (FRM-T-18.7, FRM-REQ-246) ────────────────────────────────────
+
+/**
+ * The four verdicts a finding takes, each one `PATCH …/findings/:humanId` and so one audit event
+ * the toast can undo. Acknowledging is the operator saying the finding is real — `verified` becomes
+ * `confirmed` — which is the one judgement a reviewing agent cannot make about its own finding.
+ */
+export type FindingVerdict = 'acknowledge' | 'fixed' | 'reopen' | 'wont-fix';
+
+export interface VerdictTarget {
+  readonly humanId: string;
+  /** The project's code: the write goes through the project the finding belongs to. */
+  readonly project: string;
+  readonly status: string;
+  readonly verified: string | null;
+}
+
+export const VERDICTS: readonly {
+  readonly kind: FindingVerdict;
+  readonly label: string;
+  readonly key: string;
+  readonly done: string;
+}[] = [
+  { kind: 'acknowledge', label: 'Acknowledge', key: 'a', done: 'acknowledged' },
+  { kind: 'fixed', label: 'Mark fixed', key: 'f', done: 'marked fixed' },
+  { kind: 'reopen', label: 'Reopen', key: 'r', done: 'reopened' },
+  { kind: 'wont-fix', label: 'Won’t fix…', key: 'w', done: 'marked won’t fix' },
+];
+
+/** Whether a verdict would change anything. One that would not is not offered. */
+export function verdictApplies(kind: FindingVerdict, finding: Pick<VerdictTarget, 'status' | 'verified'>): boolean {
+  switch (kind) {
+    case 'acknowledge':
+      return finding.verified !== 'confirmed';
+    case 'fixed':
+      return finding.status !== 'fixed';
+    case 'reopen':
+      return finding.status !== 'open';
+    case 'wont-fix':
+      return finding.status !== 'wont_fix';
+  }
+}
+
+/** Whether the verdict is the finding's current state — the pressed button. */
+export function verdictPressed(kind: FindingVerdict, finding: Pick<VerdictTarget, 'status' | 'verified'>): boolean {
+  switch (kind) {
+    case 'acknowledge':
+      return finding.verified === 'confirmed';
+    case 'fixed':
+      return finding.status === 'fixed';
+    case 'reopen':
+      return false;
+    case 'wont-fix':
+      return finding.status === 'wont_fix';
+  }
+}
+
+/**
+ * Where a Won't fix keeps its reason: with the recommendation it declines, so the reason is on the
+ * record itself — read on this page, in the finding's history, and undone with the verdict.
+ */
+export function withWontFixReason(recommendation: string | null, reason: string): string {
+  const line = `**Won’t fix** — ${reason.trim()}`;
+  const before = recommendation?.trimEnd() ?? '';
+  return before.length === 0 ? line : `${before}\n\n${line}`;
+}
+
+/** The PATCH body a verdict sends. */
+export function verdictBody(
+  kind: FindingVerdict,
+  recommendation: string | null = null,
+  reason = '',
+): { verified?: 'confirmed'; status?: string; recommendationMd?: string } {
+  switch (kind) {
+    case 'acknowledge':
+      return { verified: 'confirmed' };
+    case 'fixed':
+      return { status: 'fixed' };
+    case 'reopen':
+      return { status: 'open' };
+    case 'wont-fix':
+      return { status: 'wont_fix', recommendationMd: withWontFixReason(recommendation, reason) };
+  }
+}
+
+/** The write itself. Won't fix reads the recommendation first, so the reason is added to it. */
+export async function writeVerdict(
+  target: Pick<VerdictTarget, 'humanId' | 'project'>,
+  kind: FindingVerdict,
+  reason = '',
+): Promise<Audited<{ status: string; verified: string | null }>> {
+  const recommendation = kind === 'wont-fix' ? (await foreman.finding(target.humanId)).recommendationMd : null;
+  return api.patch<Audited<{ status: string; verified: string | null }>>(
+    `/api/projects/${target.project}/findings/${target.humanId}`,
+    verdictBody(kind, recommendation, reason),
+  );
+}
+
+/** One verdict, the one way: pessimistic, a toast naming it, Undo that reverses it. */
+export function useFindingVerdict(): {
+  act: (target: VerdictTarget, kind: FindingVerdict, options: { reason?: string; refresh: () => void }) => void;
+  pending: boolean;
+} {
+  const { mutate, pending } = useMutate();
+  const act = (target: VerdictTarget, kind: FindingVerdict, options: { reason?: string; refresh: () => void }) => {
+    if (pending || !verdictApplies(kind, target)) return;
+    const verdict = VERDICTS.find((v) => v.kind === kind);
+    void mutate({
+      subject: target.humanId,
+      run: () => writeVerdict(target, kind, options.reason ?? ''),
+      message: () => `${target.humanId} ${verdict?.done ?? statusWords(kind)}`,
+      refresh: options.refresh,
+      // The sidebar's open-criticals count may have moved.
+      signals: true,
+      undone:
+        kind === 'acknowledge'
+          ? `Undone — ${target.humanId} is ${target.verified ?? 'unverified'} again`
+          : `Undone — ${target.humanId} is ${statusWords(target.status)} again`,
+    });
+  };
+  return { act, pending };
+}
+
+const VERDICT_ICON: Record<FindingVerdict, ReactNode> = {
+  acknowledge: <Eye />,
+  fixed: <CircleCheck />,
+  reopen: <RotateCcw />,
+  'wont-fix': <Ban />,
 };
+
+/**
+ * The verdict controls: buttons with their keys beside the record on a wide screen, and the
+ * `@d3cloud/ui` ActionBar — four 44px targets at the foot of the screen — on a phone. `onVerdict`
+ * is called with Won't fix too; the caller asks for the reason.
+ */
+export function FindingVerdicts({
+  finding,
+  pending,
+  onVerdict,
+}: {
+  finding: VerdictTarget;
+  pending: boolean;
+  onVerdict: (kind: FindingVerdict) => void;
+}) {
+  return (
+    <>
+      <div className="fm-triage__verdicts" role="group" aria-label={`Verdicts on ${finding.humanId}`}>
+        {VERDICTS.map((verdict) => (
+          <Button
+            key={verdict.kind}
+            size="sm"
+            variant={verdict.kind === 'fixed' && finding.status === 'open' ? 'primary' : 'secondary'}
+            {...(verdict.kind === 'fixed' && finding.status === 'open' ? {} : { pressed: verdictPressed(verdict.kind, finding) })}
+            disabled={!verdictApplies(verdict.kind, finding)}
+            loading={pending}
+            onClick={() => {
+              onVerdict(verdict.kind);
+            }}
+          >
+            {verdict.label} <KeyHint k={verdict.key} />
+          </Button>
+        ))}
+      </div>
+      <ActionBar aria-label={`Verdicts on ${finding.humanId}`} className="fm-triage__actionbar">
+        {VERDICTS.map((verdict) => (
+          <ActionBar.Item
+            key={verdict.kind}
+            icon={VERDICT_ICON[verdict.kind]}
+            label={verdict.label}
+            disabled={pending || !verdictApplies(verdict.kind, finding)}
+            {...(verdictPressed(verdict.kind, finding) ? { 'aria-pressed': true } : {})}
+            onClick={() => {
+              onVerdict(verdict.kind);
+            }}
+          />
+        ))}
+      </ActionBar>
+    </>
+  );
+}
 
 /** The fix verdict, in the words a person needs. `unverified` is never dressed as anything else. */
 function FixVerdict({ fix }: { fix: Detail['fix'] }) {
@@ -76,12 +257,49 @@ function FixVerdict({ fix }: { fix: Detail['fix'] }) {
   );
 }
 
-export function FindingDetail({ humanId }: { humanId: string }) {
+/**
+ * One finding's record — the cards below its heading — loaded by ID. The standalone page and the
+ * triage split view both draw this, so a finding reads the same wherever it is ruled on.
+ *
+ * `refreshKey` changing re-reads it in place (after a verdict made from the list's keys); `onChanged`
+ * is told when a verdict made here, or its undo, lands.
+ */
+export function FindingRecord({
+  humanId,
+  refreshKey = 0,
+  embedded = false,
+  onChanged,
+  position,
+}: {
+  humanId: string;
+  refreshKey?: number;
+  embedded?: boolean;
+  onChanged?: () => void;
+  /** "1 of 9", for the split view's heading. */
+  position?: string;
+}) {
   const { state, refresh } = useAsync(() => foreman.finding(humanId), [humanId]);
   const recurrences = useAsync(() => foreman.recurrences(humanId), [humanId]);
+  const verdict = useFindingVerdict();
+  const [asking, setAsking] = useState(false);
+
+  // A verdict made from the list (a key) re-reads the record in place, never back to a skeleton.
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    refresh();
+  }, [refreshKey, refresh]);
+
+  const changed = () => {
+    refresh();
+    onChanged?.();
+  };
 
   if (state.status === 'loading') {
-    return (
+    return embedded ? <Skeleton lines={10} /> : (
       <Page>
         <Skeleton lines={10} />
       </Page>
@@ -89,35 +307,52 @@ export function FindingDetail({ humanId }: { humanId: string }) {
   }
 
   if (state.status === 'error') {
-    return (
-      <Page>
-        <EmptyState
-          kind={state.notFound ? 'no-results' : 'error'}
-          heading={state.notFound ? `Nothing here is called ${humanId}` : 'That finding did not load'}
-        >
-          {state.notFound ? 'Check the ID, or find it in the inbox.' : state.message}
-        </EmptyState>
-      </Page>
+    const empty = (
+      <EmptyState
+        kind={state.notFound ? 'no-results' : 'error'}
+        heading={state.notFound ? `Nothing here is called ${humanId}` : 'That finding did not load'}
+      >
+        {state.notFound ? 'Check the ID, or find it in the inbox.' : state.message}
+      </EmptyState>
     );
+    return embedded ? empty : <Page>{empty}</Page>;
   }
 
   const finding = state.value;
+  const target: VerdictTarget = {
+    humanId: finding.humanId,
+    project: finding.project.code,
+    status: finding.status,
+    verified: finding.verified,
+  };
+  const onVerdict = (kind: FindingVerdict) => {
+    if (kind === 'wont-fix') {
+      setAsking(true);
+      return;
+    }
+    verdict.act(target, kind, { refresh: changed });
+  };
 
-  return (
-    <Page>
-      <PageHeader
-        title={finding.title}
-        description={`${finding.humanId} · ${finding.project.code}`}
-        actions={
-          <>
-            <Badge tone={SEVERITY_TONE[finding.severity] ?? 'neutral'}>{finding.severity}</Badge>
-            <Badge tone={finding.status === 'open' ? 'attention' : 'neutral'}>
-              {finding.status}
-            </Badge>
-            <OpenInConstellation path={`item/${finding.humanId}`} />
-            <HistoryDrawer entity={finding.humanId} onUndone={refresh} />
-          </>
-        }
+  const badges = (
+    <>
+      <Badge tone={severityTone(finding.severity)}>{finding.severity}</Badge>
+      <Badge tone={findingStatusTone(finding.status)}>{statusWords(finding.status)}</Badge>
+    </>
+  );
+
+  const record = (
+    <>
+      <FindingVerdicts finding={target} pending={verdict.pending} onVerdict={onVerdict} />
+      <ReasonDialog
+        open={asking}
+        onOpenChange={setAsking}
+        title={`Won’t fix ${finding.humanId}`}
+        description="Say why. The reason is kept with the recommendation it declines, and the verdict can be undone."
+        label="Why it will not be fixed"
+        confirm="Mark won’t fix"
+        onSubmit={(reason) => {
+          verdict.act(target, 'wont-fix', { reason, refresh: changed });
+        }}
       />
 
       {finding.verified === 'confirmed' ? null : (
@@ -255,6 +490,50 @@ export function FindingDetail({ humanId }: { humanId: string }) {
           </Stack>
         )}
       </Card>
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <Stack gap="16" className="fm-triage__record">
+        <div className="fm-triage__meta">
+          {badges}
+          <Link href={`/findings/${finding.humanId}`}>
+            <code>{finding.humanId}</code>
+          </Link>
+          <span className="fm-muted">
+            {finding.project.name}
+            {finding.lenses.length === 0 ? '' : ` · ${finding.lenses.join(', ')}`}
+          </span>
+          {position === undefined ? null : <span className="fm-muted fm-triage__position">{position}</span>}
+        </div>
+        <h2 className="fm-triage__title">{finding.title}</h2>
+        <Cluster gap="8">
+          <HistoryDrawer entity={finding.humanId} onUndone={changed} />
+        </Cluster>
+        {record}
+      </Stack>
+    );
+  }
+
+  return (
+    <Page>
+      <PageHeader
+        title={finding.title}
+        description={`${finding.humanId} · ${finding.project.code}`}
+        actions={
+          <>
+            {badges}
+            <OpenInConstellation path={`item/${finding.humanId}`} />
+            <HistoryDrawer entity={finding.humanId} onUndone={changed} />
+          </>
+        }
+      />
+      {record}
     </Page>
   );
+}
+
+export function FindingDetail({ humanId }: { humanId: string }) {
+  return <FindingRecord humanId={humanId} />;
 }

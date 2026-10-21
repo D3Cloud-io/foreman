@@ -14,12 +14,14 @@ import {
   type GroupAccent,
   type GroupDetail,
   type GroupListing,
+  type ProposedAttributionsResponse,
   type Screen,
   type ScreenDetail,
   type ScreenProposalCreate,
   type ScreenVerdict,
   type ScreenVerdictKind,
   type ScreenVersion,
+  type TasksAcrossResponse,
 } from '@foreman/shared';
 
 export class ApiError extends Error {
@@ -1135,6 +1137,19 @@ export const foreman = {
     api.post<AttributionWrite>(`/api/projects/${code}/attributions/${sha}/confirm`, { task }),
   rejectAttribution: (code: string, sha: string, task: string) =>
     api.post<AttributionWrite>(`/api/projects/${code}/attributions/${sha}/reject`, { task }),
+  /** Attributions nobody has ruled on, across a scope, newest first (FRM-T-18.7). */
+  attributionsAcross: (group: string | null = null) =>
+    api.get<ProposedAttributionsResponse>(
+      `/api/attributions?${new URLSearchParams({ status: 'proposed', limit: '200', ...(group === null ? {} : { group }) }).toString()}`,
+    ),
+  /** Tasks in one status across a scope — blocked unless asked otherwise (FRM-T-18.7). */
+  tasksAcross: (status = 'blocked', group: string | null = null) =>
+    api.get<TasksAcrossResponse>(
+      `/api/tasks?${new URLSearchParams({ status, limit: '200', ...(group === null ? {} : { group }) }).toString()}`,
+    ),
+  /** A project's decisions, for the drift a decision accepted (FRM-T-18.7). */
+  decisionsUpTo: (code: string, limit = 200) =>
+    api.get<Page<DecisionRow>>(`/api/projects/${code}/decisions?limit=${String(limit)}`),
   ci: (code: string) => api.get<CiState>(`/api/projects/${code}/ci`),
   cadence: (code: string) => api.get<Cadence>(`/api/projects/${code}/cadence`),
   deployments: (code: string) => api.get<Page<DeploymentRow>>(`/api/projects/${code}/deployments`),

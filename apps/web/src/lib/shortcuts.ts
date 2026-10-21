@@ -123,6 +123,58 @@ export function shortcutFor(
   return null;
 }
 
+// ─── The triage keys on /findings (FRM-T-18.7) ─────────────────────────────
+
+/** What a key means on the triage surface. Each acts on the selected row, or the bulk selection. */
+export type TriageKey =
+  | 'acknowledge'
+  | 'fixed'
+  | 'reopen'
+  | 'wont-fix'
+  | 'confirm'
+  | 'reject'
+  | 'next'
+  | 'previous'
+  | 'toggle'
+  | 'clear'
+  | 'tab-1'
+  | 'tab-2'
+  | 'tab-3'
+  | 'tab-4';
+
+const TRIAGE_KEYS: Readonly<Record<string, TriageKey>> = {
+  a: 'acknowledge',
+  f: 'fixed',
+  r: 'reopen',
+  w: 'wont-fix',
+  y: 'confirm',
+  n: 'reject',
+  j: 'next',
+  k: 'previous',
+  x: 'toggle',
+  Escape: 'clear',
+  '1': 'tab-1',
+  '2': 'tab-2',
+  '3': 'tab-3',
+  '4': 'tab-4',
+};
+
+/**
+ * What a key press means on `/findings`, if anything.
+ *
+ * A verdict is a single letter, so it is only ever read **outside a text field and while no dialog
+ * is open**: a reason typed into "Won't fix" must not reopen the finding at its first `r`, and a key
+ * pressed while a dialog asks something must not answer a different question behind it. No
+ * modifier either — ⌘R is the browser's reload, not Reopen — and a held key acts once.
+ */
+export function triageKeyFor(event: KeyLike, env: { dialogOpen: boolean }): TriageKey | null {
+  if (event.defaultPrevented === true || event.isComposing === true || event.keyCode === 229) return null;
+  if (event.repeat === true || env.dialogOpen) return null;
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return null;
+  if (isTextField(event.target)) return null;
+  return TRIAGE_KEYS[event.key] ?? null;
+}
+
 // ─── What the sheet lists ──────────────────────────────────────────────────
 
 export interface ShortcutRow {
@@ -135,7 +187,10 @@ export interface ShortcutGroup {
   readonly rows: readonly ShortcutRow[];
 }
 
-/** Everything that is bound, and nothing that is not (the mockup's greyed rows are not drawn). */
+/**
+ * Everything that is bound, and nothing that is not (the mockup's greyed rows are not drawn). The
+ * triage keys act only on `/findings` (FRM-T-18.7), and the group says so in its title.
+ */
 export const SHORTCUTS: readonly ShortcutGroup[] = [
   {
     title: 'Anywhere',
@@ -143,6 +198,21 @@ export const SHORTCUTS: readonly ShortcutGroup[] = [
       { keys: [MOD_KEY, 'K'], does: 'Open the command palette' },
       { keys: ['/'], does: 'Open the command palette, outside a text field' },
       { keys: ['?'], does: 'Show this sheet, outside a text field' },
+    ],
+  },
+  {
+    title: 'On Findings',
+    rows: [
+      { keys: ['1', '2', '3', '4'], does: 'Show Findings, Drift, Review or Blocked' },
+      { keys: ['j', 'k'], does: 'Select the next or the previous row' },
+      { keys: ['x'], does: 'Add the finding to a bulk selection, or take it out' },
+      { keys: ['a'], does: 'Acknowledge the finding' },
+      { keys: ['f'], does: 'Mark the finding fixed' },
+      { keys: ['r'], does: 'Reopen the finding' },
+      { keys: ['w'], does: "Won't fix — asks for a reason first" },
+      { keys: ['y'], does: 'Confirm the proposed attribution' },
+      { keys: ['n'], does: 'Reject the proposed attribution' },
+      { keys: ['esc'], does: 'Clear the bulk selection' },
     ],
   },
   {

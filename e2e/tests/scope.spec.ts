@@ -69,11 +69,14 @@ async function seed(page: Page): Promise<void> {
   }
 }
 
-/** The Project column of every row in the findings table. */
+/** The triage list on /findings (FRM-T-18.7): a list of rows beside the selected record. */
+const findingList = (page: Page) => page.getByRole('region', { name: 'Findings', exact: true });
+
+/** The project of every row in the findings list. */
 async function findingProjects(page: Page): Promise<string[]> {
-  const table = page.getByRole('table');
-  await expect(table).toBeVisible();
-  return (await table.locator('tbody tr td:nth-child(2)').allTextContents()).map((text) => text.trim());
+  const list = findingList(page);
+  await expect(list).toBeVisible();
+  return (await list.locator('.fm-triage__project').allTextContents()).map((text) => text.trim());
 }
 
 test.describe('the group scope', () => {
@@ -95,13 +98,13 @@ test.describe('the group scope', () => {
   }) => {
     await page.goto(`/findings?group=${dormice.slug}`);
 
-    await expect(page.getByText(`Open findings across ${DORMICE}, worst first.`)).toBeVisible();
+    await expect(page.getByText(`Everything in ${DORMICE} waiting on a verdict from you, worst first.`)).toBeVisible();
     await expect(page.getByRole('status').filter({ hasText: `Viewing ${DORMICE}` })).toBeVisible();
     await expect(page.getByRole('button', { name: `Scope: ${DORMICE}. Change scope` })).toBeVisible();
 
-    await expect(page.getByText(findingTitle(IN_DORMICE[0]))).toBeVisible();
-    await expect(page.getByText(findingTitle(IN_DORMICE[1]))).toBeVisible();
-    await expect(page.getByText(findingTitle(IN_CLOUD))).toHaveCount(0);
+    await expect(findingList(page).getByText(findingTitle(IN_DORMICE[0]))).toBeVisible();
+    await expect(findingList(page).getByText(findingTitle(IN_DORMICE[1]))).toBeVisible();
+    await expect(findingList(page).getByText(findingTitle(IN_CLOUD))).toHaveCount(0);
 
     // Every row, not only the ones this spec made: nothing from outside Dormice gets in.
     const projects = await findingProjects(page);
@@ -128,8 +131,8 @@ test.describe('the group scope', () => {
 
     await menu.getByRole('menuitemradio', { name: new RegExp(`^${CLOUD}`) }).click();
     await expect(page).toHaveURL(new RegExp(`/findings\\?group=${cloud.slug}$`));
-    await expect(page.getByText(findingTitle(IN_CLOUD))).toBeVisible();
-    await expect(page.getByText(findingTitle(IN_DORMICE[0]))).toHaveCount(0);
+    await expect(findingList(page).getByText(findingTitle(IN_CLOUD))).toBeVisible();
+    await expect(findingList(page).getByText(findingTitle(IN_DORMICE[0]))).toHaveCount(0);
 
     // All projects takes the scope out of the URL, and everybody's findings come back. The menu
     // has finished closing first: Radix drops a click on its trigger that lands mid-exit.
@@ -137,8 +140,8 @@ test.describe('the group scope', () => {
     await page.getByRole('button', { name: `Scope: ${CLOUD}. Change scope` }).click();
     await page.getByRole('menu').getByRole('menuitemradio', { name: /All projects/ }).click();
     await expect(page).toHaveURL(/\/findings$/);
-    await expect(page.getByText(findingTitle(IN_CLOUD))).toBeVisible();
-    await expect(page.getByText(findingTitle(IN_DORMICE[0]))).toBeVisible();
+    await expect(findingList(page).getByText(findingTitle(IN_CLOUD))).toBeVisible();
+    await expect(findingList(page).getByText(findingTitle(IN_DORMICE[0]))).toBeVisible();
   });
 
   test('Home scoped to Dormice shows only Dormice, says so, and Show all goes back', async ({ page }) => {
@@ -182,9 +185,10 @@ test.describe('the group scope', () => {
 
     await main.getByRole('link', { name: /Critical \+ high/ }).click();
     await expect(page).toHaveURL(new RegExp(`/findings\\?group=${dormice.slug}$`));
-    await expect(page.getByText(findingTitle(IN_DORMICE[0]))).toBeVisible();
-    await expect(page.getByText(findingTitle(IN_CLOUD))).toHaveCount(0);
-    // A finding's page is not scoped: its link drops the scope.
+    await expect(findingList(page).getByText(findingTitle(IN_DORMICE[0]))).toBeVisible();
+    await expect(findingList(page).getByText(findingTitle(IN_CLOUD))).toHaveCount(0);
+    // A finding's page is not scoped: its link — on the selected record — drops the scope.
+    await findingList(page).getByRole('button', { name: new RegExp(findingTitle(IN_DORMICE[0])) }).click();
     await expect(page.getByRole('link', { name: findingId.get(IN_DORMICE[0]) ?? '' })).toHaveAttribute(
       'href',
       `/findings/${findingId.get(IN_DORMICE[0]) ?? ''}`,
@@ -224,12 +228,12 @@ test.describe('the group scope', () => {
     await page.getByRole('menu').getByRole('menuitemradio', { name: new RegExp(`^${CLOUD}`) }).click();
     await expect(page).toHaveURL(new RegExp(`/findings\\?group=${cloud.slug}&severity=high$`));
     await expect(page.getByRole('combobox', { name: 'Severity' })).toContainText('High');
-    await expect(page.getByText(findingTitle(IN_CLOUD))).toBeVisible();
+    await expect(findingList(page).getByText(findingTitle(IN_CLOUD))).toBeVisible();
 
     // And a filtered, scoped inbox is a link.
     await page.goto(`/findings?group=${cloud.slug}&severity=low`);
     await expect(page.getByRole('combobox', { name: 'Severity' })).toContainText('Low');
-    await expect(page.getByText(findingTitle(IN_CLOUD))).toHaveCount(0);
+    await expect(findingList(page).getByText(findingTitle(IN_CLOUD))).toHaveCount(0);
   });
 
   test('a scoped search for an ID outside the scope says where it is, never "Nothing matches"', async ({ page }) => {

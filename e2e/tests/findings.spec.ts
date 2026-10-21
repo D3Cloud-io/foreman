@@ -27,11 +27,15 @@ test.describe('the findings inbox (S-05, FRM-REQ-120)', () => {
     await expect(page.getByRole('heading', { name: 'Findings' })).toBeVisible();
 
     // More than one project in one list: the whole point, and the thing the vault could not do.
-    const projects = await page.getByRole('cell', { name: /^(EXMP|NBR)$/ }).allTextContents();
+    const list = page.getByRole('list', { name: 'Findings' });
+    await expect(list).toBeVisible();
+    const projects = (await list.locator('.fm-triage__project').allTextContents()).filter((code) =>
+      /^(EXMP|NBR)$/.test(code),
+    );
     expect(new Set(projects).size).toBeGreaterThan(1);
 
     // Ranked: the first row is the worst thing outstanding anywhere.
-    const first = page.getByRole('row').nth(1);
+    const first = list.getByRole('listitem').first();
     await expect(first.getByText('critical', { exact: true })).toBeVisible();
   });
 
@@ -40,7 +44,12 @@ test.describe('the findings inbox (S-05, FRM-REQ-120)', () => {
     await page.goto('/findings?severity=critical');
 
     await expect(page.getByRole('combobox', { name: 'Severity' })).toContainText('Critical');
-    const severities = await page.getByRole('cell', { name: /^(critical|high|medium|low)$/ }).allTextContents();
+    await expect(page.getByRole('list', { name: 'Findings' })).toBeVisible();
+    const severities = await page
+      .getByRole('list', { name: 'Findings' })
+      .locator('.fm-triage__line > :first-child')
+      .allTextContents();
+    expect(severities.length).toBeGreaterThan(0);
     expect(severities.every((s) => s === 'critical')).toBe(true);
   });
 
@@ -51,8 +60,9 @@ test.describe('the findings inbox (S-05, FRM-REQ-120)', () => {
     await page.goto('/findings?lens=accessibility');
 
     // "Is this accessibility problem true anywhere else" is the question the inbox exists for.
-    await expect(page.getByRole('cell', { name: 'accessibility' }).first()).toBeVisible();
-    await expect(page.getByRole('cell', { name: 'correctness' })).toHaveCount(0);
+    const lenses = page.getByRole('list', { name: 'Findings' }).locator('.fm-triage__sub');
+    await expect(lenses.filter({ hasText: 'accessibility' }).first()).toBeVisible();
+    await expect(lenses.filter({ hasText: 'correctness' })).toHaveCount(0);
   });
 
   test('shows open findings by default, not an archive', async ({ page }) => {
