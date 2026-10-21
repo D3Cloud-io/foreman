@@ -36,6 +36,7 @@ import { SegmentBar, StatCard } from '../ui/viz';
 import { breakdown, CRITICAL_PLUS_HIGH, plural, readAcross, readValue } from '../ui/status';
 import { SERIES } from '../ui/tone';
 import { CATEGORIES } from './DriftView';
+import { FirstRun as SetUp, labelSamples, realRows, sampleRows } from './FirstRun';
 
 /**
  * Home — the portfolio ledger (17.01, FRM-REQ-224, FRM-REQ-228, FRM-REQ-245, FRM-T-18.6).
@@ -51,6 +52,10 @@ import { CATEGORIES } from './DriftView';
  *
  * Membership and order come from `GET /api/groups`; the figures from the portfolio, joined by code.
  * With no group yet, the projects stand in one grid under a card offering to make one (17.14).
+ *
+ * Seeded samples (EXMP, NBR) are counted in none of the figures, the Needs-you strip or the work
+ * chart, and are labelled where they are listed. With no real project, Home is the setup checklist
+ * (`FirstRun.tsx`, FRM-T-18.9) rather than a dashboard of zeroes that reads as all clear.
  */
 
 /**
@@ -399,7 +404,8 @@ export function Home({ search }: { search: string }) {
   }
 
   const grouped = portfolio.state.value;
-  const rows = grouped.items;
+  // Every figure is over real projects: a sample was seeded, not planned (FRM-T-18.9).
+  const rows = realRows(grouped.items);
   // Only the descriptions come from here: the portfolio's sections carry none. Home renders
   // without them rather than waiting on a second read.
   const listing = groups.state.status === 'ready' ? groups.state.value : null;
@@ -410,9 +416,31 @@ export function Home({ search }: { search: string }) {
     setCollapsed((current) => ({ ...current, [key]: next }));
   };
 
+  const labelled = (sections: Section<PortfolioRow>[]) =>
+    sections.map((section) => ({ ...section, rows: labelSamples(section.rows) }));
+
+  if (scope === null && rows.length === 0) {
+    // First run: nothing real to measure yet, so the checklist, not a page of "clean" zeroes.
+    const samples = sampleRows(grouped.items);
+    return frame(
+      'Set Foreman up. Home shows where each project stands once there is something real to measure.',
+      <Stack gap="32">
+        <SetUp rows={grouped.items} onChanged={portfolio.refresh} />
+        {samples.length > 0 && (
+          <section aria-labelledby="fm-home-samples" className="fm-gsection fm-gsection--quiet">
+            <h2 id="fm-home-samples" className="fm-gsection__title">
+              Samples
+            </h2>
+            <Ledger rows={labelSamples(samples)} />
+          </section>
+        )}
+      </Stack>,
+    );
+  }
+
   if (scope !== null) {
     // Scoped (17.02): only that family's section — or the ungrouped — and the figures for it.
-    const sections = portfolioSections(grouped, descriptionsOf(listing));
+    const sections = labelled(portfolioSections(grouped, descriptionsOf(listing)));
     const shown = new Set(sections.map((section) => section.key));
     return frame(
       `${plural(rows.length, 'project', 'projects')}${phrase === null ? '' : ` in ${phrase}`}, and what needs looking at.`,
@@ -454,7 +482,10 @@ export function Home({ search }: { search: string }) {
           </EmptyState>
         ) : (
           <>
-            <Ledger rows={[...rows].sort((a, b) => a.name.localeCompare(b.name))} anchor={CI_ANCHOR_ID} />
+            <Ledger
+              rows={labelSamples([...grouped.items].sort((a, b) => a.name.localeCompare(b.name)))}
+              anchor={CI_ANCHOR_ID}
+            />
             <WorkBelow rows={rows} />
           </>
         )}
@@ -462,7 +493,7 @@ export function Home({ search }: { search: string }) {
     );
   }
 
-  const sections = portfolioSections(grouped, descriptionsOf(listing)).filter(
+  const sections = labelled(portfolioSections(grouped, descriptionsOf(listing))).filter(
     // An empty Ungrouped says nothing worth a heading; an empty group is still a family.
     (section) => section.group !== null || section.rows.length > 0,
   );
