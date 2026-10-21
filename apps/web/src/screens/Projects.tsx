@@ -1,21 +1,38 @@
-import { useState } from 'react';
+import { useState, type SyntheticEvent } from 'react';
 import {
+  Alert,
   Button,
   Checkbox,
   Cluster,
   EmptyState,
+  FormActions,
+  FormField,
+  Input,
   Link,
+  Modal,
   Page,
   PageHeader,
   SearchField,
   Select,
   Skeleton,
   Stack,
+  Textarea,
 } from '@d3cloud/ui';
 import { Check, Minus } from 'lucide-react';
+import { ProjectCode, type GroupListing } from '@foreman/shared';
 import { ScopeNotice, UnknownScope } from '../components/ScopeSwitcher';
 import { foreman, type PortfolioRow } from '../lib/api';
-import { matchScope, scopeOf, scopeOptions, UNGROUPED as UNGROUPED_SCOPE, useScope } from '../lib/scope';
+import { useMutate } from '../lib/mutate';
+import { replaceLocation } from '../lib/router';
+import {
+  matchScope,
+  scopeOf,
+  scopeOptions,
+  UNGROUPED as UNGROUPED_SCOPE,
+  useScope,
+  withParams,
+} from '../lib/scope';
+import { Snippet } from './ConnectAgent';
 import { useAsync } from '../lib/useAsync';
 import { descriptionsOf, portfolioSections, sectionSummary } from '../lib/groups';
 import { AccentDot, MoveToGroupDialog, useMoveToast } from '../ui/groups';
@@ -37,6 +54,12 @@ import { ciTone, lifecycleTone } from '../ui/tone';
  *
  * One `<table>` with a `<tbody>` per group rather than a library Table per group: the library's
  * Table has no row groups, and a table per group would repeat its header row once a family.
+ *
+ * The header has **Import…** and **New project** (FRM-T-18.9, FRM-REQ-248): import is the CLI it
+ * is, composed for the operator to copy — nothing here sends a path to the server — and a new
+ * project's code is typed, checked against the shared rule, and said to be permanent (ADR-008).
+ * Either opens from the address (`?new=1`, `?import=1`), so the Home checklist can link to it. A
+ * seeded sample is labelled in its row.
  */
 
 /** The Select's value for every project. Never sent: an unscoped read names no group. */
@@ -60,7 +83,13 @@ export function Projects({ search }: { search: string }) {
   // Projects narrowed to Dormice is the same set as Home and Findings narrowed to it. Every state
   // is header, scope bar, body, so the switcher keeps focus while a new scope loads.
   const scope = scopeOf(search);
-  const { setScope } = useScope();
+  const { setScope, path } = useScope();
+  const params = new URLSearchParams(search);
+  const creating = params.get('new') === '1';
+  const importing = params.get('import') === '1';
+  const openPanel = (key: 'new' | 'import', open: boolean) => {
+    replaceLocation(withParams(`${path}${search}`, { [key]: open ? '1' : null }));
+  };
   const portfolio = useAsync(() => foreman.portfolio(scope), [scope]);
   const groups = useAsync(() => foreman.groups(), []);
   const [query, setQuery] = useState('');
@@ -81,6 +110,14 @@ export function Projects({ search }: { search: string }) {
       title="Projects"
       description="Every project Foreman tracks, by group, and where each one actually is."
       {...(ready ? { count: rows.length, countNoun: { one: 'project', other: 'projects' } } : {})}
+      actions={
+        <Cluster gap="8" align="center">
+          <Button onClick={() => { openPanel('import', true); }}>Import…</Button>
+          <Button variant="primary" onClick={() => { openPanel('new', true); }}>
+            New project
+          </Button>
+        </Cluster>
+      }
     />
   );
 
@@ -200,7 +237,7 @@ export function Projects({ search }: { search: string }) {
 
         {rows.length === 0 && scope === null ? (
           <EmptyState kind="empty" heading="No projects yet">
-            Import the vault, or convert a project idea, to start.
+            Start one with New project, or import one from the archived vault with Import….
           </EmptyState>
         ) : sections.length === 0 && needle === '' && onlyUngrouped ? (
           <EmptyState kind="empty" heading="No project is ungrouped">
@@ -285,6 +322,11 @@ export function Projects({ search }: { search: string }) {
                           <a className="fm-gtable__name" href={`/projects/${row.code}`}>
                             {row.name}
                           </a>
+                          {row.sample === true && (
+                            <span className="fm-sample-label">
+                              <Pill tone="neutral">Sample</Pill>
+                            </span>
+                          )}
                           <span className="fm-muted fm-gtable__sub">
                             {row.lifecycle} · {phaseLabel(row)}
                           </span>
@@ -331,7 +373,233 @@ export function Projects({ search }: { search: string }) {
           toastMove(result, codes, targetName, origin);
         }}
       />
+
+      <NewProjectDialog
+        open={creating}
+        onOpenChange={(open) => { openPanel('new', open); }}
+        listing={listing}
+        scope={scope}
+        taken={rows}
+        onCreated={reload}
+      />
+      <ImportDialog open={importing} onOpenChange={(open) => { openPanel('import', open); }} />
     </Page>
+  );
+}
+
+// ─── New project (FRM-T-18.9) ───────────────────────────────────────────────
+
+/** The Select's value for no group. */
+const NO_GROUP = 'none';
+
+/**
+ * What is wrong with a typed code, or null when nothing is — the shared rule (`ProjectCode`), said
+ * the way a person fixes it. Empty says nothing yet; the button is what waits.
+ */
+export function codeProblem(code: string, taken: readonly Pick<PortfolioRow, 'code' | 'name'>[]): string | null {
+  if (code === '') return null;
+  const owner = taken.find((row) => row.code === code);
+  if (owner !== undefined) return `${code} is ${owner.name}’s code already.`;
+  const parsed = ProjectCode.safeParse(code);
+  if (parsed.success) return null;
+  const upper = code.toUpperCase();
+  if (upper !== code && ProjectCode.safeParse(upper).success) return `Upper case only. Did you mean ${upper}?`;
+  if (code.length < 2) return 'At least 2 characters.';
+  return parsed.error.issues[0]?.message ?? 'Not a project code.';
+}
+
+/** The IDs a code will stamp, so its permanence is concrete. */
+export function stampedIds(code: string): string {
+  return `${code}-REQ-001, ${code}-ADR-001, ${code}-T-1.1`;
+}
+
+/** The group a new project defaults to: the scope you are in, else none (`lib/scope.ts`). */
+export function defaultGroup(scope: string | null, listing: GroupListing): string {
+  return matchScope(scope, scopeOptions(listing))?.humanId ?? NO_GROUP;
+}
+
+function NewProjectDialog({
+  open,
+  onOpenChange,
+  listing,
+  scope,
+  taken,
+  onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  listing: GroupListing;
+  scope: string | null;
+  taken: readonly PortfolioRow[];
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [pitch, setPitch] = useState('');
+  const [group, setGroup] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { mutate, pending } = useMutate();
+
+  const chosen = group ?? defaultGroup(scope, listing);
+  const problem = codeProblem(code, taken);
+  const valid = code !== '' && problem === null && name.trim() !== '';
+  const groupName = listing.items.find((item) => item.humanId === chosen)?.name ?? null;
+
+  const reset = () => {
+    setName('');
+    setCode('');
+    setPitch('');
+    setGroup(null);
+    setError(null);
+  };
+
+  const submit = (event: SyntheticEvent) => {
+    event.preventDefault();
+    if (!valid) return;
+    setError(null);
+    void mutate({
+      subject: code,
+      run: () =>
+        foreman.createProject({
+          code,
+          name: name.trim(),
+          ...(pitch.trim() === '' ? {} : { pitch: pitch.trim() }),
+          group: chosen === NO_GROUP ? null : chosen,
+        }),
+      message: (created) => `Created ${created.code} — ${created.name}${groupName === null ? '' : ` in ${groupName}`}`,
+      refresh: onCreated,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (outcome.ok) {
+        reset();
+        onOpenChange(false);
+      } else if (outcome.inFlight !== true) {
+        setError(outcome.message);
+      }
+    });
+  };
+
+  return (
+    <Modal
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) reset();
+        onOpenChange(next);
+      }}
+      title="New project"
+      description={
+        groupName === null
+          ? 'In no group. It starts as planned.'
+          : `Into ${groupName}${scope === null ? '' : ', the scope you are in'}. It starts as planned.`
+      }
+    >
+      <form onSubmit={submit}>
+        <Stack gap="16">
+          {error !== null && (
+            <Alert tone="danger" title="It was not created" dynamic>
+              {error}
+            </Alert>
+          )}
+          <FormField label="Name">
+            <Input name="name" value={name} maxLength={200} onChange={(e) => { setName(e.target.value); }} />
+          </FormField>
+          <FormField
+            label="Code"
+            help="2–8 upper-case letters or digits, letter first. Type it yourself; it is never derived from the name."
+            {...(problem === null ? {} : { error: problem })}
+          >
+            <Input
+              name="code"
+              className="fm-code-input"
+              value={code}
+              maxLength={8}
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => { setCode(e.target.value.trim()); }}
+            />
+          </FormField>
+          <Alert tone="warning" title="Immutable once created">
+            Every ID in this project starts with its code, forever
+            {code !== '' && problem === null ? `: ${stampedIds(code)}` : ''}. It cannot be renamed later.
+          </Alert>
+          <FormField label="Group" help="Defaults to the scope you are in. Ungrouped is an option.">
+            <Select
+              aria-label="Group"
+              value={chosen}
+              onValueChange={setGroup}
+              options={[
+                ...listing.items.map((item) => ({ value: item.humanId, label: item.name })),
+                { value: NO_GROUP, label: 'No group (Ungrouped)' },
+              ]}
+            />
+          </FormField>
+          <FormField label="Pitch" optional>
+            <Textarea name="pitch" value={pitch} maxLength={2000} onChange={(e) => { setPitch(e.target.value); }} />
+          </FormField>
+          <p className="fm-muted">
+            Plan it next with <code>/plan-project {name.trim() === '' ? '<name>' : name.trim()}</code> in Claude Code.
+          </p>
+          <FormActions>
+            <Button type="button" onClick={() => { reset(); onOpenChange(false); }}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={!valid} loading={pending}>
+              {code !== '' && problem === null ? `Create ${code}` : 'Create'}
+            </Button>
+          </FormActions>
+        </Stack>
+      </form>
+    </Modal>
+  );
+}
+
+// ─── Import, as the CLI it is (FRM-T-18.9) ──────────────────────────────────
+
+/**
+ * The import lines: the dry run first — not writing is the importer's default — then the same with
+ * `--write`. Composed here and copied; the server never reads a filesystem path from a web request.
+ */
+export function importCommands(vault: string, folder: string): { dryRun: string; write: string } {
+  const dryRun = `pnpm --filter foreman-server run import -- --path "${vault === '' ? '<vault>' : vault}" --only "${
+    folder === '' ? '<Folder>' : folder
+  }"`;
+  return { dryRun, write: `${dryRun} --write` };
+}
+
+function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const [vault, setVault] = useState('');
+  const [folder, setFolder] = useState('');
+  const commands = importCommands(vault.trim(), folder.trim());
+  return (
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Import from the archived vault"
+      description="Import runs on the host, in a shell, from the Foreman checkout. The console shows the command; Foreman’s server never reads a path from a web request."
+    >
+      <Stack gap="16">
+        <FormField label="Vault" help="The vault's root folder on the host.">
+          <Input name="vault" value={vault} placeholder="../d3cloud-archive/D3 Cloud Vault" onChange={(e) => { setVault(e.target.value); }} />
+        </FormField>
+        <FormField label="Project folder" help="The folder of the one project to import, by its own name.">
+          <Input name="folder" value={folder} placeholder="Kardashev" onChange={(e) => { setFolder(e.target.value); }} />
+        </FormField>
+        <Stack gap="4">
+          <span className="fm-part__label">1 · Dry run — writes nothing, and accounts for every file</span>
+          <Snippet label="the import dry run" text={commands.dryRun} />
+        </Stack>
+        <Stack gap="4">
+          <span className="fm-part__label">2 · Write — once the report has no warning</span>
+          <Snippet label="the import with --write" text={commands.write} />
+        </Stack>
+        <FormActions>
+          <Button variant="primary" onClick={() => { onOpenChange(false); }}>
+            Done
+          </Button>
+        </FormActions>
+      </Stack>
+    </Modal>
   );
 }
 

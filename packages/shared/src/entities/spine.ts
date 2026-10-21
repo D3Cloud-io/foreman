@@ -36,6 +36,12 @@ export const Project = z
     groupId: Uuid.nullable(),
     /** Its place within its group, or among the ungrouped; ties are broken by code. */
     groupPosition: z.number().int(),
+    /**
+     * Seeded to show what a full plan looks like — EXMP and NBR — and never real work (FRM-T-18.9).
+     * Read-only: the example seed sets it, and no create or update shape takes it, so neither the
+     * API nor `foreman_create` can make a real project a sample or a sample real.
+     */
+    sample: z.boolean(),
   })
   .extend(Timestamps.shape);
 export type Project = z.infer<typeof Project>;

@@ -228,6 +228,11 @@ export interface PortfolioRow {
   lastActivityAt: string | null;
   /** Its group, or null for Ungrouped (FRM-T-17.2). */
   group: ProjectGroupRef | null;
+  /**
+   * Seeded to show a full plan, not real work (FRM-T-18.9): labelled "Sample", left out of Home's
+   * figures, and removable. Optional on the type only so older fixtures compile; the server sends it.
+   */
+  sample?: boolean;
 }
 
 /** One section of the grouped portfolio: a group, and its projects' rows in the group's order. */
@@ -256,6 +261,25 @@ export interface ProjectDetail {
   /** The group it is in, or null for Ungrouped (FRM-REQ-223). */
   group: ProjectGroupRef | null;
   counts: { phases: number; requirements: number; tasks: number; openFindings: number };
+  /** A seeded sample, not real work (FRM-T-18.9). */
+  sample?: boolean;
+}
+
+/** What `POST /api/projects` takes from the console's New project (FRM-T-18.9). */
+export interface ProjectCreateInput {
+  /** Typed by the person, never derived from the name: immutable once created (ADR-008). */
+  code: string;
+  name: string;
+  pitch?: string;
+  /** `GRP-001` or a slug, or null for Ungrouped. */
+  group?: string | null;
+}
+
+/** What the create answers: the project row, and the events it recorded. */
+export interface CreatedProject {
+  code: string;
+  name: string;
+  auditEventIds: string[];
 }
 
 /** A project's group, as `GET /api/projects/:code` names it. */
@@ -1049,6 +1073,10 @@ export const foreman = {
       group === null ? '/api/portfolio' : `/api/portfolio?${new URLSearchParams({ group }).toString()}`,
     ),
   project: (code: string) => api.get<ProjectDetail>(`/api/projects/${code}`),
+  /** New project (FRM-T-18.9). The code is the person's, checked against `ProjectCode` first. */
+  createProject: (body: ProjectCreateInput) => api.post<CreatedProject>('/api/projects', body),
+  /** Remove a sample project — a soft delete; the server refuses a real one (FRM-T-18.9). */
+  removeSampleProject: (code: string) => api.del(`/api/projects/${encodeURIComponent(code)}`),
   phases: (code: string) => api.get<Page<PhaseProgressRow>>(`/api/projects/${code}/phases`),
   tasks: (code: string, phaseHumanId?: string) =>
     api.get<Page<TaskRow>>(

@@ -20,11 +20,18 @@ import {
 import { foreman, type IssuedToken, type SignedInSession, type TokenRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { useDraftGuard, useMutate } from '../lib/mutate';
+import { useSession } from '../lib/session';
+import { AgentTabs } from './ConnectAgent';
 import { Pill, StatCard } from '../ui/viz';
 import { relativeDay } from '../ui/tone';
 
 /**
- * Scoped API tokens (FRM-REQ-025, FRM-REQ-026, FRM-REQ-027).
+ * Connect an agent — the scoped API tokens screen, named for the job rather than the credential
+ * (FRM-T-18.9, D-09; FRM-REQ-025, FRM-REQ-026, FRM-REQ-027). The route stays `/tokens`.
+ *
+ * Above the tokens, the three ways an agent connects, each a real command for this instance
+ * (`ConnectAgent.tsx`). A token just issued is watched: the list is re-read until its `lastUsedAt`
+ * moves, and the line under its snippet says "Connected · first call at 14:02".
  *
  * The routes have existed since P2 and nothing in the console reached them, so the only way to
  * mint a token was `issue-token` over SSH on the host. That made the one credential the audit and
@@ -62,6 +69,10 @@ function scopeTone(scope: string) {
   return scope === 'admin' ? 'danger' : scope === 'write' ? 'warning' : 'neutral';
 }
 
+/** How often the list is re-read while a new token waits for its first call, and for how long. */
+const WATCH_EVERY_MS = 5_000;
+const WATCH_FOR = 120;
+
 /** Live, revoked, or expired — the three states a row can be in, decided in one place. */
 function stateOf(row: TokenRow): { label: string; tone: 'success' | 'neutral' | 'warning' } {
   if (row.revokedAt !== null) return { label: 'revoked', tone: 'neutral' };
@@ -76,8 +87,28 @@ export function Tokens() {
   const [creating, setCreating] = useState(false);
   const [issued, setIssued] = useState<IssuedToken | null>(null);
   const [revoking, setRevoking] = useState<TokenRow | null>(null);
+  const [watching, setWatching] = useState<string | null>(null);
+  const { oidcAvailable } = useSession();
+  const origin = window.location.origin;
 
   const rows = state.status === 'ready' ? state.value.items : [];
+  const watched = watching === null ? null : (rows.find((row) => row.id === watching) ?? null);
+  const waiting = watched !== null && watched.lastUsedAt === null && watched.revokedAt === null;
+
+  // Waiting for the first call: the existing list, re-read in place until the token's last-used
+  // time moves (FRM-DA-009 — no new route). Bounded, so a forgotten tab does not poll for ever.
+  useEffect(() => {
+    if (!waiting) return undefined;
+    let reads = 0;
+    const timer = setInterval(() => {
+      reads += 1;
+      if (reads > WATCH_FOR) clearInterval(timer);
+      else refresh();
+    }, WATCH_EVERY_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [waiting, refresh]);
   const active = rows.filter((row) => stateOf(row).label === 'active');
   const writers = active.filter((row) => row.scopes.includes('write') || row.scopes.includes('admin'));
 
@@ -85,6 +116,7 @@ export function Tokens() {
     (token: IssuedToken) => {
       setCreating(false);
       setIssued(token);
+      setWatching(token.id);
       refresh();
     },
     [refresh],
@@ -93,8 +125,8 @@ export function Tokens() {
   return (
     <Page>
       <PageHeader
-        title="API tokens"
-        description="For the MCP shim, the audit skills, and anything that talks to Foreman without a browser."
+        title="Connect an agent"
+        description="Claude Code, the audit and planning skills, or any script that talks to Foreman without a browser. Each way in below is a real, working command for this instance."
         {...(state.status === 'ready'
           ? { count: active.length, countNoun: { one: 'active token', other: 'active tokens' } }
           : {})}
@@ -106,6 +138,10 @@ export function Tokens() {
       />
 
       <Stack gap="24">
+        <Section title="Ways in" surface="card">
+          <AgentTabs origin={origin} oidcAvailable={oidcAvailable} watched={watched} />
+        </Section>
+
         <Grid minItemWidth="sm">
           <StatCard label="Active" value={active.length} detail="Usable right now" />
           <StatCard
@@ -158,7 +194,9 @@ export function Tokens() {
                           {/* "Never used" is worth saying plainly: it is how you find the token
                               you issued, pasted wrong, and replaced without revoking. */}
                           {row.lastUsedAt === null
-                            ? 'never used'
+                            ? here.label === 'active'
+                              ? 'waiting for its first call'
+                              : 'never used'
                             : `last used ${relativeDay(row.lastUsedAt)}`}
                           {' · '}
                           issued {relativeDay(row.createdAt)}
@@ -179,6 +217,7 @@ export function Tokens() {
               })}
             </Stack>
           )}
+          <p className="fm-muted">The remote MCP needs no token here. It signs in through D3 Auth, as you.</p>
         </Section>
       </Stack>
 
@@ -186,7 +225,13 @@ export function Tokens() {
 
       <IssueDialog open={creating} onClose={() => { setCreating(false); }} onIssued={onIssued} />
       <RevokeDialog row={revoking} onClose={() => { setRevoking(null); }} onRevoked={refresh} />
-      <ShownOnceDialog issued={issued} onClose={() => { setIssued(null); }} />
+      <ShownOnceDialog
+        issued={issued}
+        watched={watched}
+        origin={origin}
+        oidcAvailable={oidcAvailable}
+        onClose={() => { setIssued(null); }}
+      />
     </Page>
   );
 }
@@ -390,9 +435,16 @@ function RevokeDialog({
  */
 function ShownOnceDialog({
   issued,
+  watched,
+  origin,
+  oidcAvailable,
   onClose,
 }: {
   issued: IssuedToken | null;
+  /** The new token as the list last read it, for the waiting line. */
+  watched: TokenRow | null;
+  origin: string;
+  oidcAvailable: boolean;
   onClose: () => void;
 }) {
   return (
@@ -408,12 +460,14 @@ function ShownOnceDialog({
           <Alert tone="warning" title="Copy it before you close this">
             Foreman stores only a hash. If you lose it, issue another and revoke this one.
           </Alert>
-          <Stack gap="4">
-            <span className="fm-part__label">For the audit and planning skills</span>
-            <pre className="fm-secret fm-secret--quiet">
-              {`export FOREMAN_URL=${window.location.origin}\nexport FOREMAN_WRITE_TOKEN=${issued.token}`}
-            </pre>
-          </Stack>
+          {/* Each way in, with this token in it — the skills only when it can write (FRM-DA-009). */}
+          <AgentTabs
+            origin={origin}
+            oidcAvailable={oidcAvailable}
+            initial="shim"
+            token={{ name: issued.name, secret: issued.token, scopes: issued.scopes }}
+            watched={watched ?? { name: issued.name, lastUsedAt: null }}
+          />
           <FormActions>
             <Button variant="primary" onClick={onClose}>
               I have copied it

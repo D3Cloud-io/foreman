@@ -16,6 +16,7 @@ import { exitGate, GateRefused } from './coverage.js';
 import { groupForProject, lockGroups, settleProjects } from './groups.js';
 import { allocate, nextTaskPosition, phaseHumanId, taskHumanId } from './humanId.js';
 import { rollupPhase, rollupProject, rollupTaskPhases } from './rollup.js';
+import { softDelete } from './undo.js';
 
 /**
  * The spine's write paths.
@@ -134,6 +135,25 @@ export async function updateProject(db: Db, actor: Actor, code: string, input: P
     });
     return { ...project, auditEventIds: eventIds(event, ...shifted) };
   });
+}
+
+/**
+ * Remove a sample project (FRM-T-18.9): the soft delete every record takes, so Undo brings it back
+ * with its group place (`softDelete`, then `POST /api/undo/:id`).
+ *
+ * **Only a sample.** A real project is cited from every document that names its IDs, and what a
+ * delete costs is those citations, which this cannot see (ADR-002, ADR-014). A sample was seeded
+ * and never real, and nothing outside itself cites it. `sample` is set by the seed alone, so no
+ * write can make a real project removable here.
+ */
+export async function removeSampleProject(db: Db, actor: Actor, code: string) {
+  const project = await findProject(db, code);
+  if (!project.sample) {
+    throw new Conflict(
+      `${code} is not a sample project: only the seeded samples can be removed from the console`,
+    );
+  }
+  return softDelete(db, actor, 'project', code);
 }
 
 // ─── Phases ────────────────────────────────────────────────────────────────
