@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { type ActorKind, type AuditAction } from '../enums.js';
+import { type ActorKind, type AttributionSource, type AuditAction, TaskStatus } from '../enums.js';
 import { AnyId, HumanId, ProjectCode } from '../ids.js';
 import { GroupArg } from './groups.js';
 
@@ -153,4 +153,93 @@ export interface AuditEventsResponse {
   readonly entity: string;
   /** Newest first. */
   readonly items: readonly AuditEventEntry[];
+}
+
+// ─── Triage across a scope (FRM-T-18.7, FRM-REQ-246) ────────────────────────
+
+/**
+ * `GET /api/attributions?status=proposed&group=&project=&limit=`: the attributions nobody has
+ * confirmed or rejected, across a scope, newest commit first — the Review tab of `/findings`.
+ *
+ * `proposed` is the only status asked for: a confirmed attribution is settled and a rejected one is
+ * kept only so it is never proposed again, so neither is anything to triage.
+ */
+export const AttributionsQuery = z.object({
+  status: z.enum(['proposed']).default('proposed'),
+  group: GroupArg.optional(),
+  project: ProjectCode.optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+export type AttributionsQuery = z.infer<typeof AttributionsQuery>;
+
+export interface ProposedAttribution {
+  /** The project of the task it claims — the one whose brief counts it as unconfirmed. */
+  readonly project: { readonly code: string; readonly name: string };
+  readonly commit: {
+    readonly sha: string;
+    /** The whole message; its first line is the subject. */
+    readonly message: string;
+    readonly author: string;
+    /** ISO 8601. */
+    readonly committedAt: string;
+    readonly repo: string;
+    readonly files: readonly string[];
+    /** Set when a force push removed it from the remote (FRM-REQ-105). */
+    readonly orphaned: boolean;
+    /** Every check run reported for the commit. Empty is "nothing reported", not "passing". */
+    readonly checks: readonly { readonly name: string; readonly conclusion: string | null }[];
+  };
+  readonly task: {
+    readonly humanId: string;
+    readonly title: string;
+    readonly status: string;
+    readonly doneWhen: string | null;
+    readonly phase: { readonly humanId: string; readonly name: string } | null;
+  };
+  /** Which signal proposed it — declared, the message, or a file overlap (a hint only). */
+  readonly source: AttributionSource;
+  readonly confidence: number;
+  /** What was seen, kept so a person confirming can check rather than trust. */
+  readonly evidence: unknown;
+  /** ISO 8601: when the proposal was made. */
+  readonly proposedAt: string;
+}
+
+export interface ProposedAttributionsResponse {
+  readonly items: readonly ProposedAttribution[];
+  readonly nextCursor: null;
+  /** The whole matching set, not the page — the same count each project's brief reports. */
+  readonly total: number;
+}
+
+/**
+ * `GET /api/tasks?status=blocked&group=&project=&limit=`: tasks in one status across a scope — the
+ * Blocked tab of `/findings`. `blocked` when no status is named, because that is the question the
+ * read exists for.
+ */
+export const TasksAcrossQuery = z.object({
+  status: TaskStatus.default('blocked'),
+  group: GroupArg.optional(),
+  project: ProjectCode.optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+});
+export type TasksAcrossQuery = z.infer<typeof TasksAcrossQuery>;
+
+export interface TaskAcrossRow {
+  readonly project: { readonly code: string; readonly name: string };
+  readonly humanId: string;
+  readonly title: string;
+  readonly status: string;
+  readonly blockedReason: string | null;
+  readonly size: string | null;
+  readonly doneWhen: string | null;
+  readonly phase: { readonly humanId: string; readonly name: string } | null;
+  /** ISO 8601. */
+  readonly updatedAt: string;
+}
+
+export interface TasksAcrossResponse {
+  readonly items: readonly TaskAcrossRow[];
+  readonly nextCursor: null;
+  readonly total: number;
 }

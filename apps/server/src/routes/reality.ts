@@ -1,13 +1,14 @@
-import { BuildResultInput, PageQuery, parseHumanId } from '@foreman/shared';
+import { AttributionsQuery, BuildResultInput, PageQuery, parseHumanId } from '@foreman/shared';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireScope } from '../auth/middleware.js';
 import type { Db } from '../db.js';
 import { record } from '../domain/audit.js';
-import { confirmAttribution, rejectAttribution } from '../domain/attribution.js';
+import { confirmAttribution, proposedAcross, rejectAttribution } from '../domain/attribution.js';
 import { recordBuildResult } from '../domain/builds.js';
 import { findProject } from '../domain/projects.js';
 import { cadenceFor, ciFor, releaseNotes } from '../domain/reality.js';
+import { resolveScope, scopeCodes } from '../domain/scope.js';
 import { enqueue, type JobRegistry } from '../jobs/index.js';
 import { actorOf, handler, param, parseBody, parseQuery } from './helpers.js';
 
@@ -397,6 +398,39 @@ export function realityRoutes(db: Db, registry?: JobRegistry): Router {
     '/:code/releases/:tag/notes',
     handler(async (req, res) => {
       res.json(await releaseNotes(db, param(req, 'code'), param(req, 'tag')));
+    }),
+  );
+
+  return router;
+}
+
+/**
+ * The review queue across a scope (FRM-T-18.7): `GET /api/attributions?status=proposed&group=`.
+ *
+ * Mounted at `/api`, beside the findings inbox, because it is the same kind of read: the question
+ * "what is waiting for me to rule on, anywhere in this family" has no project in it. The guards are
+ * on the route, not the router, so mounting it at `/api` puts nothing in front of anyone else's.
+ *
+ * Confirming and rejecting stay per project, above, where the commit and the task live.
+ */
+export function attributionAcrossRoutes(db: Db): Router {
+  const router = Router();
+
+  router.get(
+    '/attributions',
+    requireAuth,
+    requireScope(db, 'read'),
+    handler(async (req, res) => {
+      const query = parseQuery(AttributionsQuery, req, res);
+      if (query === null) return;
+      // An unknown, deleted or `all` group is a 404, never "everyone" (FRM-ADR-024).
+      const scope = await resolveScope(db, query.group);
+      const { items, total } = await proposedAcross(db, {
+        codes: scopeCodes(scope),
+        project: query.project,
+        limit: query.limit,
+      });
+      res.json({ items, nextCursor: null, total });
     }),
   );
 

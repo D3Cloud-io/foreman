@@ -1,0 +1,326 @@
+/* The triage surface on /findings (FRM-T-18.7): a list and the selected record, side by side from
+   `lg` (64rem) up, and a list, then the record, below it. Tokens only (d3-check-usage). */
+
+.fm-triage .d3-tabs__panel {
+  padding-top: var(--space-16);
+}
+
+.fm-triage__split {
+  display: grid;
+  grid-template-columns: minmax(18rem, 30rem) minmax(0, 1fr);
+  gap: var(--space-16);
+  align-items: start;
+}
+
+.fm-triage__list,
+.fm-triage__detail {
+  min-width: 0;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-card);
+}
+
+.fm-triage__list {
+  max-height: 75vh;
+  overflow-y: auto;
+}
+
+.fm-triage__detail {
+  padding: var(--space-16) var(--space-24);
+}
+
+.fm-triage__back {
+  display: none;
+}
+
+.fm-triage__list-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--space-8) var(--space-12);
+  border-bottom: var(--border-width) solid var(--color-border);
+  background: var(--color-surface-card);
+  font-size: var(--text-12);
+  line-height: var(--leading-12);
+  color: var(--color-fg-faint);
+}
+
+.fm-triage__list-head strong {
+  color: var(--color-fg-muted);
+  font-weight: var(--weight-semibold);
+}
+
+.fm-triage__group {
+  margin: 0;
+  padding: var(--space-12) var(--space-12) var(--space-6);
+  border-bottom: var(--border-width) solid var(--color-border);
+  font-size: var(--text-11);
+  line-height: var(--leading-11);
+  font-weight: var(--weight-semibold);
+  color: var(--color-fg-faint);
+  text-transform: uppercase;
+}
+
+.fm-triage__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.fm-triage__row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-8);
+  padding-left: var(--space-12);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.fm-triage__row--selected {
+  background: var(--color-accent-muted);
+}
+
+/* The selected row is marked by an edge as well as a fill: colour is never the only signal, and
+   the row's button carries aria-current. */
+.fm-triage__row--selected::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--space-2);
+  background: var(--color-accent);
+}
+
+.fm-triage__row--dim .fm-triage__body,
+.fm-triage__row--dim .fm-triage__state {
+  color: var(--color-fg-faint);
+}
+
+.fm-triage__lead {
+  padding-top: var(--space-12);
+}
+
+.fm-triage__pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-12) var(--space-8) 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fm-triage__pick:hover {
+  background: var(--color-surface-hover);
+}
+
+.fm-triage__pick:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: calc(var(--focus-offset) * -1);
+}
+
+.fm-triage__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.fm-triage__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: var(--text-12);
+  line-height: var(--leading-12);
+}
+
+.fm-triage__id {
+  font-family: var(--font-mono);
+  font-size: var(--text-12);
+  color: var(--color-accent);
+}
+
+.fm-triage__project {
+  color: var(--color-fg-faint);
+  font-weight: var(--weight-medium);
+}
+
+.fm-triage__text {
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+  color: var(--color-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-triage__sub {
+  font-size: var(--text-12);
+  line-height: var(--leading-12);
+  color: var(--color-fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-triage__state {
+  flex: none;
+  font-size: var(--text-12);
+  color: var(--color-fg-faint);
+  white-space: nowrap;
+}
+
+.fm-triage__action {
+  color: var(--color-accent);
+  font-weight: var(--weight-medium);
+}
+
+.fm-triage__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: var(--text-12);
+}
+
+.fm-triage__position {
+  margin-left: auto;
+}
+
+.fm-triage__title {
+  margin: 0;
+  font-size: var(--text-20);
+  line-height: var(--leading-24);
+  font-weight: var(--weight-semibold);
+}
+
+.fm-triage__verdicts,
+.fm-triage__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.fm-triage__kbd {
+  margin-left: var(--space-4);
+}
+
+.fm-triage__chip-count {
+  color: var(--color-fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-triage__message {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-12);
+  color: var(--color-fg-muted);
+}
+
+.fm-triage__bulk {
+  position: sticky;
+  bottom: var(--space-8);
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8) var(--space-16);
+  padding: var(--space-8) var(--space-12);
+  border: var(--border-width) solid var(--color-border-float);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+}
+
+.fm-triage__bulk-count {
+  font-weight: var(--weight-semibold);
+}
+
+.fm-triage__bulk-bar {
+  flex: 1;
+  min-width: 16rem;
+}
+
+.fm-triage__bulk-note {
+  font-size: var(--text-12);
+}
+
+/* The phone ActionBar is for below lg; on a wide screen the buttons beside the record carry it. */
+.fm-triage__actionbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+}
+
+/* Below lg: the list, then the record. The URL's `sel` decides which is on screen. */
+@media (max-width: 63.99rem) {
+  .fm-triage__split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fm-triage__split[data-picked='false'] .fm-triage__detail,
+  .fm-triage__split[data-picked='true'] .fm-triage__list {
+    display: none;
+  }
+
+  .fm-triage__list {
+    max-height: none;
+  }
+
+  .fm-triage__detail {
+    padding: var(--space-12);
+  }
+
+  /* Four tabs share the width at 390, and scroll inside themselves rather than widen the page. */
+  .fm-triage .d3-tabs__list {
+    display: flex;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .fm-triage .d3-tabs__tab {
+    flex: 1 0 auto;
+  }
+
+  .fm-triage__back {
+    display: block;
+    margin-bottom: var(--space-8);
+  }
+
+  /* The shell's tab bar is fixed at the foot of a phone; the verdict bars sit just above it. */
+  .fm-triage__actionbar {
+    bottom: calc(var(--space-64) + env(safe-area-inset-bottom));
+  }
+
+  .fm-triage__bulk {
+    bottom: calc(var(--space-64) + env(safe-area-inset-bottom) + var(--space-8));
+  }
+
+  .fm-triage__verdicts {
+    display: none;
+  }
+
+  /* Rows lead with the title on a phone, so the first finding reads above the fold. */
+  .fm-triage__text {
+    white-space: normal;
+  }
+}
+
+/* A touch screen gets 44px targets everywhere a verdict or a row is chosen, and no key caps. */
+@media (pointer: coarse) {
+  /* Buttons are 44px on touch already (@d3cloud/ui); rows and tabs are made so here. */
+  .fm-triage__pick,
+  .fm-triage .d3-tabs__tab {
+    min-height: 44px;
+  }
+
+  .fm-triage__kbd {
+    display: none;
+  }
+}

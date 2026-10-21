@@ -15,6 +15,7 @@ import {
   sectionEntries,
   shortcutFor,
   SHORTCUTS,
+  triageKeyFor,
   type KeyLike,
   type TargetLike,
 } from './shortcuts';
@@ -262,5 +263,49 @@ describe('the sheet’s list', () => {
     expect(keys).toContain('/');
     expect(keys).toContain('?');
     expect(keys.some((k) => /^g\b/.test(k))).toBe(false);
+  });
+});
+
+/** FRM-T-18.7: the triage keys on /findings act only outside a text field and with no dialog open. */
+describe('the triage keys', () => {
+  const free = { dialogOpen: false };
+
+  it('maps each verdict, move and tab key', () => {
+    expect(triageKeyFor(press('a'), free)).toBe('acknowledge');
+    expect(triageKeyFor(press('f'), free)).toBe('fixed');
+    expect(triageKeyFor(press('r'), free)).toBe('reopen');
+    expect(triageKeyFor(press('w'), free)).toBe('wont-fix');
+    expect(triageKeyFor(press('y'), free)).toBe('confirm');
+    expect(triageKeyFor(press('n'), free)).toBe('reject');
+    expect(triageKeyFor(press('j'), free)).toBe('next');
+    expect(triageKeyFor(press('k'), free)).toBe('previous');
+    expect(triageKeyFor(press('x'), free)).toBe('toggle');
+    expect(triageKeyFor(press('Escape'), free)).toBe('clear');
+    expect(triageKeyFor(press('3'), free)).toBe('tab-3');
+    expect(triageKeyFor(press('q'), free)).toBeNull();
+  });
+
+  it('never acts while typing — a reason with an r in it does not reopen anything', () => {
+    expect(triageKeyFor(press('r', {}, textarea), free)).toBeNull();
+    expect(triageKeyFor(press('a', {}, input()), free)).toBeNull();
+    expect(triageKeyFor(press('y', {}, editable), free)).toBeNull();
+    // A checkbox is not a text field: x on a row's checkbox still selects.
+    expect(triageKeyFor(press('x', {}, input('checkbox')), free)).toBe('toggle');
+  });
+
+  it('never acts behind a dialog, with a modifier, held down or mid-composition', () => {
+    expect(triageKeyFor(press('a'), { dialogOpen: true })).toBeNull();
+    expect(triageKeyFor(press('r', { metaKey: true }), free)).toBeNull();
+    expect(triageKeyFor(press('r', { ctrlKey: true }), free)).toBeNull();
+    expect(triageKeyFor(press('A', { shiftKey: true }), free)).toBeNull();
+    expect(triageKeyFor(press('f', { repeat: true }), free)).toBeNull();
+    expect(triageKeyFor(press('f', { isComposing: true }), free)).toBeNull();
+    expect(triageKeyFor(press('f', { defaultPrevented: true }), free)).toBeNull();
+  });
+
+  it('lists every triage key on the sheet', () => {
+    const group = SHORTCUTS.find((g) => g.title === 'On Findings');
+    const keys = group?.rows.flatMap((row) => row.keys) ?? [];
+    for (const key of ['a', 'f', 'r', 'w', 'y', 'n', 'j', 'k', 'x', 'esc', '1', '4']) expect(keys).toContain(key);
   });
 });
