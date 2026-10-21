@@ -4,11 +4,11 @@ import {
   Page,
   Skeleton,
   Table,
-  type TableColumn,
 } from '@d3cloud/ui';
 import { foreman, type AuditRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
+import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
 
 /**
  * The Audit Index, generated (T-4.12, FRM-REQ-073, ADR-006).
@@ -20,31 +20,38 @@ import { ProjectHeader } from '../components/ProjectHeader';
 export function AuditIndex({ code }: { code: string }) {
   const { state } = useAsync(() => foreman.audits(code), [code]);
 
-  const columns: TableColumn<AuditRow>[] = [
-    { key: 'humanId', header: 'ID', width: '8rem', cell: (row) => row.humanId },
+  // Below 768px: the audit's ID is the title, its status stays, and kind, date, scope, rounds and
+  // findings fold into the sub-line (FRM-REQ-249).
+  const auditColumns: PriorityColumn<AuditRow>[] = [
+    { key: 'humanId', header: 'ID', width: '8rem', phone: 'host', cell: (row) => row.humanId },
     {
       key: 'kind',
       header: 'Kind',
       width: '9rem',
+      phone: 'fold',
+      foldLabel: '',
       cell: (row) => <Badge tone="neutral">{row.kind.replace(/_/g, ' ')}</Badge>,
     },
     {
       key: 'runDate',
       header: 'Run',
       width: '8rem',
+      phone: 'fold',
       sortable: true,
       cell: (row) => row.runDate.slice(0, 10),
     },
     {
       key: 'scope',
       header: 'Scope',
+      phone: 'fold',
       cell: (row) => row.scope ?? <span className="fm-muted">whole project</span>,
     },
-    { key: 'rounds', header: 'Rounds', width: '5rem', numeric: true, cell: (row) => row.rounds },
+    { key: 'rounds', header: 'Rounds', width: '5rem', numeric: true, phone: 'fold', cell: (row) => row.rounds },
     {
       key: 'findings',
       header: 'Findings',
       width: '12rem',
+      phone: 'fold',
       cell: (row) =>
         row.findings.total === 0 ? (
           <span className="fm-muted">none</span>
@@ -66,11 +73,14 @@ export function AuditIndex({ code }: { code: string }) {
       key: 'status',
       header: 'Status',
       width: '7rem',
+      phoneWidth: '6.5rem',
       cell: (row) => (
         <Badge tone={row.status === 'running' ? 'attention' : 'neutral'}>{row.status}</Badge>
       ),
     },
   ];
+
+  const columns = priorityColumns(auditColumns, usePhone());
 
   return (
     <Page>
@@ -88,6 +98,7 @@ export function AuditIndex({ code }: { code: string }) {
         </EmptyState>
       ) : (
         <Table
+          className="fm-tbl"
           caption={`Audits of ${code}`}
           captionHidden
           density="compact"

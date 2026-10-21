@@ -8,7 +8,6 @@ import {
   SegmentedControl,
   Skeleton,
   Table,
-  type TableColumn,
 } from '@d3cloud/ui';
 import { foreman, type StatusWrite, type TaskRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
@@ -18,6 +17,7 @@ import { ProjectHeader } from '../components/ProjectHeader';
 import { realityChanged } from '../components/RealityStrip';
 import { PhaseBoard } from './PhaseBoard';
 import { StatusControl } from './StatusControl';
+import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
 
 /**
  * S-11 — one phase, and its tasks.
@@ -29,6 +29,11 @@ import { StatusControl } from './StatusControl';
  * Under the header, the phase is its exit gate (FRM-REQ-247): the server's own checks, listed as the
  * requirements for calling it complete — see `GateChecks`.
  */
+
+/** In the row, not behind a click: "stopped, and nobody recorded why" is the failure this product exists to stop repeating. */
+function blockedReason(row: TaskRow) {
+  return row.status === 'blocked' ? <div className="fm-muted">{row.blockedReason ?? 'no reason recorded'}</div> : null;
+}
 
 export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId: string }) {
   const phases = useAsync(() => foreman.phases(code), [code]);
@@ -60,12 +65,17 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
       ? phases.state.value.items.find((p) => p.humanId === phaseHumanId)
       : undefined;
 
-  const columns: TableColumn<TaskRow>[] = [
+  // Below 768px the table keeps the task and its status select; the ID, size and what it satisfies
+  // fold into a sub-line under the title (FRM-REQ-249), and the title becomes the row's link.
+  const taskColumns: PriorityColumn<TaskRow>[] = [
     {
       key: 'humanId',
       header: 'ID',
       width: '9rem',
       sortable: true,
+      phone: 'fold',
+      foldLabel: '',
+      foldCell: (row) => <code>{row.humanId}</code>,
       cell: (row) => (
         <Link href={`/tasks/${row.humanId}`}>
           <code>{row.humanId}</code>
@@ -76,14 +86,19 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
       key: 'title',
       header: 'Task',
       sortable: true,
+      phone: 'host',
+      phoneCell: (row) => (
+        <>
+          <Link className="fm-rowlink" href={`/tasks/${row.humanId}`}>
+            {row.title}
+          </Link>
+          {blockedReason(row)}
+        </>
+      ),
       cell: (row) => (
         <>
           {row.title}
-          {row.status === 'blocked' ? (
-            // In the row, not behind a click: "stopped, and nobody recorded why" is the failure
-            // this whole product exists to stop repeating.
-            <div className="fm-muted">{row.blockedReason ?? 'no reason recorded'}</div>
-          ) : null}
+          {blockedReason(row)}
         </>
       ),
     },
@@ -92,14 +107,22 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
       header: 'Status',
       sortable: true,
       width: '11rem',
+      phoneWidth: '8.5rem',
       // A control, not a badge: status is changeable from every screen that shows it.
       cell: (row) => <StatusControl task={row} code={code} onChanged={onStatusChanged} />,
     },
-    { key: 'size', header: 'Size', width: '5rem', cell: (row) => row.size ?? '—' },
+    { key: 'size', header: 'Size', width: '5rem', phone: 'fold', cell: (row) => row.size ?? '—', foldCell: (row) => row.size },
     {
       key: 'requirements',
       header: 'Satisfies',
       width: '12rem',
+      phone: 'fold',
+      foldCell: (row) =>
+        row.requirements.length === 0 ? (
+          <span className="fm-muted">nothing</span>
+        ) : (
+          <code>{row.requirements.join(', ')}</code>
+        ),
       cell: (row) =>
         row.requirements.length === 0 ? (
           <span className="fm-muted">nothing</span>
@@ -108,6 +131,8 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
         ),
     },
   ];
+  const narrow = usePhone();
+  const columns = priorityColumns(taskColumns, narrow);
 
   if (phases.state.status === 'loading') {
     return (
@@ -207,6 +232,7 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
         <PhaseBoard tasks={tasks.state.value.items} code={code} onChanged={onStatusChanged} />
       ) : (
         <Table
+          className="fm-tbl"
           caption={`Tasks in ${phaseHumanId}`}
           captionHidden
           columns={columns}

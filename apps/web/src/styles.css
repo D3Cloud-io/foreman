@@ -1952,3 +1952,152 @@ a.fm-glist__name:focus-visible {
   overflow-wrap: anywhere;
   min-width: 0;
 }
+
+/* ─── Phone tables, one-line stats, and a badge you can see (FRM-REQ-249, FRM-T-18.10) ─────────
+
+   Below `md` (768px) a table keeps each row's title, status and primary control and folds the rest
+   into a sub-line under the title (`ui/tablePriority.ts` chooses the columns; this draws them). The
+   library's own list mode is filed for @d3cloud/ui (DS-REQ-031) and replaces the fold when it ships. */
+
+/* A folded value reads as "Label value", muted, wrapping rather than scrolling. */
+.fm-subline {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-12);
+  row-gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-12);
+  line-height: var(--leading-12);
+  color: var(--color-fg-muted);
+}
+.fm-subline__item {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.fm-subline__key {
+  margin-right: var(--space-4);
+  color: var(--color-fg-faint);
+}
+/* A row's title when it is also its link: the whole title is the target, and it wraps. */
+.fm-rowlink {
+  display: block;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 47.99rem) {
+  /* Cells wrap on a phone: the library's nowrap-and-clip is what pushed the sixth column off-screen.
+     Every table, not only the ones that fold columns, so one that has not been given priorities yet
+     still fits the screen rather than scrolling inside it. */
+  .d3-tbl .d3-tbl__td {
+    white-space: normal;
+    overflow-wrap: break-word;
+    vertical-align: top;
+  }
+  /* A heading wraps between words, never inside one, and keeps the room its sort button needs. */
+  .d3-tbl .d3-tbl__th {
+    white-space: normal;
+  }
+  /* Four cards of label, figure, detail and action fill the first screen of a phone. One line each:
+     the label, then the figure and its badge. The detail, chart and action stay in the reading
+     order for a screen reader (nothing is removed) and come back from `md`. */
+  .fm-stat__body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: var(--space-12);
+    row-gap: 0;
+  }
+  .fm-stat__label {
+    grid-column: 1;
+    font-size: var(--text-13);
+    color: var(--color-fg);
+  }
+  .fm-stat__row {
+    grid-column: 2;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+  }
+  .fm-stat__value {
+    font-size: var(--text-16);
+    line-height: var(--leading-16);
+  }
+  .fm-stat__detail,
+  .fm-stat__chart,
+  .fm-stat__action {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .fm-stat {
+    position: relative;
+  }
+  /* The card's own padding is sized for a figure over a caption; a line wants less of it. */
+  .fm-stat.d3-crd {
+    padding: var(--space-8) var(--space-12);
+    min-height: 44px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+}
+
+/* A neutral badge is the library's `surface-raised`, which on some grounds is the page itself: the
+   lifecycle word ("planned") read as a stray word beside the title. An outline in the field-border
+   token makes it a pill on either ground, in both themes, and the word still carries it. */
+.d3-bdg--neutral.fm-badge {
+  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-border-field);
+}
+
+/* ─── Every control, 44 by 44, under a coarse pointer (FRM-REQ-249, FRM-REQ-219) ───────────────
+
+   Controls the library draws and has not yet sized for a thumb (DS-REQ-016: Select, Input, Checkbox,
+   a Table's sort header, PageHeader's back link; DS-REQ-017: SegmentedControl's width) are sized here
+   from Foreman's side, by the element's own classes and never by changing a token. A fine pointer
+   keeps the dense sizes. */
+@media (pointer: coarse) {
+  .d3-inp:not(.d3-inp--area) {
+    min-height: 44px;
+  }
+  /* The input itself fills the field, so the thing a thumb lands on is the thing measured. */
+  .d3-inp__control {
+    align-self: stretch;
+  }
+  .d3-cbx {
+    min-height: 44px;
+  }
+  .d3-seg__item {
+    min-width: 44px;
+  }
+  .d3-tbl__sort {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  /* An ID or a title in a table cell is the row's control, not a link in a sentence. */
+  .d3-tbl__td > a,
+  .d3-tbl__td > .fm-rowlink,
+  .fm-trail a,
+  .d3-ph__back a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .fm-rowlink {
+    display: flex;
+  }
+  a.fm-chip--link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  /* The brand in the phone's top bar is a link home: AppShellBrand draws it at the height of its mark. */
+  .d3-shell-brand {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
