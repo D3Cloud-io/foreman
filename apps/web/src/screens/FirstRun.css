@@ -90,3 +90,8 @@
 .fm-code-input input {
   font-family: var(--font-mono);
 }
+
+/* Finish setting up: one quiet line above the ledger until it is opened. */
+.fm-finish {
+  display: block;
+}

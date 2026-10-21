@@ -1,3 +1,4 @@
+import { useId, useState } from 'react';
 import { Button, Card, Cluster, Section, Stack } from '@d3cloud/ui';
 import { Check } from 'lucide-react';
 import { foreman, type PortfolioRow, type TokenRow } from '../lib/api';
@@ -169,7 +170,7 @@ function StepAction({ step, rows }: { step: SetupStep; rows: readonly PortfolioR
   if (step.key === 'repo' && !step.done) {
     const first = realRows(rows)[0];
     if (first === undefined) return null;
-    return <Snippet label={`the command that links a repository to ${first.code}`} text={linkRepoSnippet(window.location.origin, first.code)} />;
+    return <Snippet label={`the command that links a repository to ${first.code}`} text={linkRepoSnippet(typeof window === 'undefined' ? '' : window.location.origin, first.code)} />;
   }
   return null;
 }
@@ -270,29 +271,120 @@ function WhatHomeWillShow() {
 }
 
 /**
- * Home with no real project: the checklist, the samples, and what Home will show. Reads the
- * tokens (the console-only list) for step 1; the portfolio rows it is given for the rest.
+ * The steps, read: the token list for step 1, each real project's repositories for step 3 while
+ * no commit has been seen (a commit implies its repository). Null until both reads have answered,
+ * so nothing is shown as pending that has not been looked at. `enabled` false reads nothing.
  */
-export function FirstRun({ rows, onChanged }: { rows: readonly PortfolioRow[]; onChanged: () => void }) {
-  const tokens = useAsync(() => foreman.tokens(), []);
+export function useSetupSteps(rows: readonly PortfolioRow[], enabled = true): SetupStep[] | null {
+  const tokens = useAsync(() => (enabled ? foreman.tokens().then((page) => page.items) : Promise.resolve(null)), [enabled]);
   const real = realRows(rows);
-  // Repositories are read per real project only while no commit has been seen: a commit implies
-  // its repository, and the step needs no read after that.
-  const needRepos = real.length > 0 && real.every((row) => row.lastActivityAt === null);
+  const needRepos = enabled && real.length > 0 && real.every((row) => row.lastActivityAt === null);
   const codes = real.map((row) => row.code).join(',');
   const repos = useAsync(
     () =>
       needRepos
-        ? Promise.all(real.slice(0, 20).map((row) => foreman.repos(row.code).then((page) => (page.items.length > 0 ? [row.code] : []))))
-            .then((found) => found.flat())
+        ? Promise.all(
+            real
+              .slice(0, 20)
+              .map((row) => foreman.repos(row.code).then((page) => (page.items.length > 0 ? [row.code] : []))),
+          ).then((found) => found.flat())
         : Promise.resolve([] as string[]),
     [codes, needRepos],
   );
-  const steps = setupSteps({
-    tokens: tokens.state.status === 'ready' ? tokens.state.value.items : null,
+  if (!enabled || repos.state.status === 'loading' || tokens.state.status === 'loading') return null;
+  return setupSteps({
+    // A refused read (a role without the token list) is "not read", never a tick.
+    tokens: tokens.state.status === 'ready' ? tokens.state.value : null,
     rows,
     linked: repos.state.status === 'ready' ? repos.state.value : null,
   });
+}
+
+/** Where "Not now" on the Finish setting up card is remembered, per browser. */
+export const SETUP_DISMISSED_KEY = 'foreman.home.setup-dismissed';
+
+export function readSetupDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(SETUP_DISMISSED_KEY) === '1';
+  } catch {
+    // Storage refused (a private window, a policy): the card shows, and Not now hides it until reload.
+    return false;
+  }
+}
+
+export function writeSetupDismissed(): void {
+  try {
+    window.localStorage.setItem(SETUP_DISMISSED_KEY, '1');
+  } catch {
+    // As above: remembered for this page only.
+  }
+}
+
+/** Whether Home shows the Finish setting up card: some step pending, and not put off here. */
+export function showFinishCard(steps: readonly SetupStep[] | null, dismissed: boolean): boolean {
+  return !dismissed && steps !== null && steps.some((step) => !step.done);
+}
+
+/**
+ * Home once there is a real project and setup is not finished (board D-09): one line — how far,
+ * and what is next — that opens to the checklist, and "Not now", remembered in this browser. Above
+ * the ledger, so Home is the dashboard first. Not a heading: the page's sections are its groups.
+ */
+export function FinishSettingUp({ rows }: { rows: readonly PortfolioRow[] }) {
+  const [dismissed, setDismissed] = useState(readSetupDismissed);
+  const [open, setOpen] = useState(false);
+  const steps = useSetupSteps(rows, !dismissed);
+  const bodyId = useId();
+  if (steps === null || !showFinishCard(steps, dismissed)) return null;
+  const next = steps.find((step) => step.state === 'next');
+  return (
+    <div role="region" aria-label="Finish setting up" className="fm-finish">
+      <Card padding="sm">
+        <Stack gap="12">
+          <Cluster gap="12" align="center" justify="between">
+            <span>
+              <strong>Finish setting up</strong>
+              <span className="fm-muted">
+                {' · '}
+                {setupSummary(steps)}
+                {next === undefined ? '' : ` · next: ${next.title.toLowerCase()}`}
+              </span>
+            </span>
+            <Cluster gap="8" align="center">
+              <Button
+                variant="ghost"
+                aria-expanded={open}
+                aria-controls={bodyId}
+                onClick={() => { setOpen(!open); }}
+              >
+                {open ? 'Hide the steps' : 'Show the steps'}
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  writeSetupDismissed();
+                  setDismissed(true);
+                }}
+              >
+                Not now
+              </Button>
+            </Cluster>
+          </Cluster>
+          <div id={bodyId} hidden={!open}>
+            {open && <SetupChecklist steps={steps} rows={rows} />}
+          </div>
+        </Stack>
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * Home with no real project: the checklist, the samples, and what Home will show.
+ */
+export function FirstRun({ rows, onChanged }: { rows: readonly PortfolioRow[]; onChanged: () => void }) {
+  const steps =
+    useSetupSteps(rows) ?? setupSteps({ tokens: null, rows, linked: null });
   return (
     <Stack gap="24">
       <SetupChecklist steps={steps} rows={rows} />

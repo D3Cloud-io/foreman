@@ -36,7 +36,7 @@ import { SegmentBar, StatCard } from '../ui/viz';
 import { breakdown, CRITICAL_PLUS_HIGH, plural, readAcross, readValue } from '../ui/status';
 import { SERIES } from '../ui/tone';
 import { CATEGORIES } from './DriftView';
-import { FirstRun as SetUp, labelSamples, realRows, sampleRows } from './FirstRun';
+import { FinishSettingUp, FirstRun as SetUp, labelSamples, realRows, sampleRows } from './FirstRun';
 
 /**
  * Home — the portfolio ledger (17.01, FRM-REQ-224, FRM-REQ-228, FRM-REQ-245, FRM-T-18.6).
@@ -282,7 +282,8 @@ function GroupSection({
               : (group.description ?? '')}
           </span>
         </div>
-        <span className="fm-muted fm-gsection__counts">{sectionSummary(section.rows)}</span>
+        {/* Over the real projects: a sample is listed, labelled, and counted nowhere (FRM-T-18.9). */}
+        <span className="fm-muted fm-gsection__counts">{sectionSummary(realRows(section.rows))}</span>
       </div>
       <div id={bodyId} hidden={collapsed}>
         {section.rows.length === 0 ? (
@@ -445,6 +446,7 @@ export function Home({ search }: { search: string }) {
     return frame(
       `${plural(rows.length, 'project', 'projects')}${phrase === null ? '' : ` in ${phrase}`}, and what needs looking at.`,
       <Stack gap="32">
+        {/* No Finish setting up here: setup is the whole Foreman's, and a scope sees one family. */}
         <StatStrip rows={rows} projectsDetail={phrase === null ? 'In this scope' : `In ${phrase}`} scope={scope} severities={severities} />
         <NeedsYouStrip rows={rows} />
         {sections.map((section) => (
@@ -466,6 +468,7 @@ export function Home({ search }: { search: string }) {
     return frame(
       `${plural(rows.length, 'project', 'projects')}, and what needs looking at.`,
       <Stack gap="24">
+        <FinishSettingUp rows={grouped.items} />
         {!introDismissed && (
           <FirstRun
             onDismiss={() => {
@@ -504,9 +507,10 @@ export function Home({ search }: { search: string }) {
       n === 1 ? 'group' : 'groups'
     }, and what needs looking at.`,
     <Stack gap="32">
+      <FinishSettingUp rows={grouped.items} />
       <StatStrip
         rows={rows}
-        projectsDetail={groupsDetail(n, grouped.ungrouped?.projects.length ?? 0)}
+        projectsDetail={groupsDetail(n, realRows(grouped.ungrouped?.projects ?? []).length)}
         scope={null}
         severities={severities}
       />
