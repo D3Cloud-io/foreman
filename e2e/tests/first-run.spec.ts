@@ -86,6 +86,30 @@ test.describe('first run from the console', () => {
 
   test('with no real project, Home is a setup checklist ticked from real state', async ({ page }) => {
     await onlySamples(page);
+    // An agent has called Foreman, as far as this page is told — whatever other specs did with
+    // tokens — so step 1 is done and step 2 is the next one, with its actions shown.
+    await page.route(/\/api\/tokens$/, (route) =>
+      route.request().method() === 'GET'
+        ? route.fulfill({
+            json: {
+              items: [
+                {
+                  id: '00000000-0000-7000-8000-000000000001',
+                  name: 'first-run agent',
+                  prefix: 'frm_e2e0',
+                  scopes: ['read', 'write'],
+                  createdAt: new Date(Date.now() - 86_400_000).toISOString(),
+                  lastUsedAt: new Date().toISOString(),
+                  expiresAt: null,
+                  revokedAt: null,
+                },
+              ],
+              nextCursor: null,
+              total: 1,
+            },
+          })
+        : route.continue(),
+    );
     await page.goto('/');
     const main = page.getByRole('main');
     const checklist = main.getByRole('region', { name: 'Set Foreman up' });
@@ -98,7 +122,8 @@ test.describe('first run from the console', () => {
       'Link its repository',
       'See the first commit',
     ]);
-    await expect(checklist.getByRole('button', { name: 'Connect an agent' })).toBeVisible();
+    // Step 1 is done, so its button offers another agent.
+    await expect(checklist.getByRole('button', { name: 'Connect another' })).toBeVisible();
     // The samples do not count as a project, and no figure claims "clean".
     await expect(checklist).toContainText('The samples do not count');
     await expect(main.getByRole('link', { name: /CI · reporting/ })).toHaveCount(0);
