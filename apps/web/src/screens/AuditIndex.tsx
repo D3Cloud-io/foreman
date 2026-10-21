@@ -9,6 +9,7 @@ import { foreman, type AuditRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
+import { formatDate } from '../lib/text';
 
 /**
  * The Audit Index, generated (T-4.12, FRM-REQ-073, ADR-006).
@@ -38,7 +39,7 @@ export function AuditIndex({ code }: { code: string }) {
       width: '8rem',
       phone: 'fold',
       sortable: true,
-      cell: (row) => row.runDate.slice(0, 10),
+      cell: (row) => formatDate(row.runDate),
     },
     {
       key: 'scope',

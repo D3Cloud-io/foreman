@@ -21,6 +21,7 @@ import { foreman, type CommitRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { useMutate } from '../lib/mutate';
+import { formatDate, formatDateTime } from '../lib/text';
 
 /**
  * S-24 — what actually happened: commits, their attribution proposals, CI and what is deployed.
@@ -43,6 +44,8 @@ export function Activity({ code }: { code: string }) {
   const ci = useAsync(() => foreman.ci(code), [code]);
   const cadence = useAsync(() => foreman.cadence(code), [code]);
   const deployments = useAsync(() => foreman.deployments(code), [code]);
+  // The cadence reads the whole project, not the filter: no last commit means nothing was ever ingested.
+  const nothingIngested = cadence.state.status === 'ready' && cadence.state.value.lastCommitAt === null;
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const { mutate } = useMutate();
@@ -139,7 +142,7 @@ export function Activity({ code }: { code: string }) {
                 <code>{deployments.state.value.items[0]?.schemaRevision ?? 'not reported'}</code>
               </DescriptionItem>
               <DescriptionItem term="When">
-                {new Date(deployments.state.value.items[0]?.deployedAt ?? '').toLocaleString()}
+                {formatDateTime(deployments.state.value.items[0]?.deployedAt ?? '')}
               </DescriptionItem>
             </DescriptionList>
           )}
@@ -181,16 +184,23 @@ export function Activity({ code }: { code: string }) {
           {commits.state.message}
         </EmptyState>
       ) : commits.state.value.items.length === 0 ? (
-        <EmptyState
-          kind={filter === 'proposed' ? 'empty' : 'no-results'}
-          heading={filter === 'proposed' ? 'Nothing waiting' : 'No commits match'}
-        >
-          {filter === 'proposed'
-            ? 'Every proposal has been confirmed or rejected.'
-            : filter === 'none'
-              ? 'Every commit here is accounted for — which is rarer than it sounds.'
-              : 'Nothing has been ingested for this project yet.'}
-        </EmptyState>
+        nothingIngested ? (
+          // Nothing to review because nothing arrived: a different state from a queue that is empty.
+          <EmptyState kind="empty" heading="No commits ingested yet">
+            No commits ingested yet — connect a repository and they will appear here.
+          </EmptyState>
+        ) : (
+          <EmptyState
+            kind={filter === 'proposed' ? 'empty' : 'no-results'}
+            heading={filter === 'proposed' ? 'Nothing waiting' : 'No commits match'}
+          >
+            {filter === 'proposed'
+              ? 'Every proposal has been confirmed or rejected.'
+              : filter === 'none'
+                ? 'Every commit here is accounted for — which is rarer than it sounds.'
+                : 'No commits match this filter.'}
+          </EmptyState>
+        )
       ) : (
         <Stack gap="12" as="ul" aria-label={`Commits, ${filter}`}>
           {commits.state.value.items.map((commit) => (
@@ -234,7 +244,7 @@ function Commit({
             )}
           </div>
           <div className="fm-muted">
-            {commit.author} · {new Date(commit.committedAt).toLocaleDateString()} ·{' '}
+            {commit.author} · {formatDate(commit.committedAt)} ·{' '}
             {commit.repo.fullName}
           </div>
 

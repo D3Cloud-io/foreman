@@ -20,6 +20,7 @@ import { ProjectHeader } from '../components/ProjectHeader';
 import { PropertyRail, type RailRow } from '../components/PropertyRail';
 import { RealitySection } from '../components/RealitySection';
 import { realityChanged } from '../components/RealityStrip';
+import { formatDate } from '../lib/text';
 
 /**
  * S-12 — one task: what it is for, what it declares, what it satisfies, and what cites it.
@@ -165,13 +166,13 @@ function TaskRail({
       key: 'started',
       label: 'Started',
       children:
-        task.startedAt === null ? startedWhenMissing(task.status) : new Date(task.startedAt).toLocaleDateString(),
+        task.startedAt === null ? startedWhenMissing(task.status) : formatDate(task.startedAt),
     },
     {
       kind: 'text',
       key: 'completed',
       label: 'Completed',
-      children: task.completedAt === null ? 'not yet' : new Date(task.completedAt).toLocaleDateString(),
+      children: task.completedAt === null ? 'not yet' : formatDate(task.completedAt),
     },
   ];
 

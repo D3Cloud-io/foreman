@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { PortfolioRow } from '../lib/api';
+import { formatDate } from '../lib/text';
 import { ciWordOf, Ledger, needsYouOf, NeedsYouStrip, reasonsOf, StatStrip } from './Ledger';
 
 const COUNTS = {
@@ -72,7 +73,7 @@ describe('a ledger row (FRM-REQ-245)', () => {
     expect(out).toContain('Deployed vs main');
     expect(out).toContain('abcdef1 deployed today; main is 3 commits ahead.');
     expect(out).toContain('Last activity');
-    expect(out).toContain('2026-10-01');
+    expect(out).toContain(formatDate('2026-10-01T10:00:00.000Z'));
   });
 
   it('says so when the deployed SHA is not a known commit, and when nothing was ever deployed', () => {

@@ -10,6 +10,7 @@ import { foreman, type DocumentRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
+import { formatDate } from '../lib/text';
 
 /**
  * S-21 — the documents of one project, by kind.
@@ -66,7 +67,7 @@ export function Documents({ code }: { code: string }) {
       width: '10rem',
       sortable: true,
       phone: 'fold',
-      cell: (row) => new Date(row.updatedAt).toLocaleDateString(),
+      cell: (row) => formatDate(row.updatedAt),
     },
   ];
 

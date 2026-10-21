@@ -31,6 +31,7 @@ import { useMutate } from '../lib/mutate';
 import { useAsync } from '../lib/useAsync';
 import { Pill } from '../ui/viz';
 import { VERDICT_LABEL, VerdictPill, variantLabel, versionFor } from './Screens';
+import { formatDateTime } from '../lib/text';
 
 /**
  * One screen: the design beside what was built, a variant at a time (FRM-REQ-196), a PNG dropped
@@ -76,7 +77,7 @@ export function isPng(file: { type: string; name: string }): boolean {
 const VERDICTS: readonly ScreenVerdictKind[] = ['matches', 'drifted_accepted', 'drifted_fix'];
 
 function when(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return formatDateTime(iso);
 }
 
 export function ScreenDetail({ code, humanId }: { code: string; humanId: string }) {

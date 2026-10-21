@@ -24,3 +24,28 @@ export function plainText(input: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+const DATE: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'short', day: 'numeric' };
+const DATE_TIME: Intl.DateTimeFormatOptions = { ...DATE, hour: 'numeric', minute: '2-digit' };
+
+/**
+ * The one date format on every screen (FRM-DA-012): the operator's locale, one explicit shape —
+ * `Aug 30, 2026` in en-US. A bare `toLocaleDateString()` is a different shape per browser; a sliced
+ * ISO string is a shape no one reads aloud.
+ *
+ * A date with no time (`2026-08-30`) is a calendar day, not an instant, so it is read in UTC and
+ * never slides to the day before in a western time zone. Anything unparseable is a dash, not a throw.
+ */
+export function formatDate(iso: string): string {
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(iso);
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '—';
+  return new Intl.DateTimeFormat(undefined, day ? { ...DATE, timeZone: 'UTC' } : DATE).format(at);
+}
+
+/** `formatDate` with the time of day, for an instant that is an event rather than a day. */
+export function formatDateTime(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '—';
+  return new Intl.DateTimeFormat(undefined, DATE_TIME).format(at);
+}

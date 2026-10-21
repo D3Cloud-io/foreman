@@ -15,7 +15,7 @@ import { Markdown } from '../components/Markdown';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { foreman, type AdrRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
-import { plainText } from '../lib/text';
+import { formatDate, plainText } from '../lib/text';
 import { Pill, SegmentBar } from '../ui/viz';
 import { SERIES, type Tone } from '../ui/tone';
 
@@ -142,7 +142,7 @@ function AdrCard({ adr, onOpen }: { adr: AdrRow; onOpen: () => void }) {
         )}
         <Cluster gap="8" align="center">
           {adr.decidedOn !== null && (
-            <span className="fm-muted">decided {adr.decidedOn.slice(0, 10)}</span>
+            <span className="fm-muted">decided {formatDate(adr.decidedOn)}</span>
           )}
           {supersededBy.length > 0 && (
             <Pill tone="warning" dot>
@@ -161,7 +161,7 @@ function AdrBody({ adr }: { adr: AdrRow }) {
       <Cluster gap="8" align="center">
         <Pill tone={STATUS_TONE[adr.status] ?? 'neutral'}>{adr.status}</Pill>
         {adr.decidedOn !== null && (
-          <span className="fm-muted">decided {adr.decidedOn.slice(0, 10)}</span>
+          <span className="fm-muted">decided {formatDate(adr.decidedOn)}</span>
         )}
       </Cluster>
 

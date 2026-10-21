@@ -12,6 +12,7 @@ import {
   type BadgeTone,
 } from '../ui/status';
 import './RealityStrip.css';
+import { formatDate } from '../lib/text';
 
 /**
  * The reality strip (FRM-REQ-247, board D-08, FRM-DA-008): the single project header's second row.
@@ -57,9 +58,9 @@ export interface Cell {
   readonly muted: boolean;
 }
 
-/** An ISO instant as the date the strip shows: `2026-08-30`. Stable across locales. */
+/** An ISO instant as the date the strip shows, in the one date format (`formatDate`). */
 export function dayOf(iso: string): string {
-  return iso.slice(0, 10);
+  return formatDate(iso);
 }
 
 /** A deployed image's SHA as it is read aloud: `sha-3f8e21c…` or a long digest, as seven characters. */

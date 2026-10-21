@@ -15,6 +15,7 @@ import { foreman } from '../lib/api';
 import { failureMessage } from '../lib/mutate';
 import { useAsync } from '../lib/useAsync';
 import './HistoryDrawer.css';
+import { formatDateTime } from '../lib/text';
 
 /**
  * One record's history, beside it (FRM-REQ-243, board D-04): every audit event on it, newest
@@ -194,8 +195,6 @@ function HistoryEvent({ event, onUndone }: { event: AuditEventEntry; onUndone: (
       });
   };
 
-  const at = new Date(event.at);
-
   return (
     <li className="fm-history__event">
       <div className="fm-history__who">
@@ -203,7 +202,7 @@ function HistoryEvent({ event, onUndone }: { event: AuditEventEntry; onUndone: (
         <span>{channelOf(event.actor.kind)}</span>
         <Badge tone="neutral">{event.action}</Badge>
         <time className="fm-history__when" dateTime={event.at}>
-          {at.toLocaleString()}
+          {formatDateTime(event.at)}
         </time>
       </div>
       <p className="fm-history__summary">{event.summary}</p>

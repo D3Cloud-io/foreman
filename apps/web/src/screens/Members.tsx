@@ -19,6 +19,7 @@ import { useAsync } from '../lib/useAsync';
 import { Pill } from '../ui/viz';
 import { relativeDay } from '../ui/tone';
 import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
+import { formatDate } from '../lib/text';
 
 /**
  * Who is on the board (FRM-ADR-016, FRM-REQ-165).
@@ -78,13 +79,13 @@ export function Members() {
               different story, and Restore is how it is undone. */}
           {row.status === 'suspended' && (row.deleteAfter ?? null) !== null && (
             <span className="fm-muted">
-              deleting on {new Date(row.deleteAfter ?? '').toLocaleDateString(undefined, { dateStyle: 'medium' })} — Restore
+              deleting on {formatDate(row.deleteAfter ?? '')} — Restore
               cancels it
             </span>
           )}
           {row.status === 'invited' && row.invite !== null && (
             <span className="fm-muted">
-              invited, expires {new Date(row.invite.expiresAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}
+              invited, expires {formatDate(row.invite.expiresAt)}
             </span>
           )}
         </Stack>

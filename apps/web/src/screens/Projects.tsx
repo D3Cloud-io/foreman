@@ -237,7 +237,7 @@ export function Projects({ search }: { search: string }) {
 
         {rows.length === 0 && scope === null ? (
           <EmptyState kind="empty" heading="No projects yet">
-            Start one with New project, or import one from the archived vault with Import….
+            Start one with New project, or bring one in with Import….
           </EmptyState>
         ) : sections.length === 0 && needle === '' && onlyUngrouped ? (
           <EmptyState kind="empty" heading="No project is ungrouped">
