@@ -35,15 +35,21 @@ import './Ledger.css';
  * nothing here is green: a clean figure is neutral (FRM-REQ-241).
  */
 
+/** What the "Needs you" figure links to. */
+export const NEEDS_YOU_ID = 'needs-you';
+/** The first ledger on Home, which the CI figure links to. */
+export const CI_ANCHOR_ID = 'ci';
+
 // ─── Reading a row ─────────────────────────────────────────────────────────
 
-export type CiWord = 'passing' | 'failing' | 'never';
+export type CiWord = 'passing' | 'failing' | 'other' | 'never';
 
 /** The served `ciState`, falling back to what `ci` says for a row that predates it. */
 export function ciWordOf(row: PortfolioRow): CiWord {
   if (row.ciState !== undefined) return row.ciState;
   if (row.ci.unknown) return 'never';
-  return ciTone(row.ci.conclusion, false) === 'danger' ? 'failing' : 'passing';
+  if (ciTone(row.ci.conclusion, false) === 'danger') return 'failing';
+  return row.ci.conclusion === 'success' ? 'passing' : 'other';
 }
 
 /** The next task, with an absent field (a row that predates it) read as none. */
@@ -232,6 +238,7 @@ export function StatStrip({
           label="Needs you"
           value={needing}
           foot={needing === 0 ? 'Nothing waiting on you' : 'Listed just below'}
+          href={`#${NEEDS_YOU_ID}`}
         />
         <Stat
           label={CRITICAL_PLUS_HIGH}
@@ -263,11 +270,8 @@ export function StatStrip({
                 ? 'None waiting'
                 : `${plural(f.noTasks.length, 'project has', 'projects have')} no tasks yet`
           }
-          href={
-            f.blockedIn.length === 1 && f.blockedIn[0] !== undefined
-              ? `/projects/${f.blockedIn[0].code}`
-              : scopedHref('/projects', scope)
-          }
+          // The Blocked tab of the findings board (FRM-T-18.7), narrowed to the scope.
+          href={scopedHref('/findings?tab=blocked', scope)}
         />
         <Stat
           label="Drift"
@@ -287,7 +291,7 @@ export function StatStrip({
           value={f.ci.value}
           signal={f.ci.signal}
           foot={ciDetail(f.ci)}
-          href={scopedHref('/projects', scope)}
+          href={`#${CI_ANCHOR_ID}`}
         />
       </div>
       {f.notes.length > 0 && <p className="fm-muted fm-sstrip__notes">{f.notes.join(' · ')}</p>}
@@ -299,9 +303,15 @@ export function StatStrip({
 
 const STRIP_LIMIT = 6;
 
-function ReasonLinks({ reasons }: { reasons: readonly Reason[] }) {
+
+/**
+ * The chips that say why. `compact` is a ledger row's: on a phone a row has room for ONE chip — the
+ * most urgent, which `reasonsOf` lists first — so the rest are named as text ("+2 more") and live in
+ * the Needs-you strip, where every reason is a link. On a wide screen all chips show.
+ */
+function ReasonLinks({ reasons, compact = false }: { reasons: readonly Reason[]; compact?: boolean }) {
   return (
-    <ul className="fm-reasons">
+    <ul className={`fm-reasons${compact ? ' fm-reasons--compact' : ''}`}>
       {reasons.map((reason) => (
         <li key={reason.key}>
           <a className="fm-reasons__link" href={reason.href}>
@@ -311,6 +321,9 @@ function ReasonLinks({ reasons }: { reasons: readonly Reason[] }) {
           </a>
         </li>
       ))}
+      {compact && reasons.length > 1 && (
+        <li className="fm-reasons__more">+{reasons.length - 1} more</li>
+      )}
     </ul>
   );
 }
@@ -333,7 +346,7 @@ export function NeedsYouStrip({ rows }: { rows: readonly PortfolioRow[] }) {
   ].filter((part): part is string => part !== null);
 
   return (
-    <div role="group" aria-labelledby={titleId} className="fm-needsyou">
+    <div role="group" aria-labelledby={titleId} className="fm-needsyou" id={NEEDS_YOU_ID}>
       <div className="fm-needsyou__head">
         <h2 id={titleId} className="fm-needsyou__title">
           Needs you
@@ -481,7 +494,7 @@ function LedgerRow({ row }: { row: PortfolioRow }) {
         )}
       </div>
 
-      <div className="fm-lrow__drift">
+      <div className={`fm-lrow__drift${planned && row.drift.total > 0 ? '' : ' fm-lrow__drift--quiet'}`}>
         {planned ? (
           <a className={`fm-lrow__driftlink${row.drift.total > 0 ? ' fm-lrow__driftlink--some' : ''}`} href={`/projects/${row.code}/drift`}>
             {String(row.drift.total)}
@@ -496,7 +509,7 @@ function LedgerRow({ row }: { row: PortfolioRow }) {
 
       <div className="fm-lrow__need">
         {reasons.length > 0 ? (
-          <ReasonLinks reasons={reasons} />
+          <ReasonLinks reasons={reasons} compact />
         ) : (
           <span className="fm-muted">
             —<span className="fm-visually-hidden"> nothing needs you here</span>
@@ -504,11 +517,15 @@ function LedgerRow({ row }: { row: PortfolioRow }) {
         )}
       </div>
 
+      {/* A phone's line break between the project line and the phase line; hidden elsewhere. */}
+      <span className="fm-lrow__br" aria-hidden="true" />
+
       <div className="fm-lrow__ci">
         <a className="fm-lrow__cilink" href={`/projects/${row.code}/activity`}>
-          <Badge tone={ci === 'failing' ? 'danger' : 'neutral'} size="sm" className="fm-badge">
+          {/* What CI said, in words (`ciWord`'s "CI cancelled"): a cancelled run is not a pass. */}
+          <Badge tone={ciTone(row.ci.conclusion, row.ci.unknown)} size="sm" className="fm-badge">
             <span className="fm-visually-hidden">CI </span>
-            {ci}
+            {ci === 'other' ? (row.ci.conclusion ?? 'pending').replace(/_/g, ' ') : ci}
           </Badge>
         </a>
       </div>
@@ -530,7 +547,7 @@ function LedgerRow({ row }: { row: PortfolioRow }) {
           <div>
             <dt>Plan</dt>
             <dd>
-              {`${row.lifecycle} · ${total === 0 ? 'no tasks yet' : `${String(closed)} of ${String(total)} tasks closed, ${String(row.tasks.open)} open, ${String(row.tasks.blocked)} blocked`}`}
+              {`${row.lifecycle} · ${total === 0 ? 'no tasks yet' : `${String(closed)} of ${String(total)} tasks closed, ${String(row.tasks.open)} open, ${String(row.tasks.blocked)} blocked`}${planned ? ` · ${String(row.drift.total)} drift` : ''}`}
             </dd>
           </div>
         </dl>
@@ -552,9 +569,9 @@ function LedgerRow({ row }: { row: PortfolioRow }) {
  * header is for the eye; every cell states its own meaning in words, so a screen reader reads a
  * list of projects and not a grid of fragments.
  */
-export function Ledger({ rows }: { rows: readonly PortfolioRow[] }) {
+export function Ledger({ rows, anchor }: { rows: readonly PortfolioRow[]; anchor?: string }) {
   return (
-    <div className="fm-ledger">
+    <div className="fm-ledger" id={anchor}>
       <div className="fm-ledger__head" aria-hidden="true">
         <span className="fm-lrow__x" />
         <span className="fm-lrow__project">Project</span>

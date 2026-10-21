@@ -91,6 +91,38 @@ describe('a ledger row (FRM-REQ-245)', () => {
     expect(out).not.toMatch(/fm-lrow__drift"><a/);
   });
 
+  it('reads a run that neither passed nor failed as what it was, not as a pass', () => {
+    const out = html(
+      <Ledger rows={[row('AAA', { ci: { conclusion: 'cancelled', unknown: false }, ciState: 'other' })]} />,
+    );
+    expect(out).toContain('cancelled');
+    expect(out).not.toContain('passing');
+    expect(ciWordOf(row('A', { ciState: 'other' }))).toBe('other');
+    // And a row that predates ciState reads the same way from `ci`.
+    const old = { ...row('A'), ci: { conclusion: 'action_required', unknown: false } } as PortfolioRow;
+    delete (old as { ciState?: unknown }).ciState;
+    expect(ciWordOf(old)).toBe('other');
+  });
+
+  it('gives a phone row ONE chip, the most urgent, and names the rest as text', () => {
+    const out = html(
+      <Ledger
+        rows={[
+          row('AAA', {
+            openCriticals: 1,
+            tasks: { open: 1, blocked: 2, done: 0, cancelled: 0 },
+            unconfirmedAttributions: 3,
+          }),
+        ]}
+      />,
+    );
+    expect(out).toContain('fm-reasons--compact');
+    expect(out).toContain('+2 more');
+    // The most urgent is first; CSS shows only it on a phone.
+    expect(out.indexOf('1 critical + high')).toBeLessThan(out.indexOf('2 blocked'));
+    expect(out.indexOf('2 blocked')).toBeLessThan(out.indexOf('3 to review'));
+  });
+
   it('draws progress neutrally and never in green', () => {
     const out = html(<Ledger rows={[row('AAA')]} />);
     expect(out).toContain('fm-bar__fill');
@@ -156,6 +188,10 @@ describe('the stat strip', () => {
     expect(out).toContain('not measurable yet');
     expect(out).toContain('href="/findings?group=dormice"');
     expect(out).toContain('href="/drift?group=dormice"');
+    // The figures that are not lists link where they can: the strip, the ledger's CI, blocked work.
+    expect(out).toContain('href="#needs-you"');
+    expect(out).toContain('href="#ci"');
+    expect(out).toContain('href="/findings?tab=blocked&amp;group=dormice"');
     expect(out).not.toContain('Green');
   });
 });

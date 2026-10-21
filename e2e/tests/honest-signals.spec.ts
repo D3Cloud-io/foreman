@@ -66,9 +66,16 @@ test.describe('honest signals', () => {
     const tile = main.getByRole('link', { name: /Critical \+ high/ });
     await expect(tile).toBeVisible();
     await expect(tile).toHaveAttribute('href', '/findings');
-    // Every stat is a link to the list it counts.
-    for (const label of ['Projects', 'Blocked tasks', 'Drift', 'CI · reporting']) {
-      await expect(main.getByRole('link', { name: new RegExp(label) }).first()).toHaveAttribute('href', /^\/(projects|drift)/);
+    // Every stat that counts a list is a link to it (FRM-T-18.6): projects, blocked work (the
+    // findings board's Blocked tab), drift, and CI, which is the ledger's CI column on this page.
+    const hrefs: Record<string, RegExp> = {
+      Projects: /^\/projects/,
+      'Blocked tasks': /^\/findings\?tab=blocked/,
+      Drift: /^\/drift/,
+      'CI · reporting': /^#ci$/,
+    };
+    for (const [label, href] of Object.entries(hrefs)) {
+      await expect(main.getByRole('link', { name: new RegExp(label) }).first()).toHaveAttribute('href', href);
     }
   });
 
