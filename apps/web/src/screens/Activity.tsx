@@ -61,9 +61,8 @@ export function Activity({ code }: { code: string }) {
       refresh: commits.refresh,
       // The sidebar's "Activity, N waiting for review" changed with this answer.
       signals: true,
-      // The server's undo does not reach a commit's attribution (`commit` is not an undoable
-      // entity), so no Undo is offered that would only be refused.
-      undoable: false,
+      // Undo puts the proposal back (FRM-T-18.14): the commit_task link and its confirmed flag.
+      undone: `${sha.slice(0, 7)} is waiting to be reviewed again`,
       failure: 'inline',
     })
       .then((outcome) => {

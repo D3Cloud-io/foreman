@@ -365,6 +365,30 @@ test.describe('groups', () => {
     await expect(page.getByRole('link', { name: ALPHA, exact: true })).toBeHidden();
   });
 
+  test('deleting an empty group acts with an Undo toast that brings it back (FRM-T-18.14)', async ({ page }) => {
+    const name = `Scratch ${RUN}`;
+    const made = await page.request.post('/api/groups', { data: { name, accent: 'neutral', description: 'deleted, then undone' } });
+    expect(made.status(), await made.text()).toBe(201);
+
+    await page.goto('/groups');
+    await page.getByRole('button', { name: `More for ${name}` }).click();
+    await page.getByRole('menuitem', { name: `Delete ${name}…` }).click();
+    await page.getByRole('dialog', { name: `Delete ${name}` }).getByRole('button', { name: 'Delete group' }).click();
+    await expect(page.getByRole('link', { name, exact: true })).toBeHidden();
+
+    // Said, with Undo beside it — the list updates in place, with no skeleton in between.
+    await expect(page.getByText(`Deleted ${name}`)).toBeVisible();
+    await page.getByRole('button', { name: /^Undo/ }).click();
+    await expect(page.getByText(`Put ${name} back`)).toBeVisible();
+    await expect(page.getByRole('link', { name, exact: true })).toBeVisible();
+    expect((await listing(page.request)).items.some((g) => g.name === name)).toBe(true);
+
+    // Left as it was found for the specs that count groups.
+    const row = (await listing(page.request)).items.find((g) => g.name === name);
+    const gone = await page.request.delete(`/api/groups/${row?.humanId ?? ''}`);
+    expect(gone.status()).toBe(204);
+  });
+
   test("a project's overview shows its group and moves it", async ({ page }) => {
     await page.goto(`/projects/${P1}`);
     const chip = page.getByRole('main').getByRole('link', { name: GAMMA }).first();

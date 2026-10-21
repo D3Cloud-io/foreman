@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast, type ToastApi } from '@d3cloud/ui';
 import { ApiError, type RolledUp } from './api';
 import { refreshSignals } from '../components/shellSignals';
-import { undoAll, type UndoReport } from './undo';
+import { undoAll, undoSummary, type UndoCheck, type Undoable, type UndoReport } from './undo';
 
 /**
  * Every console write, one way (FRM-REQ-243, FRM-T-18.4, design review FRM-DA-004).
@@ -45,7 +45,16 @@ export interface MutationSpec<R> {
   failure?: 'toast' | 'inline';
   /** After an undo, whether it worked or not — for a screen that must do more than refresh. */
   onUndone?: (report: UndoReport) => void;
+  /**
+   * The sentence an undo ends with, when the screen can say more than the default can — the Groups
+   * screens name which projects are back and which have changed since ("Undid 1 of 2 — X has changed
+   * since", `undoWords`). Given the whole report; the default is `undoOutcome`.
+   */
+  undoWords?: (report: UndoReport) => string | Promise<string>;
 }
+
+/** What announcing and undoing a write need: everything but the write itself. */
+export type Announcement<R> = Omit<MutationSpec<R>, 'run'>;
 
 export type MutationOutcome<R> =
   | { readonly ok: true; readonly value: R }
@@ -139,37 +148,50 @@ export async function runMutation<R>(spec: MutationSpec<R>, toast: Toaster): Pro
   spec.refresh?.();
   if (spec.signals === true) refreshSignals();
 
-  const line = spec.message(result);
-  if (line !== null) {
-    const ids = eventIdsOf(result);
-    const offer = spec.undoable !== false && ids.length > 0;
-    toast.show({
-      message: withRollups(line, rolledUpOf(result)),
-      ...(offer
-        ? {
-            action: {
-              label: 'Undo',
-              onAction: () => {
-                void undoMutation(spec, ids, toast);
-              },
-            },
-          }
-        : {}),
-    });
-  }
+  announceMutation(spec, result, toast);
   return { ok: true, value: result };
+}
+
+/**
+ * The toast for a write that has landed: what happened and what rolled up, with Undo when the server
+ * answered with events to reverse. `runMutation` ends here; a screen whose write was made by a
+ * shared dialog (the Move dialog) calls it with that write's answer.
+ */
+export function announceMutation<R>(spec: Announcement<R>, result: R, toast: Toaster): void {
+  const line = spec.message(result);
+  if (line === null) return;
+  const ids = eventIdsOf(result);
+  const offer = spec.undoable !== false && ids.length > 0;
+  toast.show({
+    message: withRollups(line, rolledUpOf(result)),
+    ...(offer
+      ? {
+          action: {
+            label: 'Undo',
+            onAction: () => {
+              void undoMutation(spec, ids, toast);
+            },
+          },
+        }
+      : {}),
+  });
 }
 
 /** Undo a write: every event, last-first, then say what happened and re-read in place. */
 export async function undoMutation<R>(
-  spec: MutationSpec<R>,
+  spec: Announcement<R>,
   ids: readonly string[],
   toast: Toaster,
 ): Promise<UndoReport> {
   const report = await undoAll(ids);
   const undone = spec.undone ?? `Undone — ${spec.subject} is as it was`;
+  let words = undoOutcome(report, spec.subject, undone);
+  if (spec.undoWords !== undefined) {
+    // Said by the screen; if it cannot (a read-back failed), the server's own words stand.
+    words = await Promise.resolve(spec.undoWords(report)).catch(() => words);
+  }
   toast.show({
-    message: undoOutcome(report, spec.subject, undone),
+    message: words,
     ...(report.refused.length > 0 ? { duration: 0 } : {}),
   });
   spec.refresh?.();
@@ -236,6 +258,55 @@ export function useMutate(): {
   );
 
   return { mutate, pending };
+}
+
+// ─── Writes made elsewhere, and the partial-undo report ──────────────────────
+
+/**
+ * An `undoWords` that tells a partial undo item by item (FRM-T-17.3): all of it, the success line;
+ * part of it, "Undid 1 of 2 — KURO has changed since", read back from the state after the undo.
+ * `check` is only asked when something was refused.
+ */
+export function undoReportWords(
+  undone: string,
+  check?: () => Promise<UndoCheck>,
+): (report: UndoReport) => Promise<string> {
+  return async (report) => {
+    let checked: UndoCheck | undefined;
+    if (report.refused.length > 0 && check !== undefined) {
+      checked = await check().catch(() => undefined);
+    }
+    return undoSummary(report, undone, checked);
+  };
+}
+
+/**
+ * Announce a write that was already made — the shared Move dialog does the move and hands the screen
+ * its answer. The same toast and the same Undo as `useMutate`.
+ */
+export function useAnnounce(): <R>(spec: Announcement<R>, result: R) => void {
+  const toast = useToast();
+  return (spec, result) => { announceMutation(spec, result, toast); };
+}
+
+/**
+ * The Groups screens' older form of `useAnnounce` (FRM-T-17.3), kept as a thin alias: a line, the
+ * events to reverse, what the undo says, how to tell a partial undo, and what to re-read.
+ */
+export function useUndoToast(): (undoable: Undoable) => void {
+  const announce = useAnnounce();
+  return ({ message, auditEventIds, undone = 'Undone', check, reload }) => {
+    announce(
+      {
+        subject: message,
+        message: () => message,
+        undone,
+        refresh: reload,
+        undoWords: undoReportWords(undone, check),
+      },
+      { auditEventIds },
+    );
+  };
 }
 
 // ─── Drafts ──────────────────────────────────────────────────────────────────

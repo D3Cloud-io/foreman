@@ -3,7 +3,7 @@ import { Alert, Button, FormActions, Modal, Stack } from '@d3cloud/ui';
 import { TriangleAlert } from 'lucide-react';
 import type { GroupAccent, GroupListing } from '@foreman/shared';
 import { foreman, type GroupWrite } from '../lib/api';
-import { useUndoToast } from '../lib/undo';
+import { useMutate, useUndoToast } from '../lib/mutate';
 import {
   accentColor,
   changes,
@@ -162,7 +162,7 @@ export function MoveToGroupDialog({
   const [target, setTarget] = useState<string | null>(null);
   // `null` while the reads are in flight, `'failed'` when one did not come back.
   const [guidelines, setGuidelines] = useState<Map<string, string[]> | 'failed' | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { mutate, pending: busy } = useMutate();
   const [error, setError] = useState<string | null>(null);
 
   const codes = projects.map((p) => p.code);
@@ -242,18 +242,23 @@ export function MoveToGroupDialog({
 
   const submit = () => {
     if (target === null) return;
-    setBusy(true);
     setError(null);
-    foreman
-      .moveToGroup(target === UNGROUPED ? null : target, codes)
-      .then((result) => {
+    // The write goes through `useMutate` (one at a time, the server's words on a refusal, shown
+    // here beside the form); the toast with Undo is the caller's `onMoved`, which knows where the
+    // screen re-reads from (`useMoveToast`).
+    void mutate({
+      subject: 'the move',
+      run: () => foreman.moveToGroup(target === UNGROUPED ? null : target, codes),
+      message: () => null,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (outcome.ok) {
         onOpenChange(false);
-        onMoved(result, codes, targetName, origin);
-      })
-      .catch((caught: unknown) => {
-        setError(caught instanceof Error ? caught.message : String(caught));
-      })
-      .finally(() => { setBusy(false); });
+        onMoved(outcome.value, codes, targetName, origin);
+      } else if (outcome.inFlight !== true) {
+        setError(outcome.message);
+      }
+    });
   };
 
   const title =

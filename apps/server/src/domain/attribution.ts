@@ -287,6 +287,9 @@ export async function confirmAttribution(
   if (task === null) throw new NotFound(taskHumanId);
 
   return db.$transaction(async (tx) => {
+    // Held while the row is read and written, so a concurrent undo of an earlier decision (or a
+    // second decision) sees this one whole (FRM-T-18.14).
+    await tx.$queryRaw`SELECT 1 FROM commit_task WHERE commit_id = ${commit.id}::uuid AND task_id = ${task.id}::uuid FOR UPDATE`;
     const before = await tx.commitTask.findUnique({
       where: { commitId_taskId: { commitId: commit.id, taskId: task.id } },
     });
@@ -348,6 +351,9 @@ export async function rejectAttribution(
   if (task === null) throw new NotFound(taskHumanId);
 
   return db.$transaction(async (tx) => {
+    // Held while the row is read and written, so a concurrent undo of an earlier decision (or a
+    // second decision) sees this one whole (FRM-T-18.14).
+    await tx.$queryRaw`SELECT 1 FROM commit_task WHERE commit_id = ${commit.id}::uuid AND task_id = ${task.id}::uuid FOR UPDATE`;
     const before = await tx.commitTask.findUnique({
       where: { commitId_taskId: { commitId: commit.id, taskId: task.id } },
     });

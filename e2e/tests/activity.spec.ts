@@ -145,6 +145,34 @@ test.describe('activity (S-24)', () => {
     // Gone from the review queue, because the queue is the thing being emptied.
     await expect(row).toBeHidden();
   });
+
+  test('confirming a proposal and pressing Undo puts it back to proposed (FRM-T-18.14)', async ({ page, request }) => {
+    await request.post('/auth/login', { data: { email: EMAIL, password: PASSWORD } });
+    const sha = await pushCommit(request, 'Work that is confirmed and then taken back (T-0.1)');
+    await waitForCommit(request, sha);
+
+    await signIn(page);
+    await page.goto('/projects/EXMP/activity');
+
+    const row = page.getByRole('listitem').filter({ hasText: sha.slice(0, 12) });
+    await row.getByRole('button', { name: /^Confirm / }).click();
+    await expect(row).toBeHidden();
+
+    // The toast names the decision and offers Undo: the commit_task link and its flag come back.
+    const toast = page.locator('.d3-toast').filter({ hasText: `${sha.slice(0, 7)} confirmed as` }).last();
+    await expect(toast).toBeVisible();
+    await toast.getByRole('button', { name: 'Undo' }).click();
+    await expect(page.getByText(`${sha.slice(0, 7)} is waiting to be reviewed again`)).toBeVisible();
+
+    // Back in the queue, in place, as a proposal and not as truth.
+    await expect(row).toBeVisible();
+    await expect(row.getByText('proposed')).toBeVisible();
+    const proposed = await request.get('/api/projects/EXMP/commits?attributed=proposed');
+    const body = (await proposed.json()) as { items: { sha: string; attributions: { confirmed: boolean; rejectedAt: string | null }[] }[] };
+    const mine = body.items.find((c) => c.sha === sha);
+    expect(mine, 'the commit is waiting to be reviewed again').toBeDefined();
+    expect(mine?.attributions.every((a) => !a.confirmed && a.rejectedAt === null)).toBe(true);
+  });
 });
 
 test.describe('what ingest may never do (FRM-REQ-108)', () => {

@@ -1,4 +1,4 @@
-import type { Db } from '../db.js';
+import { Prisma, type Db } from '../db.js';
 import type { EntityType } from '../generated/prisma/enums.js';
 import type { AuditEventEntry, AuditEventsResponse, AuditEventUndoability } from '@foreman/shared';
 import { eventIds, record, scrub, summarize, type Actor, type TransactionClient } from './audit.js';
@@ -307,6 +307,10 @@ async function undoEvent(
       throw new Error('a dry run of a reorder finished without a verdict');
     });
   }
+
+  // A confirm or a reject of an attribution (FRM-T-18.14): recorded on the commit, but what changed
+  // is the commit_task row, so that row is what is put back.
+  if (event.entityType === 'commit') return undoAttribution(db, actor, event, dryRun);
 
   if (!isUndoable(event.entityType)) {
     throw new Conflict(`${event.entityType} changes cannot be undone`);
@@ -621,6 +625,97 @@ async function undoLink(
       action: event.action,
       entityType: resolved.fromType,
       entityHumanId: from,
+      reversalEventId: reversalId,
+      auditEventIds: [reversalId],
+    };
+  });
+}
+
+/** The columns of a `commit_task` row an undo of a decision puts back — its state, not its identity. */
+const ATTRIBUTION_STATE = ['source', 'confidence', 'confirmed', 'confirmedAt', 'confirmedBy', 'rejectedAt', 'evidence'] as const;
+
+/**
+ * Reverse a confirm or a reject of an attribution (FRM-T-18.14, FRM-REQ-243).
+ *
+ * The event is recorded on the commit, with the `commit_task` row as its `before` and `after`, so
+ * the row is what is replayed: a confirm goes back to the proposal it was (`confirmed` false, the
+ * signal, the confidence and the evidence it had), a reject goes back to the proposal or to the
+ * confirmation it turned down. A confirm that made the row — Claude declaring work nobody had
+ * proposed — is undone by removing the row it made.
+ *
+ * Declared, never inferred (FRM-ADR-005): nothing here can set `confirmed` that the original
+ * decision did not already hold, so an undo only ever moves toward the earlier state. The same
+ * refusal as everywhere: the row must still be as the event left it, and the task must still exist.
+ */
+async function undoAttribution(
+  db: Db,
+  actor: Actor,
+  event: AuditEventRow,
+  dryRun: boolean,
+): Promise<UndoResult> {
+  const before = event.before as Record<string, unknown> | null;
+  const after = event.after as Record<string, unknown> | null;
+  const commitId = after?.['commitId'];
+  const taskId = after?.['taskId'];
+  if (event.action !== 'update' || typeof commitId !== 'string' || typeof taskId !== 'string') {
+    throw new Conflict('commit changes cannot be undone');
+  }
+  const key = { commitId_taskId: { commitId, taskId } };
+
+  return db.$transaction(async (tx) => {
+    if (!dryRun) {
+      const claimed = await tx.auditEvent.updateMany({
+        where: { id: event.id, undoneAt: null },
+        data: { undoneAt: new Date() },
+      });
+      if (claimed.count === 0) throw new Conflict('that change has already been undone');
+      // Held with the confirm and reject that write the same row, so the state compared below is the
+      // state every other decision left. A dry run is advisory and holds nothing.
+      await tx.$queryRaw`SELECT 1 FROM commit_task WHERE commit_id = ${commitId}::uuid AND task_id = ${taskId}::uuid FOR UPDATE`;
+    }
+
+    const current = await tx.commitTask.findUnique({ where: key });
+    if (current === null) {
+      throw new Conflict('that change cannot be undone: the attribution it decided no longer exists');
+    }
+    const task = await tx.task.findUnique({ where: { id: taskId }, select: { deletedAt: true } });
+    if (task === null || task.deletedAt !== null) {
+      throw new Conflict('that change cannot be undone: the task it attributed is deleted');
+    }
+    assertUnchangedSince(current, after);
+
+    if (dryRun) throw new DryRunPassed();
+
+    let restored: unknown;
+    if (before === null) {
+      await tx.commitTask.delete({ where: key });
+      restored = { removed: true, commitId, taskId };
+    } else {
+      const data: Record<string, unknown> = {};
+      for (const field of ATTRIBUTION_STATE) {
+        if (!(field in before)) continue;
+        const value = before[field];
+        data[field] = field === 'evidence' && value === null ? Prisma.DbNull : value;
+      }
+      restored = await tx.commitTask.update({ where: key, data });
+    }
+
+    const reversalId = await record(tx, {
+      ...actor,
+      action: 'undo',
+      entityType: 'commit',
+      entityId: event.entityId,
+      ...(event.entityHumanId === null ? {} : { entityHumanId: event.entityHumanId }),
+      before: current,
+      after: restored,
+    });
+    await tx.auditEvent.update({ where: { id: event.id }, data: { undoneByEventId: reversalId } });
+
+    return {
+      undid: event.id,
+      action: event.action,
+      entityType: 'commit',
+      entityHumanId: event.entityHumanId,
       reversalEventId: reversalId,
       auditEventIds: [reversalId],
     };

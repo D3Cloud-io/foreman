@@ -198,7 +198,7 @@ test.describe('triage on /findings', () => {
     expect((await findingState(request, second)).verified).toBe('confirmed');
   });
 
-  test('Review: confirms with y and rejects with n, moving on by itself, with no Undo offered', async ({ page }) => {
+  test('Review: confirms with y and rejects with n, moving on by itself, and Undo puts a ruling back', async ({ page }) => {
     const request = page.request;
     const one = await propose(request, 'T-0.1');
     const two = await propose(request, 'T-0.1');
@@ -210,8 +210,8 @@ test.describe('triage on /findings', () => {
     await page.keyboard.press('y');
     const confirmed = toast(page, `Confirmed ${one.slice(0, 7)} → EXMP-T-0.1`);
     await expect(confirmed).toBeVisible();
-    // Not reversible by the server yet (FRM-T-18.14): no Undo that would only be refused.
-    await expect(confirmed.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+    // Reversible since FRM-T-18.14: the Undo is offered, and pressed below.
+    await expect(confirmed.getByRole('button', { name: 'Undo' })).toBeVisible();
     await expect(page.locator('.fm-triage__row--dim').filter({ hasText: one.slice(0, 7) })).toContainText('confirmed just now');
     // Advanced: the selection left the ruled-on row.
     await expect(page).not.toHaveURL(new RegExp(`sel=${one.slice(0, 12)}`));
@@ -225,6 +225,16 @@ test.describe('triage on /findings', () => {
     const shas = ((await queue.json()) as { items: { commit: { sha: string } }[] }).items.map((i) => i.commit.sha);
     expect(shas).not.toContain(one);
     expect(shas).not.toContain(two);
+
+    // Undo on the rejection puts the proposal back in the queue.
+    await toast(page, `Rejected ${two.slice(0, 7)} → EXMP-T-0.1`).getByRole('button', { name: 'Undo' }).click();
+    await expect(toast(page, `${two.slice(0, 7)} → EXMP-T-0.1 is waiting for review again`)).toBeVisible();
+    await expect
+      .poll(async () => {
+        const again = await request.get('/api/attributions?status=proposed&project=EXMP&limit=200');
+        return ((await again.json()) as { items: { commit: { sha: string } }[] }).items.some((i) => i.commit.sha === two);
+      })
+      .toBe(true);
   });
 
   test('Drift: the resolving action is a prefilled editor you save, and Accept drift needs a reason', async ({ page }) => {
