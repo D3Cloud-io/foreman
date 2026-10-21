@@ -47,6 +47,7 @@ function render(tokens: readonly Token[], keyPrefix: string): ReactNode[] {
           <a
             key={key}
             href={link.href}
+            data-inline-link=""
             {...(link.title ? { title: link.title } : {})}
             {...(external ? { rel: 'noreferrer noopener' } : {})}
           >

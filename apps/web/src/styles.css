@@ -2136,8 +2136,9 @@ a.fm-glist__name:focus-visible {
     border-color: transparent;
   }
 
-  /* Every link in a screen is a control unless it is `variant="inline"`. */
-  :where(main a:not(.d3-lnk--inline, .d3-crd, [data-inline-link])) {
+  /* Every link in a screen is a control unless it is `variant="inline"` or prose: a link in rendered
+     Markdown sits inside a sentence, which WCAG 2.5.8 exempts, and a 44px box would split it. */
+  :where(main a:not(.d3-lnk--inline, .d3-crd, [data-inline-link], .fm-markdown a, .fm-inline-md a)) {
     display: inline-flex;
     align-items: center;
     min-height: 44px;

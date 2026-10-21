@@ -39,8 +39,8 @@ export function Members() {
   const refresh = useCallback(() => { setNonce((n) => n + 1); }, []);
   const { state } = useAsync(() => foreman.members(), [nonce]);
 
-  // Below 768px: the person is the title and their role select stays; status (and what is pending
-  // on it) and the suspend control fold into the sub-line under them (FRM-REQ-249).
+  // Below 768px: the person is the title, and their role select and status stay; the suspend
+  // control folds into the sub-line under them (FRM-REQ-249).
   const memberColumns: PriorityColumn<MemberRow>[] = [
     {
       key: 'name',
@@ -65,8 +65,8 @@ export function Members() {
       key: 'status',
       header: 'Status',
       width: '14rem',
-      phone: 'fold',
-      foldLabel: '',
+      // Kept on a phone: a table keeps its title, status and primary control (FRM-REQ-249).
+      phoneWidth: '6.5rem',
       cell: (row) => (
         <Stack gap="2">
           <Pill tone={row.status === 'active' ? 'success' : row.status === 'invited' ? 'warning' : 'danger'}>

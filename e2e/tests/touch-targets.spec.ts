@@ -147,7 +147,7 @@ function measure(args: { minimum: number; owned: readonly string[] }): Measured 
 
   /** WCAG 2.5.8's inline exception, and nothing broader. */
   const inSentence = (el: Element): boolean => {
-    if (!el.matches('.d3-lnk--inline, [data-inline-link]')) return false;
+    if (!el.matches('.d3-lnk--inline, [data-inline-link], .fm-markdown a, .fm-inline-md a')) return false;
     if (getComputedStyle(el).display !== 'inline') return false;
     const flow = blockOf(el);
     if (flow === null) return false;
@@ -227,6 +227,34 @@ test.describe('a thumb, not a cursor, on every screen', () => {
       expect(entry.req, `${entry.selector} needs the DS requirement that fixes it`).toMatch(/^DS-REQ-\d{3}$/);
       expect(entry.why.length).toBeGreaterThan(10);
     }
+  });
+
+  test('a link inside a sentence of a document stays in the sentence', async ({ page }) => {
+    await signIn(page);
+    // The seed has no Markdown link, so make one: a long one, in running prose.
+    const created = await page.request.post(`/api/projects/${CODE}/documents`, {
+      data: {
+        kind: 'research',
+        title: `Touch prose ${Date.now().toString(36)}`,
+        sections: [
+          {
+            heading: 'Prose',
+            bodyMd:
+              'The decision follows [the architecture overview of the ingest pipeline and its adapters](https://example.com/architecture) closely, and nothing else changed.',
+          },
+        ],
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    await page.goto(`/projects/${CODE}/documents/${id}`);
+
+    const link = page.getByRole('main').getByRole('link', { name: /the architecture overview/ });
+    await expect(link).toBeVisible();
+    // Inline, at the height of its line — not a 44px box that breaks the sentence around it.
+    expect(await link.evaluate((el) => getComputedStyle(el).display)).toBe('inline');
+    expect((await link.boundingBox())?.height ?? 0).toBeLessThan(40);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
   test('every control that can be seen is at least 44 by 44', async ({ page }) => {
