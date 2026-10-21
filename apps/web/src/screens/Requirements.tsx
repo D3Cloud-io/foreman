@@ -224,7 +224,6 @@ export function Requirements({ code, search }: { code: string; search: string })
           {/* Not virtualized: a virtualized table needs every row the same height, and a
               statement is one line or four. Two hundred rows of DOM is the cheaper trade. */}
           <Table
-            className="fm-tbl"
             caption={`Requirements of ${code}`}
             captionHidden
             density="compact"

@@ -232,7 +232,6 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
         <PhaseBoard tasks={tasks.state.value.items} code={code} onChanged={onStatusChanged} />
       ) : (
         <Table
-          className="fm-tbl"
           caption={`Tasks in ${phaseHumanId}`}
           captionHidden
           columns={columns}

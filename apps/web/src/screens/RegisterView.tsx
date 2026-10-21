@@ -154,7 +154,6 @@ export function RegisterView({ code }: { code: string }) {
         </EmptyState>
       ) : (
         <Table
-          className="fm-tbl"
           caption={`The requirements register for ${code}`}
           captionHidden
           density="compact"

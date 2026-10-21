@@ -216,7 +216,11 @@ test.describe('no sideways scroll at 390', () => {
 test.describe('tables, stats and badges on a phone', () => {
   test.use({ viewport: PHONE });
 
-  const TABLES = ['requirements', 'register', 'risks', 'glossary', 'audits', 'documents', 'screens'];
+  // Members is a board screen, absent on a solo Foreman (FRM-ADR-016), so it is not reachable here.
+  const TABLES = [
+    ...['requirements', 'register', 'risks', 'glossary', 'audits', 'documents', 'screens'].map((section) => `/projects/EXMP/${section}`),
+    '/system',
+  ];
 
   async function phaseWithTasks(page: Page): Promise<string> {
     const res = await page.request.get('/api/projects/EXMP/phases');
@@ -227,17 +231,17 @@ test.describe('tables, stats and badges on a phone', () => {
     return phase?.humanId ?? '';
   }
 
-  for (const section of TABLES) {
-    test(`${section}: no table scrolls sideways`, async ({ page }) => {
+  for (const path of TABLES) {
+    test(`${path}: no table scrolls sideways`, async ({ page }) => {
       await signIn(page);
-      await page.goto(`/projects/EXMP/${section}`);
+      await page.goto(path);
       await page.waitForLoadState('networkidle');
       const widths = await page.evaluate(() => [
         document.documentElement.scrollWidth - document.documentElement.clientWidth,
         ...[...document.querySelectorAll('.d3-tbl-scroll')].map((el) => el.scrollWidth - el.clientWidth),
       ]);
       expect(widths.length, 'the screen draws a table').toBeGreaterThan(1);
-      expect(widths, `${section} scrolls sideways`).toEqual(widths.map(() => 0));
+      expect(widths, `${path} scrolls sideways`).toEqual(widths.map(() => 0));
     });
   }
 
