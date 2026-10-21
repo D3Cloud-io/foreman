@@ -405,6 +405,8 @@ export interface Brief {
     requirements?: string[];
   }[];
   blocked: { humanId: string; title: string; reason: string | null }[];
+  /** Every open critical and high finding; `openCriticals` lists at most five of them. */
+  openCriticalTotal?: number;
   openCriticals: { humanId: string; severity: string; title: string; location: string | null }[];
   ci: { conclusion: string | null; commitSha: string | null; at: string | null; unknown: boolean };
   unconfirmedAttributions: number;

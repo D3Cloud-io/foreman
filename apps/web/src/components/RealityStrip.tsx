@@ -42,9 +42,6 @@ const DRIFT_KINDS: readonly DriftItem['category'][] = [
   'screen-drift',
 ];
 
-/** The server caps the brief's findings list at this many; a list this long may be longer still. */
-const BRIEF_FINDINGS_CAP = 5;
-
 export interface Cell {
   readonly key: 'phase' | 'tasks' | 'drift' | 'findings' | 'ci' | 'deployed';
   readonly label: string;
@@ -104,7 +101,8 @@ export function readStrip(code: string, brief: Brief, counts: ProjectDetail['cou
   });
   const kinds = DRIFT_KINDS.filter((kind) => brief.drift.counts[kind] > 0).length;
 
-  const criticals = brief.openCriticals.length;
+  // The true total (FRM-REQ-242): the list beside it is capped, so counting it would stop at five.
+  const criticals = brief.openCriticalTotal ?? brief.openCriticals.length;
   const ci = brief.ci;
   const deployed = brief.deployed ?? null;
 
@@ -148,7 +146,7 @@ export function readStrip(code: string, brief: Brief, counts: ProjectDetail['cou
       key: 'findings',
       label: CRITICAL_PLUS_HIGH,
       compactLabel: CRITICAL_PLUS_HIGH,
-      value: `${String(criticals)}${criticals >= BRIEF_FINDINGS_CAP ? '+' : ''}`,
+      value: String(criticals),
       detail: criticals === 0 ? 'none open' : 'open findings',
       href: `/findings?project=${code}`,
       tone: criticals > 0 ? 'danger' : 'neutral',
@@ -235,50 +233,59 @@ export function RealityStrip({ code, compact = false }: { code: string; compact?
 
   const className = compact ? 'fm-reality fm-reality--compact' : 'fm-reality';
 
+  // A labelled region of definition pairs — a term and what it reads — so the cells name
+  // themselves to a screen reader and cannot be mistaken for the screen's own "CI" or "Drift".
   if (state.status === 'loading') {
     // Holds the row's height, so the page under the header does not jump when it arrives.
     return (
-      <div className={className} aria-busy="true" aria-label="Reality" role="group">
+      <section className={className} aria-busy="true" aria-label="Project reality">
         <Skeleton lines={compact ? 1 : 2} />
-      </div>
+      </section>
     );
   }
   if (state.status === 'error') {
     return (
-      <div className={className} role="group" aria-label="Reality">
+      <section className={className} aria-label="Project reality">
         <span className="fm-muted">The reality strip did not load: {state.message}</span>
-      </div>
+      </section>
     );
   }
 
   const [brief, counts] = state.value;
   return (
-    <div className={className} role="group" aria-label="Reality">
-      {readStrip(code, brief, counts).map((cell) => {
-        const body = (
-          <>
-            <span className="fm-reality__label">{compact ? cell.compactLabel : cell.label}</span>
-            <span
-              className={`fm-reality__value fm-reality__value--${cell.muted ? 'muted' : cell.tone}`}
-              data-cell={cell.key}
-            >
-              {cell.value}
-            </span>
-            {cell.detail !== null && !(compact && COMPACT_QUIET.has(cell.key)) ? (
-              <span className="fm-reality__detail">{cell.detail}</span>
-            ) : null}
-          </>
-        );
-        return cell.href === null ? (
-          <div key={cell.key} className="fm-reality__cell">
-            {body}
+    <section className={className} aria-label="Project reality">
+      <dl className="fm-reality__list">
+        {readStrip(code, brief, counts).map((cell) => (
+          <div key={cell.key} className="fm-reality__cell" data-cell={cell.key}>
+            <dt className="fm-reality__label">{compact ? cell.compactLabel : cell.label}</dt>
+            <dd className="fm-reality__reading">
+              {cell.href === null ? (
+                <CellBody cell={cell} compact={compact} />
+              ) : (
+                <a className="fm-reality__link" href={cell.href}>
+                  <CellBody cell={cell} compact={compact} />
+                </a>
+              )}
+            </dd>
           </div>
-        ) : (
-          <a key={cell.key} className="fm-reality__cell" href={cell.href}>
-            {body}
-          </a>
-        );
-      })}
-    </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function CellBody({ cell, compact }: { cell: Cell; compact: boolean }) {
+  return (
+    <>
+      <span
+        className={`fm-reality__value fm-reality__value--${cell.muted ? 'muted' : cell.tone}`}
+        data-value={cell.key}
+      >
+        {cell.value}
+      </span>
+      {cell.detail !== null && !(compact && COMPACT_QUIET.has(cell.key)) ? (
+        <span className="fm-reality__detail">{cell.detail}</span>
+      ) : null}
+    </>
   );
 }

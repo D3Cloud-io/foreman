@@ -97,7 +97,7 @@ test.describe('honest signals', () => {
   test('a project with no plan shows drift as not measurable yet in the strip, never clean', async ({ page }) => {
     await page.goto(`/projects/${UNPLANNED}`);
     const main = page.getByRole('main');
-    const drift = page.getByRole('group', { name: 'Reality' }).locator('a', { hasText: /^Drift/ });
+    const drift = page.getByRole('region', { name: 'Project reality' }).locator('[data-cell="drift"]');
     // The figure is an em dash and the word is "not measurable yet", rather than a clean zero.
     await expect(drift).toContainText('—');
     await expect(drift).toContainText('not measurable yet');
@@ -121,7 +121,7 @@ test.describe('honest signals', () => {
     await page.goto(`/projects/${PLANNED}`);
     const main = page.getByRole('main');
     // The strip's drift cell must not read "clean": most of the six checks could not run.
-    const drift = page.getByRole('group', { name: 'Reality' }).locator('a', { hasText: /^Drift/ });
+    const drift = page.getByRole('region', { name: 'Project reality' }).locator('[data-cell="drift"]');
     await expect(drift).toBeVisible();
     await expect(drift).not.toContainText('clean');
 
