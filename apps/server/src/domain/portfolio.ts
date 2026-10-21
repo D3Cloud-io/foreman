@@ -64,6 +64,11 @@ export interface PortfolioRow {
     readonly total: number;
   };
   readonly lastActivityAt: string | null;
+  /**
+   * Seeded to show a full plan, not real work (FRM-T-18.9). Served as it is: the console leaves a
+   * sample out of Home's figures; what the portfolio counts stays every project.
+   */
+  readonly sample: boolean;
 }
 
 /**
@@ -200,6 +205,7 @@ export async function portfolio(db: Db, codes?: string[]): Promise<PortfolioRow[
         unconfirmedAttributions: unconfirmed,
         drift: { counts: drift.counts, total: drift.total },
         lastActivityAt: lastCommit?.committedAt.toISOString() ?? null,
+        sample: project.sample,
       };
     }),
   );

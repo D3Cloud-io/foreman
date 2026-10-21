@@ -336,6 +336,10 @@ model Project {
   groupId       String?          @map("group_id") @db.Uuid
   /// Its place within its group, or among the ungrouped (FRM-REQ-226). Ties are broken by code.
   groupPosition Int              @default(0) @map("group_position")
+  /// Seeded to show what a full plan looks like (`seed-example`: EXMP, NBR), never real work
+  /// (FRM-T-18.9). Labelled "Sample" in the console, counted in none of Home's figures, and the one
+  /// kind of project the console may remove. Set by the seed alone: no API or MCP write takes it.
+  sample        Boolean          @default(false)
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)

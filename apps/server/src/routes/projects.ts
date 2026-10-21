@@ -23,6 +23,7 @@ import {
   createTask,
   findProject,
   listPhases,
+  removeSampleProject,
   updatePhase,
   updateProject,
   updateRequirement,
@@ -215,6 +216,17 @@ export function projectRoutes(db: Db): Router {
       const updated = await updateProject(db, actorOf(req), code, body);
       setEtag(res, updated);
       res.json(updated);
+    }),
+  );
+
+  // A sample project only (FRM-T-18.9) — a real one is a 409 that says so. A soft delete: the
+  // events come back in the headers, and Undo restores it.
+  router.delete(
+    '/:code',
+    canWrite,
+    handler(async (req, res) => {
+      const { auditEventIds } = await removeSampleProject(db, actorOf(req), param(req, 'code'));
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 
