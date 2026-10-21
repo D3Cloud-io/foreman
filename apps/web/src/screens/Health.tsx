@@ -10,12 +10,12 @@ import {
   Skeleton,
   Stack,
   Table,
-  type TableColumn,
 } from '@d3cloud/ui';
 import { foreman, type HealthReport, type TechRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { Pill, SegmentBar, StatCard } from '../ui/viz';
 import { relativeDay, SERIES } from '../ui/tone';
+import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
 
 /**
  * S-26 and S-07 — is Foreman itself well, and what is everything made of.
@@ -57,12 +57,15 @@ export function Health() {
   const health = useAsync(() => foreman.healthReport(), []);
   const tech = useAsync(() => foreman.tech(), []);
 
-  const columns: TableColumn<TechRow>[] = [
-    { key: 'name', header: 'Technology', width: '14rem', sortable: true, cell: (row) => row.name },
-    { key: 'category', header: 'Kind', width: '9rem', cell: (row) => row.category },
+  // Below 768px: the technology is the title and how many versions it is on stays as the status;
+  // its kind and who uses it fold into the sub-line (FRM-REQ-249).
+  const techColumns: PriorityColumn<TechRow>[] = [
+    { key: 'name', header: 'Technology', width: '14rem', sortable: true, phone: 'host', cell: (row) => row.name },
+    { key: 'category', header: 'Kind', width: '9rem', phone: 'fold', foldLabel: '', cell: (row) => row.category },
     {
       key: 'projects',
       header: 'Used by',
+      phone: 'fold',
       cell: (row) =>
         row.projects
           .map((p) => `${p.code}${p.version === null ? '' : ` ${p.version}`}`)
@@ -72,6 +75,7 @@ export function Health() {
       key: 'spread',
       header: 'Versions',
       width: '7rem',
+      phoneWidth: '6rem',
       numeric: true,
       cell: (row) => {
         const versions = new Set(row.projects.map((p) => p.version ?? 'unknown'));
@@ -85,6 +89,8 @@ export function Health() {
       },
     },
   ];
+
+  const columns = priorityColumns(techColumns, usePhone());
 
   return (
     <Page>

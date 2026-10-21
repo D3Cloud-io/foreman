@@ -2058,7 +2058,17 @@ a.fm-glist__name:focus-visible {
    Controls the library draws and has not yet sized for a thumb (DS-REQ-016: Select, Input, Checkbox,
    a Table's sort header, PageHeader's back link; DS-REQ-017: SegmentedControl's width) are sized here
    from Foreman's side, by the element's own classes and never by changing a token. A fine pointer
-   keeps the dense sizes. */
+   keeps the dense sizes.
+
+   One rule per pattern, not one per screen:
+   - a field is 44 tall, and its input fills it;
+   - a checkbox's hit area is 44 by 44 and its drawn box stays 17 (below);
+   - a button, a tab, a segment and a sort header are at least 44 in both directions;
+   - **every link is a control** unless it is the library's `variant="inline"` link in running prose,
+     which WCAG 2.5.8 exempts: it cannot grow without breaking its line. A link that is a row's or
+     a card's action, a breadcrumb or a "see all" is a control, and is sized by the `:where()` rule,
+     which has no specificity of its own so a class that lays an anchor out (a grid row, a stretched
+     card) keeps its `display`. */
 @media (pointer: coarse) {
   .d3-inp:not(.d3-inp--area) {
     min-height: 44px;
@@ -2067,19 +2077,72 @@ a.fm-glist__name:focus-visible {
   .d3-inp__control {
     align-self: stretch;
   }
-  .d3-cbx {
-    min-height: 44px;
+  .d3-btn {
+    min-width: 44px;
   }
   .d3-seg__item {
     min-width: 44px;
+  }
+  .d3-tabs__tab {
+    min-height: 44px;
   }
   .d3-tbl__sort {
     min-height: 44px;
     min-width: 44px;
   }
-  /* An ID or a title in a table cell is the row's control, not a link in a sentence. */
-  .d3-tbl__td > a,
-  .d3-tbl__td > .fm-rowlink,
+
+  /* The checkbox is a 17px button beside a label. Its hit area becomes the 44px button and the
+     drawn box moves to ::before at the size it was, so a thumb has room and the page does not
+     change shape: the tick stays above the box. */
+  .d3-cbx {
+    min-height: 44px;
+    gap: var(--space-2);
+  }
+  .d3-cbx__box {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    background: transparent;
+    border-color: transparent;
+  }
+  .d3-cbx__box::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 17px;
+    height: 17px;
+    margin: -8.5px 0 0 -8.5px;
+    box-sizing: border-box;
+    border: var(--border-width) solid var(--color-border-field);
+    border-radius: var(--radius-xs);
+    background: var(--color-surface);
+  }
+  .d3-cbx__box[data-state="checked"]::before,
+  .d3-cbx__box[data-state="indeterminate"]::before {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .d3-cbx--invalid .d3-cbx__box::before {
+    border-color: var(--color-danger);
+  }
+  .d3-cbx__indicator {
+    position: relative;
+    z-index: 1;
+  }
+  .d3-cbx__box[data-state="checked"],
+  .d3-cbx__box[data-state="indeterminate"] {
+    background: transparent;
+    border-color: transparent;
+  }
+
+  /* Every link in a screen is a control unless it is `variant="inline"`. */
+  :where(main a:not(.d3-lnk--inline, .d3-crd, [data-inline-link])) {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    min-width: 44px;
+  }
   .fm-trail a,
   .d3-ph__back a {
     display: inline-flex;
@@ -2089,11 +2152,6 @@ a.fm-glist__name:focus-visible {
   }
   .fm-rowlink {
     display: flex;
-  }
-  a.fm-chip--link {
-    display: inline-flex;
-    align-items: center;
-    min-height: 44px;
   }
   /* The brand in the phone's top bar is a link home: AppShellBrand draws it at the height of its mark. */
   .d3-shell-brand {

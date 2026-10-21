@@ -98,7 +98,6 @@ export function AuditIndex({ code }: { code: string }) {
         </EmptyState>
       ) : (
         <Table
-          className="fm-tbl"
           caption={`Audits of ${code}`}
           captionHidden
           density="compact"

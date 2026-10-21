@@ -11,16 +11,18 @@ import { expect, test, type Page } from '@playwright/test';
  * What counts as a control: a, button, input, select, textarea, summary, and anything with the role
  * button, tab, menuitem, option, checkbox, radio or switch. What does not:
  *
- * - **Not on screen.** Under 2px either way (the skip link before it is focused, Radix's mirror
- *   `<select>`), `aria-hidden`, `inert`, `visibility: hidden`, or disabled (WCAG 2.5.8 exempts an
- *   inactive control).
- * - **A link inside a sentence.** WCAG 2.5.8's inline exception: an anchor that is `display: inline`
- *   among other text in a paragraph, list item or description cannot grow without breaking the
- *   line it sits in. A link that is the row's own control is not in a sentence — a table cell's ID,
- *   a stretched title — and is measured. `data-inline-link` marks one the heuristic cannot see.
+ * - **Not on screen.** Not rendered (0 by 0), `aria-hidden`, `inert`, `visibility: hidden`, disabled
+ *   (WCAG 2.5.8 exempts an inactive control), or under 2px **and clipped on purpose** (`clip`,
+ *   `clip-path`: the skip link before it is focused, a visually-hidden label). A sliver that is not
+ *   hidden on purpose is a tiny control, and is measured.
+ * - **A link inside a sentence**, WCAG 2.5.8's inline exception, and only that: the library's
+ *   `variant="inline"` link (or `data-inline-link`), `display: inline`, in a block whose text is mostly
+ *   prose (twenty characters or more of it, and more than the links'), and — in a list item,
+ *   description or cell — not the only control of that row. Any other link, and any link that is its
+ *   row's or card's one action, is a control and is measured. `measure()` is proved on a page of
+ *   known cases below, so a loosened rule fails there rather than quietly on a screen.
  * - **The field, not its inner input.** A text input is measured by the field that draws it
- *   (`.d3-inp`), and a checkbox, radio or switch by the label that is also its target: that is what
- *   a thumb lands on.
+ *   (`.d3-inp`), and a checkbox, radio or switch by its label when it sits in one: what a thumb lands on.
  *
  * The library's own controls are the library's to size, and are listed in `LIBRARY_OWNED` with the
  * design-system requirement that fixes them, never silently skipped. Foreman sizes everything it can
@@ -121,21 +123,40 @@ function measure(args: { minimum: number; owned: readonly string[] }): Measured 
   const small: string[] = [];
   const excused = new Set<string>();
 
+  /** Hidden from sight on purpose: clipped to nothing, as every visually-hidden pattern is. */
+  const clippedOnPurpose = (el: Element): boolean => {
+    for (let node: Element | null = el; node !== null; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.clipPath !== 'none' || (style.position === 'absolute' && style.getPropertyValue('clip') !== 'auto')) return true;
+    }
+    return false;
+  };
+
   const hiddenFromEveryone = (el: Element): boolean =>
     el.closest('[aria-hidden="true"], [inert]') !== null ||
     getComputedStyle(el).visibility === 'hidden' ||
     el.matches(':disabled') ||
     el.getAttribute('aria-disabled') === 'true';
 
-  /** An anchor among other text in a sentence: WCAG 2.5.8's inline exception. */
+  /** The nearest ancestor that is a block of text rather than a run inside one. */
+  const blockOf = (el: Element): Element | null => {
+    let node = el.parentElement;
+    while (node !== null && getComputedStyle(node).display.startsWith('inline')) node = node.parentElement;
+    return node;
+  };
+
+  /** WCAG 2.5.8's inline exception, and nothing broader. */
   const inSentence = (el: Element): boolean => {
-    if (el.hasAttribute('data-inline-link')) return true;
-    if (el.tagName !== 'A' || getComputedStyle(el).display !== 'inline') return false;
-    const flow = el.closest('p, li, dd, blockquote');
+    if (!el.matches('.d3-lnk--inline, [data-inline-link]')) return false;
+    if (getComputedStyle(el).display !== 'inline') return false;
+    const flow = blockOf(el);
     if (flow === null) return false;
-    const own = el.textContent.trim();
-    const all = flow.textContent.trim();
-    return all.length > own.length;
+    const controls = [...flow.querySelectorAll(CONTROLS)];
+    const linked = controls.reduce((total, control) => total + control.textContent.trim().length, 0);
+    const prose = flow.textContent.trim().length - linked;
+    if (prose < 20 || prose < linked) return false;
+    // In a row, the link is the row's control unless something else is.
+    return !(flow.matches('li, dd, td, th') && controls.length < 2);
   };
 
   /** The element a thumb lands on, which is not always the one that carries the role. */
@@ -150,7 +171,8 @@ function measure(args: { minimum: number; owned: readonly string[] }): Measured 
 
   for (const el of document.querySelectorAll(CONTROLS)) {
     const own = el.getBoundingClientRect();
-    if (own.width < 2 || own.height < 2) continue;
+    if (own.width === 0 && own.height === 0) continue;
+    if ((own.width < 2 || own.height < 2) && clippedOnPurpose(el)) continue;
     if (hiddenFromEveryone(el)) continue;
     if (inSentence(el)) continue;
     seen.push(el);
@@ -172,8 +194,33 @@ function measure(args: { minimum: number; owned: readonly string[] }): Measured 
   return { seen: seen.length, small, excused: [...excused] };
 }
 
+/** A page of known cases: what `measure` must flag, and what it must let through. */
+const FIXTURE = `
+  <main>
+    <button style="width:20px;height:20px">small button</button>
+    <button style="min-width:44px;min-height:44px">big button</button>
+    <p>This is a sentence of running prose that goes on for a while, <a class="d3-lnk--inline" href="#">an inline link</a> and then it carries on.</p>
+    <ul><li><a class="d3-lnk--inline" href="#">sole control</a> of a row with some words that do not make the link a sentence</li></ul>
+    <p>Another sentence of running prose, but <a href="#">a plain link</a> is a control wherever it sits.</p>
+    <button role="checkbox" aria-label="a checkbox" style="width:17px;height:17px;padding:0"></button>
+    <button aria-label="a sliver" style="width:1px;height:20px;padding:0"></button>
+    <button aria-label="hidden on purpose" style="position:absolute;width:1px;height:1px;padding:0;border:0;clip-path:inset(50%);overflow:hidden"></button>
+    <button aria-hidden="true" style="width:10px;height:10px"></button>
+    <button disabled style="width:10px;height:10px">disabled</button>
+  </main>`;
+
 test.describe('a thumb, not a cursor, on every screen', () => {
   test.use({ viewport: PHONE, hasTouch: true, isMobile: true });
+
+  test('the measure fails a known small control and lets the known exceptions through', async ({ page }) => {
+    await page.setContent(FIXTURE);
+    const found = await page.evaluate(measure, { minimum: MINIMUM, owned: [] });
+    const names = found.small.map((line) => /"([^"]*)"$/.exec(line)?.[1]);
+    expect(names).toEqual(['small button', 'sole control', 'a plain link', 'a checkbox', 'a sliver']);
+    // The inline link in the paragraph, the clipped, hidden and disabled buttons are not controls to size.
+    expect(found.small.join('\n')).not.toContain('an inline link');
+    expect(found.excused).toEqual([]);
+  });
 
   test('the library exceptions each name a design-system requirement', () => {
     for (const entry of LIBRARY_OWNED) {

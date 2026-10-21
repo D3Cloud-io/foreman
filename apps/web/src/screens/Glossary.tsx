@@ -89,7 +89,6 @@ export function Glossary({ code }: { code: string }) {
         </EmptyState>
       ) : (
         <Table
-          className="fm-tbl"
           caption={`Glossary for ${code}`}
           captionHidden
           density="compact"

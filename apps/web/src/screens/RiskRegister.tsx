@@ -103,7 +103,6 @@ export function RiskRegister({ code }: { code: string }) {
         </EmptyState>
       ) : (
         <Table
-          className="fm-tbl"
           caption={`Risk register for ${code}`}
           captionHidden
           density="compact"
