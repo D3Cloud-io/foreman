@@ -112,7 +112,8 @@ test.describe('activity (S-24)', () => {
     // "What is deployed" has two answers, and the interesting failures are when they disagree.
     await expect(page.getByText('Schema', { exact: true })).toBeVisible();
     await expect(page.getByText(/^\d{14}_/)).toBeVisible();
-    await expect(page.getByText('CI', { exact: true })).toBeVisible();
+    // Activity's own term, not the reality strip's label above it.
+    await expect(page.locator('main dt:not(.fm-reality__label)', { hasText: /^CI$/ })).toBeVisible();
   });
 
   test('ingests a pushed commit and proposes the task it cites', async ({ page, request }) => {

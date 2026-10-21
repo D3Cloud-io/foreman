@@ -81,6 +81,12 @@ export interface Brief {
     readonly title: string;
     readonly reason: string | null;
   }[];
+  /**
+   * How many critical and high findings are open — every one, not the few `openCriticals` lists
+   * (FRM-REQ-242: a count read from a page-limited list is wrong the day there are more than a
+   * page). Additive; the same `where` as the list.
+   */
+  readonly openCriticalTotal: number;
   readonly openCriticals: readonly {
     readonly humanId: string;
     readonly severity: string;
@@ -158,7 +164,7 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
           select: { id: true, humanId: true, name: true, slug: true },
         });
 
-  const [nextTasks, waiting, blocked, criticals, latestCheck, unconfirmed, drift, commits, evidence, deployed] =
+  const [nextTasks, waiting, blocked, criticals, criticalTotal, latestCheck, unconfirmed, drift, commits, evidence, deployed] =
     await Promise.all([
       db.task.findMany({
         where: {
@@ -202,6 +208,14 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
           severity: true,
           title: true,
           locationRaw: true,
+        },
+      }),
+      db.finding.count({
+        where: {
+          projectId: project.id,
+          deletedAt: null,
+          status: 'open',
+          severity: { in: ['critical', 'high'] },
         },
       }),
       db.checkRun.findFirst({
@@ -271,6 +285,7 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
       title: task.title,
       reason: task.blockedReason,
     })),
+    openCriticalTotal: criticalTotal,
     openCriticals: criticals.map((finding) => ({
       humanId: finding.humanId,
       severity: finding.severity,

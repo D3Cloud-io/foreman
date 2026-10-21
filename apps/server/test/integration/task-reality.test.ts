@@ -208,6 +208,30 @@ describe.skipIf(url === undefined)('the reality behind a task', () => {
     expect(byCommit).toEqual({ '1': deploy.id, '3': null });
   });
 
+  it('does not list a deployment for a task whose only commit in it is a suggestion (ADR-005)', async () => {
+    const suggested = await commit('1'.repeat(40), 120);
+    await attribute(suggested.id, taskId, { confirmed: false });
+    await db.deployment.create({
+      data: {
+        projectId,
+        environment: 'production',
+        image: 'ghcr.io/test/reality',
+        imageSha: `sha-${'1'.repeat(7)}`,
+        deployedAt: new Date(Date.now() - 30 * 60_000),
+      },
+    });
+    const body = await reality(`tasks/${CODE}-T-1.1`);
+    // The suggestion is listed, marked not confirmed; the deploy that contains it is not a fact
+    // about the task.
+    expect(body.commits.map((c) => c.confirmed)).toEqual([false]);
+    expect(body.deployments).toEqual([]);
+
+    // Confirmed, the same deploy appears.
+    await db.commitTask.updateMany({ where: { taskId }, data: { confirmed: true, confirmedAt: new Date() } });
+    const confirmed = await reality(`tasks/${CODE}-T-1.1`);
+    expect(confirmed.deployments.map((d) => d.via)).toEqual(['image']);
+  });
+
   it('answers for a requirement through every task that satisfies it', async () => {
     const one = await commit('a'.repeat(40), 60);
     const two = await commit('b'.repeat(40), 50);

@@ -27,6 +27,7 @@ const brief = (over: Partial<Brief> = {}): Brief => ({
   nextTasks: [],
   blocked: [],
   openCriticals: [],
+  openCriticalTotal: 0,
   ci: { conclusion: null, commitSha: null, at: null, unknown: true },
   unconfirmedAttributions: 0,
   drift: { counts: ZERO, total: 0 },
@@ -95,6 +96,7 @@ describe('the strip', () => {
       brief({
         ci: { conclusion: 'failure', commitSha: 'abcdef0123', at: '2026-10-01T00:00:00Z', unknown: false },
         openCriticals: [{ humanId: 'BND-CR-1', severity: 'critical', title: 't', location: null }],
+        openCriticalTotal: 1,
       }),
       FULL_PLAN,
     );
@@ -103,14 +105,16 @@ describe('the strip', () => {
     for (const c of cells) expect(['neutral', 'attention', 'warning', 'danger']).toContain(c.tone);
   });
 
-  it('marks a findings list at the brief cap as "at least", since the brief lists five at most', () => {
-    const many = Array.from({ length: 5 }, (_, i) => ({
+  it('shows the true total of open critical and high findings, not the length of the capped list', () => {
+    const listed = Array.from({ length: 5 }, (_, i) => ({
       humanId: `BND-CR-${String(i)}`,
       severity: 'high',
       title: 't',
       location: null,
     }));
-    expect(cell(readStrip('BND', brief({ openCriticals: many }), FULL_PLAN), 'findings').value).toBe('5+');
+    const findings = cell(readStrip('BND', brief({ openCriticals: listed, openCriticalTotal: 17 }), FULL_PLAN), 'findings');
+    expect(findings).toMatchObject({ value: '17', tone: 'danger' });
+    expect(findings.value).not.toContain('+');
   });
 
   it('does not read drift as clean for a project with no plan (FRM-REQ-241)', () => {

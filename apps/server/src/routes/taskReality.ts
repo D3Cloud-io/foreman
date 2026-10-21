@@ -31,7 +31,7 @@ export interface RealityCommit {
   readonly confirmed: boolean;
   /** Which paths overlapped, or which ID the message declared. */
   readonly evidence: unknown;
-  /** The deployment that shipped it, or null when none has (yet). Confirmed or not. */
+  /** The deployment that shipped it, or null when none has (yet). Listed for a suggestion too, but only confirmed commits put a deployment under `deployments`. */
   readonly shippedIn: string | null;
 }
 
@@ -144,7 +144,11 @@ async function realityOfTasks(
           where: { projectId, tasks: { some: { taskId: { in: [...taskById.keys()] } } } },
           orderBy: { deployedAt: 'desc' },
         });
-  const byImage = new Set(commits.filter((commit) => commit.shippedIn !== null).map((commit) => commit.shippedIn));
+  // A deployment is "in" for a task only through a **confirmed** commit: a suggestion is not
+  // evidence (ADR-005), and a suggested-only task must not show a deploy as its own.
+  const byImage = new Set(
+    commits.filter((commit) => commit.confirmed && commit.shippedIn !== null).map((commit) => commit.shippedIn),
+  );
   const declaredIds = new Set(declared.map((deployment) => deployment.id));
   const deployments: RealityDeployment[] = [
     ...declared.map((deployment) => ({ deployment, via: 'declared' as const })),

@@ -435,6 +435,26 @@ describe.skipIf(url === undefined)('the session brief', () => {
     expect(brief.openCriticals[0]?.location).toBe('apps/server/src/x.ts:10-20');
   });
 
+  it('carries the true total of open critical and high findings beside the capped list (FRM-REQ-242)', async () => {
+    await db.finding.createMany({
+      data: [
+        ...Array.from({ length: 8 }, (_, i) => ({
+          projectId,
+          humanId: `${CODE}-CR-${String(i + 1).padStart(3, '0')}`,
+          title: `Open critical ${String(i + 1)}`,
+          severity: 'critical' as const,
+          status: 'open' as const,
+        })),
+        { projectId, humanId: `${CODE}-CR-050`, title: 'High', severity: 'high' as const, status: 'open' as const },
+        { projectId, humanId: `${CODE}-CR-051`, title: 'Fixed', severity: 'critical' as const, status: 'fixed' as const },
+        { projectId, humanId: `${CODE}-CR-052`, title: 'Low', severity: 'low' as const, status: 'open' as const },
+      ],
+    });
+    const { brief } = await getBrief();
+    expect(brief.openCriticals).toHaveLength(5);
+    expect(brief.openCriticalTotal).toBe(9);
+  });
+
   it('counts the drift that matters: coverage holes and fired tripwires', async () => {
     await db.requirement.createMany({
       data: [

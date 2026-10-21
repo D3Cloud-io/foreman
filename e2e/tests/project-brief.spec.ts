@@ -160,7 +160,7 @@ test.describe('project pages that show reality', () => {
 
   test('the overview carries the reality strip, with evidence as a neutral fraction', async ({ page }) => {
     await page.goto(`/projects/${CODE}`);
-    const strip = page.getByRole('group', { name: 'Reality' });
+    const strip = page.getByRole('region', { name: 'Project reality' });
     await expect(strip).toBeVisible();
     for (const label of ['In flight', 'Tasks · declared / evidenced', 'Drift', 'Critical + high', 'CI', 'Deployed vs main']) {
       await expect(strip.getByText(label, { exact: true })).toBeVisible();
@@ -170,7 +170,7 @@ test.describe('project pages that show reality', () => {
     // The seeded project has confirmed attribution of its own, and the run just added one.
     expect(read.evidence.since).not.toBeNull();
     if (read.activePhase !== null) {
-      await expect(strip.locator('[data-cell="tasks"]')).toHaveText(
+      await expect(strip.locator('[data-value="tasks"]')).toHaveText(
         `${String(read.activePhase.tasks.done)} of ${String(read.activePhase.tasks.total)} done`,
       );
     }
@@ -184,7 +184,7 @@ test.describe('project pages that show reality', () => {
     );
     await expect(strip.getByRole('progressbar')).toHaveCount(0);
     // One header, one strip.
-    await expect(page.getByRole('group', { name: 'Reality' })).toHaveCount(1);
+    await expect(page.getByRole('region', { name: 'Project reality' })).toHaveCount(1);
   });
 
   test('the strip is on every project screen, compact, and the section tiles are gone from the overview', async ({
@@ -192,7 +192,7 @@ test.describe('project pages that show reality', () => {
   }) => {
     for (const section of ['phases', 'requirements', 'drift']) {
       await page.goto(`/projects/${CODE}/${section}`);
-      const strip = page.getByRole('group', { name: 'Reality' });
+      const strip = page.getByRole('region', { name: 'Project reality' });
       await expect(strip).toBeVisible();
       await expect(strip.locator('[data-cell="tasks"]')).toBeVisible();
     }
@@ -236,7 +236,7 @@ test.describe('project pages that show reality', () => {
     await expect(checks.locator('[data-kind="uncovered-must"]')).toContainText('not met');
     await expect(checks.locator('[data-kind="uncovered-must"]')).toContainText(must.humanId);
     // The strip rides the header here too.
-    await expect(page.getByRole('group', { name: 'Reality' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Project reality' })).toBeVisible();
   });
 
   test('a task edits size and phase in place, with Undo, and lists its commits, CI and deploys', async ({ page }) => {
@@ -247,7 +247,7 @@ test.describe('project pages that show reality', () => {
     // Everything has loaded — the strip, the Reality section — before watching for a skeleton: an
     // in-place write never shows one, but a first load always does.
     await expect(page.getByText(/No commit is attributed to this task/)).toBeVisible();
-    await expect(page.getByRole('group', { name: 'Reality' }).locator('[data-cell="tasks"]')).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Project reality' }).locator('[data-cell="tasks"]')).toBeVisible();
     await page.evaluate(() => {
       const seen = { skeleton: false };
       (window as unknown as { __seen: typeof seen }).__seen = seen;
