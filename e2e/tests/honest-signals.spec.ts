@@ -94,17 +94,16 @@ test.describe('honest signals', () => {
     await expect(legend.getByText('Done')).toHaveCount(1);
   });
 
-  test('a project with no plan shows coverage, drift and blocked as not measurable yet, never clean', async ({
-    page,
-  }) => {
+  test('a project with no plan shows drift as not measurable yet in the strip, never clean', async ({ page }) => {
     await page.goto(`/projects/${UNPLANNED}`);
     const main = page.getByRole('main');
-    for (const label of ['Coverage holes', 'Drift', 'Blocked']) {
-      await expect(main.locator('.fm-stat__label', { hasText: label })).toBeVisible();
-    }
-    // One "not measurable yet" badge per tile, and each figure an em dash rather than a clean zero.
-    await expect(main.locator('.fm-stat__row').getByText('not measurable yet', { exact: true })).toHaveCount(3);
-    await expect(main.locator('.fm-stat__value', { hasText: '—' })).toHaveCount(3);
+    const drift = page.getByRole('group', { name: 'Reality' }).locator('a', { hasText: /^Drift/ });
+    // The figure is an em dash and the word is "not measurable yet", rather than a clean zero.
+    await expect(drift).toContainText('—');
+    await expect(drift).toContainText('not measurable yet');
+    await expect(drift).not.toContainText('clean');
+    // What drifted says the same, and the brief's other lines do not claim a clean plan.
+    await expect(main.getByRole('heading', { name: 'Not measurable yet' })).toBeVisible();
     await expect(main.getByText('No drift')).toHaveCount(0);
     await expect(main.getByText(/Every Must has a task/)).toHaveCount(0);
     await expect(main.getByText(/has no plan in Foreman yet/)).toBeVisible();
@@ -121,12 +120,10 @@ test.describe('honest signals', () => {
   test('a project with only a phase never reads its drift as clean: most checks could not run', async ({ page }) => {
     await page.goto(`/projects/${PLANNED}`);
     const main = page.getByRole('main');
-    // The figure's row sits beside its label: the signal word there must not be "clean".
-    const driftRow = main
-      .locator('.fm-stat__label', { hasText: /^Drift$/ })
-      .locator('xpath=following-sibling::span[contains(@class, "fm-stat__row")]');
-    await expect(driftRow).toBeVisible();
-    await expect(driftRow.getByText('clean', { exact: true })).toHaveCount(0);
+    // The strip's drift cell must not read "clean": most of the six checks could not run.
+    const drift = page.getByRole('group', { name: 'Reality' }).locator('a', { hasText: /^Drift/ });
+    await expect(drift).toBeVisible();
+    await expect(drift).not.toContainText('clean');
 
     await page.goto(`/projects/${PLANNED}/drift`);
     await expect(main.getByRole('heading', { name: 'Not measurable yet' })).toBeVisible();

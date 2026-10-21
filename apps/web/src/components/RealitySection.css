@@ -1,0 +1,50 @@
+/* The Reality section of a task or requirement (FRM-T-18.8). Tokens only (d3-check-usage). */
+
+.fm-reality-section__heading {
+  margin: 0 0 var(--space-6);
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-fg-muted);
+}
+.fm-reality-section p {
+  margin: 0;
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+}
+.fm-reality-section__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fm-reality-section__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-8);
+  padding: var(--space-6) 0;
+  border-top: var(--border-width) solid var(--color-border);
+}
+.fm-reality-section__row:first-child {
+  border-top: 0;
+}
+.fm-reality-section__meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-8);
+  font-size: var(--text-12);
+}
+@media (max-width: 767.98px) {
+  .fm-reality-section__row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .fm-reality-section__meta {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}

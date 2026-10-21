@@ -10,6 +10,8 @@ import {
   AUDIT_EVENT_IDS_HEADER,
   type AuditEventsResponse,
   type AuditEventUndoability,
+  type BriefDeployed,
+  type BriefEvidence,
   type Group,
   type GroupAccent,
   type GroupDetail,
@@ -394,13 +396,82 @@ export interface Brief {
     exitDemo: string | null;
     tasks: { done: number; cancelled: number; total: number };
   } | null;
-  nextTasks: { humanId: string; title: string; status: string; size: string | null }[];
+  nextTasks: {
+    humanId: string;
+    title: string;
+    status: string;
+    size: string | null;
+    /** The requirements it satisfies, by human ID. */
+    requirements?: string[];
+  }[];
   blocked: { humanId: string; title: string; reason: string | null }[];
   openCriticals: { humanId: string; severity: string; title: string; location: string | null }[];
   ci: { conclusion: string | null; commitSha: string | null; at: string | null; unknown: boolean };
   unconfirmedAttributions: number;
+  /**
+   * How much of the active phase's done work has a confirmed commit (FRM-REQ-247). Optional on the
+   * type only so a fixture that predates it still compiles; the server always sends it.
+   */
+  evidence?: BriefEvidence;
+  /** What is running, and how far main is ahead of it; null when nothing is recorded as deployed. */
+  deployed?: BriefDeployed | null;
   drift: { counts: Record<DriftItem['category'], number>; total: number };
   recentCommits: { sha: string; message: string; at: string }[];
+}
+
+/** One requirement of the exit gate that is not met, exactly as `GET …/phases/:id/gate` words it. */
+export interface GateFailure {
+  kind:
+    | 'no-exit-demo'
+    | 'uncovered-must'
+    | 'no-acceptance-test'
+    | 'unfinished-task'
+    | 'open-critical'
+    | 'screen-unreviewed'
+    | 'screen-drifted';
+  humanId: string;
+  detail: string;
+}
+
+/** What bears on a task, or on every task satisfying a requirement (FRM-REQ-247). */
+export interface Reality {
+  humanId: string;
+  commits: {
+    sha: string;
+    message: string;
+    committedAt: string;
+    repo: string;
+    task: string;
+    source: string;
+    confidence: number;
+    confirmed: boolean;
+    evidence: unknown;
+    /** The deployment that shipped it, or null. */
+    shippedIn: string | null;
+  }[];
+  checks: {
+    commitSha: string;
+    name: string;
+    conclusion: string | null;
+    completedAt: string | null;
+    detailsUrl: string | null;
+  }[];
+  deployments: {
+    id: string;
+    environment: string;
+    image: string;
+    imageSha: string;
+    deployedAt: string;
+    via: 'declared' | 'image';
+  }[];
+  drift: { category: DriftItem['category']; detail: string }[];
+}
+
+/** What a requirement write answers with: the row, and the events that undo it. */
+export interface RequirementWrite {
+  humanId: string;
+  priority: string;
+  auditEventIds: string[];
 }
 
 export interface EntityResult {
@@ -461,10 +532,11 @@ export interface ScopeOfWork {
   generatedAt: string;
 }
 
+/** The server's exit gate for a phase: the one `exitGate()` the rollup and the drift engine ask. */
 export interface GateResult {
   phase: string;
   passed: boolean;
-  failures: { kind: string; humanId: string; detail: string }[];
+  failures: GateFailure[];
 }
 
 export interface DocumentSection {
@@ -1126,8 +1198,18 @@ export const foreman = {
   updateTask: (
     code: string,
     humanId: string,
-    body: { status?: string; blockedReason?: string },
+    body: { status?: string; blockedReason?: string; size?: string; phaseId?: string | null },
   ) => api.patch<StatusWrite>(`/api/projects/${code}/tasks/${humanId}`, body),
+  /** A requirement's priority or phase, in place (FRM-REQ-247). */
+  updateRequirement: (
+    code: string,
+    humanId: string,
+    body: { priority?: string; phaseId?: string | null },
+  ) => api.patch<RequirementWrite>(`/api/projects/${code}/requirements/${humanId}`, body),
+  /** The commits, CI results and deployments behind a task. */
+  taskReality: (humanId: string) => api.get<Reality>(`/api/tasks/${humanId}/reality`),
+  /** The same for a requirement, over every task that satisfies it. */
+  requirementReality: (humanId: string) => api.get<Reality>(`/api/requirements/${humanId}/reality`),
   search: (q: string, types: string[], project: string | null, group: string | null = null) => {
     const query = new URLSearchParams({ q, limit: '50' });
     if (types.length > 0) query.set('types', types.join(','));

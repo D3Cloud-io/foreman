@@ -3,25 +3,29 @@ import {
   Button,
   Card,
   CardTitle,
-  DescriptionItem,
-  DescriptionList,
   EmptyState,
   Link,
   Page,
-  PageHeader,
   Skeleton,
   Stack,
 } from '@d3cloud/ui';
-import { foreman } from '../lib/api';
+import { foreman, type PhaseProgressRow } from '../lib/api';
 import { Markdown } from '../components/Markdown';
 import { useAsync } from '../lib/useAsync';
 import { EditForm, SIZES } from './EditForms';
 import { OpenInConstellation } from '../components/OpenInConstellation';
 import { HistoryDrawer } from '../components/HistoryDrawer';
 import { StatusControl } from './StatusControl';
+import { ProjectHeader } from '../components/ProjectHeader';
+import { PropertyRail, type RailRow } from '../components/PropertyRail';
+import { RealitySection } from '../components/RealitySection';
+import { realityChanged } from '../components/RealityStrip';
 
 /**
  * S-12 — one task: what it is for, what it declares, what it satisfies, and what cites it.
+ *
+ * Its properties — status, phase, size — are edited in a rail beside it, in place (FRM-REQ-247), and
+ * its Reality section lists the commits, CI results and deployments behind it.
  */
 
 interface TaskEntity {
@@ -77,6 +81,103 @@ export function startedWhenMissing(status: string): string {
   return status === 'done' ? 'not recorded' : 'not yet';
 }
 
+/**
+ * The task's rail: status, phase and size as controls, and where it started and finished as facts.
+ * Phases are read here (not by the page) because the page does not know the project until the task
+ * has loaded.
+ */
+function TaskRail({
+  task,
+  projectCode,
+  onChanged,
+}: {
+  task: TaskEntity;
+  projectCode: string;
+  onChanged: () => void;
+}) {
+  const phases = useAsync(() => foreman.phases(projectCode), [projectCode]);
+  const list: readonly PhaseProgressRow[] = phases.state.status === 'ready' ? phases.state.value.items : [];
+  const current = list.find((phase) => phase.humanId === task.phase?.humanId);
+  const phaseLabel = (phase: PhaseProgressRow) => `${phase.number} — ${phase.name}`;
+
+  const rows: RailRow[] = [
+    {
+      kind: 'node',
+      key: 'status',
+      label: 'Status',
+      // A control, not a badge: the status changes here as on the phase, with Undo.
+      children: <StatusControl task={task} code={projectCode} onChanged={onChanged} />,
+    },
+    list.length === 0
+      ? {
+          kind: 'text',
+          key: 'phase',
+          label: 'Phase',
+          children:
+            task.phase === null ? (
+              <span className="fm-muted">none</span>
+            ) : (
+              <Link href={`/projects/${projectCode}/phases/${task.phase.humanId}`}>{task.phase.name}</Link>
+            ),
+        }
+      : {
+          kind: 'select',
+          key: 'phase',
+          label: 'Phase',
+          ariaLabel: `Phase of ${task.humanId}`,
+          value: current?.id ?? 'none',
+          options: [{ value: 'none', label: 'No phase' }, ...list.map((p) => ({ value: p.id, label: phaseLabel(p) }))],
+          write: (next) => {
+            const target = list.find((p) => p.id === next);
+            return {
+              run: () => foreman.updateTask(projectCode, task.humanId, { phaseId: next === 'none' ? null : next }),
+              message: () =>
+                target === undefined ? `${task.humanId} moved out of its phase` : `${task.humanId} moved to ${phaseLabel(target)}`,
+              undone: `Undone — ${task.humanId} is back in ${current === undefined ? 'no phase' : phaseLabel(current)}`,
+            };
+          },
+        },
+    {
+      kind: 'select',
+      key: 'size',
+      label: 'Size',
+      ariaLabel: `Size of ${task.humanId}`,
+      value: task.size ?? 'none',
+      // A size cannot be cleared once set, so "No size" is offered only while there is none.
+      options: [...(task.size === null ? [{ value: 'none', label: 'No size' }] : []), ...SIZES],
+      write: (next) =>
+        next === 'none'
+          ? null
+          : {
+              run: () => foreman.updateTask(projectCode, task.humanId, { size: next }),
+              message: () => `${task.humanId} sized ${next}`,
+              undone: `Undone — ${task.humanId} is ${task.size ?? 'unsized'} again`,
+            },
+    },
+    {
+      kind: 'text',
+      key: 'project',
+      label: 'Project',
+      children: <Link href={`/projects/${projectCode}`}>{projectCode}</Link>,
+    },
+    {
+      kind: 'text',
+      key: 'started',
+      label: 'Started',
+      children:
+        task.startedAt === null ? startedWhenMissing(task.status) : new Date(task.startedAt).toLocaleDateString(),
+    },
+    {
+      kind: 'text',
+      key: 'completed',
+      label: 'Completed',
+      children: task.completedAt === null ? 'not yet' : new Date(task.completedAt).toLocaleDateString(),
+    },
+  ];
+
+  return <PropertyRail subject={task.humanId} rows={rows} onChanged={onChanged} />;
+}
+
 export function TaskDetail({ humanId }: { humanId: string }) {
   // `refresh`, not `reload`: after a write or an undo the page re-reads in place (FRM-T-18.4).
   const { state, refresh } = useAsync(() => foreman.entity(humanId), [humanId]);
@@ -117,22 +218,30 @@ export function TaskDetail({ humanId }: { humanId: string }) {
   const task = state.value.entity as unknown as TaskEntity;
   const { backlinks, projectCode } = state.value;
 
+  // After a write or an undo: the page re-reads in place, and so does the strip.
+  const changed = () => {
+    refresh();
+    realityChanged(projectCode);
+  };
+
   return (
     <Page>
-      <PageHeader
+      <ProjectHeader
+        code={projectCode}
+        section="phases"
+        // The shell draws this page's trail above it, so the header does not draw a second.
+        trail="none"
         title={task.title}
         description={humanId}
         actions={
           <>
-            {/* A control, not a badge: the status changes here as on the phase, with Undo. */}
-            <StatusControl task={task} code={projectCode} onChanged={refresh} />
             <OpenInConstellation path={`item/${humanId}`} />
-            <HistoryDrawer entity={humanId} onUndone={refresh} />
+            <HistoryDrawer entity={humanId} onUndone={changed} />
             <EditForm
               title={`Edit ${humanId}`}
               path={`/api/projects/${projectCode}/tasks/${humanId}`}
               trigger={<Button>Edit</Button>}
-              onSaved={refresh}
+              onSaved={changed}
               initial={{
                 title: task.title,
                 size: task.size ?? '',
@@ -190,114 +299,108 @@ export function TaskDetail({ humanId }: { humanId: string }) {
         </Alert>
       ) : null}
 
-      {task.body === null ? null : (
-        <Card>
-          <CardTitle>Context</CardTitle>
-          <Markdown>{task.body}</Markdown>
-        </Card>
-      )}
-
-      <Card>
-        <CardTitle>What it is</CardTitle>
-        <DescriptionList>
-          <DescriptionItem term="Project">
-            <Link href={`/projects/${projectCode}`}>{projectCode}</Link>
-          </DescriptionItem>
-          {task.phase === null ? null : (
-            <DescriptionItem term="Phase">
-              <Link href={`/projects/${projectCode}/phases/${task.phase.humanId}`}>
-                {task.phase.name}
-              </Link>
-            </DescriptionItem>
-          )}
-          <DescriptionItem term="Size">{task.size ?? '—'}</DescriptionItem>
+      <div className="fm-record">
+        <div className="fm-record__main">
           {task.doneWhen === null ? null : (
-            <DescriptionItem term="Done when">{task.doneWhen}</DescriptionItem>
+            <Card>
+              <CardTitle>Done when</CardTitle>
+              {task.doneWhen}
+            </Card>
           )}
-          <DescriptionItem term="Started">
-            {task.startedAt === null
-              ? startedWhenMissing(task.status)
-              : new Date(task.startedAt).toLocaleDateString()}
-          </DescriptionItem>
-          <DescriptionItem term="Completed">
-            {task.completedAt === null ? 'not yet' : new Date(task.completedAt).toLocaleDateString()}
-          </DescriptionItem>
-        </DescriptionList>
-      </Card>
 
-      <Card>
-        <CardTitle>Satisfies</CardTitle>
-        {task.requirements.length === 0 ? (
-          <EmptyState kind="empty" size="inline" heading="No requirements">
-            A task satisfying nothing is work with no stated reason — which is what a coverage hole
-            looks like from the other side.
-          </EmptyState>
-        ) : (
-          <Stack gap="8" as="ul">
-            {task.requirements.map((requirement) => (
-              <li key={requirement.humanId}>
-                <code>{requirement.humanId}</code> — {requirement.statement}
-              </li>
-            ))}
-          </Stack>
-        )}
-      </Card>
+          {task.body === null ? null : (
+            <Card>
+              <CardTitle>Context</CardTitle>
+              <Markdown>{task.body}</Markdown>
+            </Card>
+          )}
 
-      {task.dependsOn.length === 0 && task.dependedOnBy.length === 0 ? null : (
-        <Card>
-          <CardTitle>Dependencies</CardTitle>
-          <Stack gap="12">
-            {task.dependsOn.length === 0 ? null : (
-              <div>
-                <p>
-                  {task.dependsOn.some(isUnfinished)
-                    ? 'Waits on unfinished work, so the brief holds it back:'
-                    : 'Depends on, all finished:'}
-                </p>
-                <DependencyList edges={task.dependsOn} />
-              </div>
+          <RealitySection
+            humanId={humanId}
+            kind="task"
+            projectCode={projectCode}
+            doneClaimed={task.status === 'done'}
+            stamp={`${task.status}:${task.phase?.humanId ?? ''}`}
+          />
+
+          <Card>
+            <CardTitle>Satisfies</CardTitle>
+            {task.requirements.length === 0 ? (
+              <EmptyState kind="empty" size="inline" heading="No requirements">
+                A task satisfying nothing is work with no stated reason — which is what a coverage hole
+                looks like from the other side.
+              </EmptyState>
+            ) : (
+              <Stack gap="8" as="ul">
+                {task.requirements.map((requirement) => (
+                  <li key={requirement.humanId}>
+                    <code>{requirement.humanId}</code> — {requirement.statement}
+                  </li>
+                ))}
+              </Stack>
             )}
-            {task.dependedOnBy.length === 0 ? null : (
-              <div>
-                <p>Needed before:</p>
-                <DependencyList edges={task.dependedOnBy} />
-              </div>
+          </Card>
+
+          {task.dependsOn.length === 0 && task.dependedOnBy.length === 0 ? null : (
+            <Card>
+              <CardTitle>Dependencies</CardTitle>
+              <Stack gap="12">
+                {task.dependsOn.length === 0 ? null : (
+                  <div>
+                    <p>
+                      {task.dependsOn.some(isUnfinished)
+                        ? 'Waits on unfinished work, so the brief holds it back:'
+                        : 'Depends on, all finished:'}
+                    </p>
+                    <DependencyList edges={task.dependsOn} />
+                  </div>
+                )}
+                {task.dependedOnBy.length === 0 ? null : (
+                  <div>
+                    <p>Needed before:</p>
+                    <DependencyList edges={task.dependedOnBy} />
+                  </div>
+                )}
+              </Stack>
+            </Card>
+          )}
+
+          <Card>
+            <CardTitle>Declared files</CardTitle>
+            {task.files.length === 0 ? (
+              <EmptyState kind="empty" size="inline" heading="No files declared">
+                Declared paths are the weakest attribution signal, and the only one that works before a
+                commit mentions the task by ID.
+              </EmptyState>
+            ) : (
+              <Stack gap="4" as="ul">
+                {task.files.map((path) => (
+                  <li key={path}>
+                    <code>{path}</code>
+                  </li>
+                ))}
+              </Stack>
             )}
-          </Stack>
-        </Card>
-      )}
+          </Card>
 
-      <Card>
-        <CardTitle>Declared files</CardTitle>
-        {task.files.length === 0 ? (
-          <EmptyState kind="empty" size="inline" heading="No files declared">
-            Declared paths are the weakest attribution signal, and the only one that works before a
-            commit mentions the task by ID.
-          </EmptyState>
-        ) : (
-          <Stack gap="4" as="ul">
-            {task.files.map((path) => (
-              <li key={path}>
-                <code>{path}</code>
-              </li>
-            ))}
-          </Stack>
-        )}
-      </Card>
-
-      {backlinks.length === 0 ? null : (
-        <Card>
-          <CardTitle>Cited by</CardTitle>
-          <Stack gap="8" as="ul">
-            {backlinks.map((link) => (
-              <li key={`${link.fromType}:${link.humanId ?? link.title}`}>
-                <code>{link.humanId ?? link.fromType}</code> — {link.title}{' '}
-                <span className="fm-muted">({link.kind})</span>
-              </li>
-            ))}
-          </Stack>
-        </Card>
-      )}
+          {backlinks.length === 0 ? null : (
+            <Card>
+              <CardTitle>Cited by</CardTitle>
+              <Stack gap="8" as="ul">
+                {backlinks.map((link) => (
+                  <li key={`${link.fromType}:${link.humanId ?? link.title}`}>
+                    <code>{link.humanId ?? link.fromType}</code> — {link.title}{' '}
+                    <span className="fm-muted">({link.kind})</span>
+                  </li>
+                ))}
+              </Stack>
+            </Card>
+          )}
+        </div>
+        <div className="fm-record__rail">
+          <TaskRail task={task} projectCode={projectCode} onChanged={changed} />
+        </div>
+      </div>
     </Page>
   );
 }

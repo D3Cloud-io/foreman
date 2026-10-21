@@ -1,4 +1,4 @@
-import type { BriefGuideline } from '@foreman/shared';
+import type { BriefDeployed, BriefEvidence, BriefGuideline } from '@foreman/shared';
 import type { Db, Prisma } from '../db.js';
 import { driftFor, type DriftCategory } from './drift.js';
 import { NotFound } from './errors.js';
@@ -100,6 +100,13 @@ export interface Brief {
    * `drift` that the total does not include is exactly the disagreement below exists to prevent.
    */
   readonly unconfirmedAttributions: number;
+  /**
+   * How much of the phase's done work has a confirmed commit behind it (FRM-REQ-247). Additive: a
+   * reader that predates it ignores it. See `BriefEvidence` for what it leaves out and why.
+   */
+  readonly evidence: BriefEvidence;
+  /** What is running, and how far main is ahead of it; null when nothing is recorded as deployed. */
+  readonly deployed: BriefDeployed | null;
   readonly drift: {
     /**
      * The drift engine's own count per category — the same `counts` the drift screen shows.
@@ -151,7 +158,7 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
           select: { id: true, humanId: true, name: true, slug: true },
         });
 
-  const [nextTasks, waiting, blocked, criticals, latestCheck, unconfirmed, drift, commits] =
+  const [nextTasks, waiting, blocked, criticals, latestCheck, unconfirmed, drift, commits, evidence, deployed] =
     await Promise.all([
       db.task.findMany({
         where: {
@@ -216,6 +223,8 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
         take: RECENT_COMMITS,
         select: { sha: true, message: true, committedAt: true },
       }),
+      evidenceFor(db, project.id, activePhase?.id ?? null),
+      deployedFor(db, project.id),
     ]);
 
   // The same grouped read the Phases list uses, so the overview and Phases cannot disagree.
@@ -278,6 +287,8 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
       unknown: latestCheck === null,
     },
     unconfirmedAttributions: unconfirmed,
+    evidence,
+    deployed,
     drift: { counts: drift.counts, total: drift.total },
     recentCommits: commits.map((commit) => ({
       sha: commit.sha.slice(0, 7),
@@ -286,6 +297,109 @@ export async function buildBrief(db: Db, code: string): Promise<Brief> {
     })),
     guidelines: await guidelinesForGroup(db, group?.id ?? null),
   };
+}
+
+/**
+ * How much of the done work has a commit behind it (FRM-REQ-247, FRM-DA-008).
+ *
+ * **Confirmed attributions only.** A `commit_task` row that is unconfirmed or rejected is a
+ * proposal; counting one would let a file-path coincidence make work look evidenced (ADR-005).
+ *
+ * **Work that predates attribution is excluded.** A task finished before the project's first
+ * attributed commit could not have had a commit attributed to it, and counting it as "done on
+ * say-so" would punish a project for the order it adopted Foreman in. `since` is the date of that
+ * first confirmed, non-orphaned commit; a done task counts only when its `completedAt` is on or
+ * after it, and one with no recorded completion is taken as predating. With no confirmed
+ * attribution at all there is nothing to measure against: `{ 0, 0, null }`.
+ *
+ * Scoped to the active phase when there is one, so the fraction sits beside the phase's own
+ * "8 of 12 done"; the whole project's done work otherwise.
+ */
+export async function evidenceFor(
+  db: Db,
+  projectId: string,
+  phaseId: string | null,
+): Promise<BriefEvidence> {
+  const first = await db.commit.aggregate({
+    where: {
+      orphanedAt: null,
+      repo: { projectId, deletedAt: null },
+      attributions: { some: { confirmed: true, rejectedAt: null, task: { deletedAt: null } } },
+    },
+    _min: { committedAt: true },
+  });
+  const since = first._min.committedAt;
+  if (since === null) return { doneWithCommit: 0, done: 0, since: null };
+
+  const doneSince = {
+    projectId,
+    deletedAt: null,
+    status: 'done',
+    completedAt: { gte: since },
+    ...(phaseId === null ? {} : { phaseId }),
+  } as const satisfies Prisma.TaskWhereInput;
+  const [done, doneWithCommit] = await Promise.all([
+    db.task.count({ where: doneSince }),
+    db.task.count({
+      where: {
+        ...doneSince,
+        commits: { some: { confirmed: true, rejectedAt: null, commit: { orphanedAt: null } } },
+      },
+    }),
+  ]);
+  return { doneWithCommit, done, since: since.toISOString() };
+}
+
+/**
+ * What is running, and how far its repo has moved on.
+ *
+ * - **Which deployment.** The newest one in the environment named `production`; a project with none
+ *   there reads its newest of any environment. Taking the newest of all would let a staging deploy
+ *   of a later commit stand in for what is live.
+ * - **Which repo.** Only live repos. `ahead` is counted inside the repo that holds the shipped
+ *   commit, never across the project's repos: a second repo's commits are not "ahead" of a commit
+ *   in the first.
+ * - **Ahead, in commit order.** Commits at or after the shipped commit's timestamp, excluding the
+ *   shipped one. `gte`, not `gt`: git timestamps have one-second resolution, so a commit in the
+ *   same second may be after it — counting it errs toward "main has moved", never toward a false
+ *   "up to date".
+ * - `null` ahead when no live repo holds the deployed SHA: unknown, which is not zero.
+ *
+ * The same rule the portfolio's `deployed` column follows (FRM-T-18.6), so the strip and the
+ * dashboard cannot disagree about one project.
+ */
+export async function deployedFor(db: Db, projectId: string): Promise<BriefDeployed | null> {
+  const select = { imageSha: true, deployedAt: true } as const;
+  const latest =
+    (await db.deployment.findFirst({
+      where: { projectId, environment: 'production' },
+      orderBy: { deployedAt: 'desc' },
+      select,
+    })) ?? (await db.deployment.findFirst({ where: { projectId }, orderBy: { deployedAt: 'desc' }, select }));
+  if (latest === null) return null;
+
+  // An image tag can read `sha-abc1234`, and is often the short form of the commit.
+  const sha = latest.imageSha.replace(/^sha-/, '').toLowerCase();
+  const shipped =
+    sha.length < 7
+      ? null
+      : await db.commit.findFirst({
+          where: { repo: { projectId, deletedAt: null }, sha: { startsWith: sha }, orphanedAt: null },
+          orderBy: { committedAt: 'desc' },
+          select: { repoId: true, sha: true, committedAt: true },
+        });
+  const ahead =
+    shipped === null
+      ? null
+      : await db.commit.count({
+          where: {
+            repoId: shipped.repoId,
+            orphanedAt: null,
+            sha: { not: shipped.sha },
+            committedAt: { gte: shipped.committedAt },
+          },
+        });
+  return { sha: latest.imageSha, at: latest.deployedAt.toISOString(), ahead };
 }
 
 /**

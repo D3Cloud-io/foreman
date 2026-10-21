@@ -2,14 +2,9 @@ import { useState } from 'react';
 import {
   Badge,
   Button,
-  Card,
-  CardTitle,
-  DescriptionItem,
-  DescriptionList,
   EmptyState,
   Link,
   Page,
-  PageHeader,
   SegmentedControl,
   Skeleton,
   Table,
@@ -18,6 +13,9 @@ import {
 import { foreman, type StatusWrite, type TaskRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { EditForm, PHASE_STATUSES, SIZES } from './EditForms';
+import { GateChecks } from '../components/GateChecks';
+import { ProjectHeader } from '../components/ProjectHeader';
+import { realityChanged } from '../components/RealityStrip';
 import { PhaseBoard } from './PhaseBoard';
 import { StatusControl } from './StatusControl';
 
@@ -27,6 +25,9 @@ import { StatusControl } from './StatusControl';
  * A blocked task shows its reason in the row rather than behind a click. The vault's failure was
  * that you could see work had stopped and never why; putting the reason one interaction away is
  * how that happens again.
+ *
+ * Under the header, the phase is its exit gate (FRM-REQ-247): the server's own checks, listed as the
+ * requirements for calling it complete — see `GateChecks`.
  */
 
 export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId: string }) {
@@ -50,6 +51,8 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
     }
     tasks.refresh();
     phases.refresh();
+    // The strip's evidence and the gate both read what a status just changed.
+    realityChanged(code);
   };
 
   const phase =
@@ -126,9 +129,11 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
 
   return (
     <Page>
-      <PageHeader
+      <ProjectHeader
+        code={code}
+        section="phases"
         title={phase === undefined ? phaseHumanId : `${phase.number} — ${phase.name}`}
-        description={phase?.objective ?? undefined}
+        {...(phase?.objective === undefined || phase.objective === null ? {} : { description: phase.objective })}
         actions={
           phase === undefined ? undefined : (
             <>
@@ -149,7 +154,10 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
                 description="A phase cannot be renumbered — its ID embeds the number."
                 path={`/api/projects/${code}/phases/${phase.humanId}`}
                 trigger={<Button>Edit</Button>}
-                onSaved={phases.refresh}
+                onSaved={() => {
+                  phases.refresh();
+                  realityChanged(code);
+                }}
                 initial={{
                   name: phase.name,
                   status: phase.status,
@@ -176,13 +184,17 @@ export function PhaseDetail({ code, phaseHumanId }: { code: string; phaseHumanId
         }
       />
 
-      {phase?.exitDemo === undefined || phase.exitDemo === null ? null : (
-        <Card>
-          <CardTitle>Exit demo</CardTitle>
-          <DescriptionList>
-            <DescriptionItem term="Done when">{phase.exitDemo}</DescriptionItem>
-          </DescriptionList>
-        </Card>
+      {phase === undefined ? null : (
+        <GateChecks
+          code={code}
+          phaseHumanId={phaseHumanId}
+          exitDemo={phase.exitDemo}
+          stamp={`${phase.status}:${phase.exitDemo ?? ''}:${
+            tasks.state.status === 'ready'
+              ? tasks.state.value.items.map((task) => `${task.humanId}=${task.status}`).join(',')
+              : ''
+          }`}
+        />
       )}
 
       {tasks.state.status === 'loading' ? (
