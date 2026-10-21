@@ -1,7 +1,18 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PortfolioRow, TokenRow } from '../lib/api';
-import { labelSamples, realRows, SetupChecklist, setupSteps, setupSummary } from './FirstRun';
+import {
+  labelSamples,
+  readSetupDismissed,
+  realRows,
+  SETUP_DISMISSED_KEY,
+  SetupChecklist,
+  setupSteps,
+  setupSummary,
+  showFinishCard,
+  writeSetupDismissed,
+} from './FirstRun';
+import { sectionSummary } from '../lib/groups';
 import {
   AgentTabs,
   canWrite,
@@ -187,5 +198,78 @@ describe('New project and Import', () => {
     );
     expect(write).toBe(`${dryRun} --write`);
     expect(importCommands('', '').dryRun).toContain('--path "<vault>" --only "<Folder>"');
+  });
+});
+
+describe('Finish setting up, once there is a real project (board D-09)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const pending = setupSteps({ tokens: [token({ lastUsedAt: new Date().toISOString() })], rows: [row('BURR')], linked: [] });
+  const done = setupSteps({
+    tokens: [token({ lastUsedAt: new Date().toISOString() })],
+    rows: [row('BURR', { lastActivityAt: new Date().toISOString() })],
+    linked: null,
+  });
+
+  it('shows while a step is pending, and not once all four are done, put off, or unread', () => {
+    expect(pending.map((s) => s.state)).toEqual(['done', 'done', 'next', 'waiting']);
+    expect(showFinishCard(pending, false)).toBe(true);
+    expect(showFinishCard(pending, true)).toBe(false);
+    expect(showFinishCard(done, false)).toBe(false);
+    expect(showFinishCard(null, false)).toBe(false);
+  });
+
+  it('offers the repository link for the next step, with a real project in it', () => {
+    const html = renderToStaticMarkup(<SetupChecklist steps={pending} rows={[row('BURR')]} />);
+    expect(html).toContain('/api/projects/BURR/repos');
+    expect(html).toContain('FOREMAN_WRITE_TOKEN');
+    expect(html).toContain('waiting on step 3');
+  });
+
+  it('remembers Not now per browser, and survives storage that refuses', () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          store.set(key, value);
+        },
+      },
+    });
+    expect(readSetupDismissed()).toBe(false);
+    writeSetupDismissed();
+    expect(store.get(SETUP_DISMISSED_KEY)).toBe('1');
+    expect(readSetupDismissed()).toBe(true);
+
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: () => {
+          throw new Error('denied');
+        },
+        setItem: () => {
+          throw new Error('denied');
+        },
+      },
+    });
+    expect(readSetupDismissed()).toBe(false);
+    expect(() => {
+      writeSetupDismissed();
+    }).not.toThrow();
+  });
+
+  it('leaves samples out of a section’s summary', () => {
+    const rows = labelSamples([...SAMPLES, row('FRM', { lifecycle: 'building' })]);
+    expect(sectionSummary(realRows(rows))).toBe('1 project · 1 building · 0 drift');
+  });
+});
+
+describe('a new code is checked against every project, not the scope on screen', () => {
+  it('names the owner of a code from the unscoped list', () => {
+    const scoped = [row('KURO', { name: 'Kurō' })];
+    const everyCode = [{ code: 'EXMP', name: 'Example Project' }, ...scoped];
+    expect(codeProblem('EXMP', scoped)).toBeNull();
+    expect(codeProblem('EXMP', everyCode)).toBe('EXMP is Example Project’s code already.');
   });
 });

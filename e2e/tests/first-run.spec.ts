@@ -91,9 +91,14 @@ test.describe('first run from the console', () => {
     const checklist = main.getByRole('region', { name: 'Set Foreman up' });
     await expect(checklist).toBeVisible();
     await expect(checklist).toContainText(/\d of 4 done/);
-    for (const step of ['Connect an agent', 'Create or import a project', 'Link its repository', 'See the first commit']) {
-      await expect(checklist.getByText(step, { exact: true })).toBeVisible();
-    }
+    // The step titles — not the step's own "Connect an agent" button, which shares the words.
+    await expect(checklist.locator('.fm-setup__title')).toHaveText([
+      'Connect an agent',
+      'Create or import a project',
+      'Link its repository',
+      'See the first commit',
+    ]);
+    await expect(checklist.getByRole('button', { name: 'Connect an agent' })).toBeVisible();
     // The samples do not count as a project, and no figure claims "clean".
     await expect(checklist).toContainText('The samples do not count');
     await expect(main.getByRole('link', { name: /CI · reporting/ })).toHaveCount(0);
@@ -213,6 +218,55 @@ test.describe('first run from the console', () => {
     };
     expect(created.group?.humanId).toBe(humanId);
     expect(created.sample).toBe(false);
+  });
+
+  test('with a real project and setup unfinished, Home is the dashboard with a Finish setting up card', async ({ page }) => {
+    // No token has called Foreman, as far as this page is told: step 1 is pending whatever other
+    // specs have done, so the card has something to finish.
+    await page.route(/\/api\/tokens$/, (route) =>
+      route.request().method() === 'GET'
+        ? route.fulfill({ json: { items: [], nextCursor: null, total: 0 } })
+        : route.continue(),
+    );
+    await page.goto('/');
+    const main = page.getByRole('main');
+    const card = main.getByRole('region', { name: 'Finish setting up' });
+    await expect(card).toBeVisible();
+    await expect(card).toContainText(/\d of 4 done · next: connect an agent/);
+    // The dashboard is still Home: the figures are there, under the card.
+    await expect(main.getByRole('link', { name: /CI · reporting/ })).toBeVisible();
+
+    // Collapsed until asked; opened, it is the checklist.
+    const toggle = card.getByRole('button', { name: 'Show the steps' });
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await toggle.click();
+    await expect(card.getByRole('button', { name: 'Hide the steps' })).toHaveAttribute('aria-expanded', 'true');
+    await expect(card.getByRole('region', { name: 'Set Foreman up' })).toBeVisible();
+    await expect(card.locator('.fm-setup__title').first()).toHaveText('Connect an agent');
+
+    // Not now is remembered in this browser.
+    await card.getByRole('button', { name: 'Not now' }).click();
+    await expect(card).toHaveCount(0);
+    await page.reload();
+    await expect(main.getByRole('link', { name: /CI · reporting/ })).toBeVisible();
+    await expect(main.getByRole('region', { name: 'Finish setting up' })).toHaveCount(0);
+  });
+
+  test('Home counts no sample in a section’s summary or the ungrouped figure', async ({ page }) => {
+    const body = (await (await page.request.get('/api/portfolio')).json()) as PortfolioBody;
+    const ungrouped = (body.ungrouped?.projects ?? []).filter((row) => row.sample !== true).length;
+    const samplesUngrouped = (body.ungrouped?.projects ?? []).some((row) => row.sample === true);
+    await page.goto('/');
+    const main = page.getByRole('main');
+    if (body.groups.length > 0) {
+      await expect(main.getByText(new RegExp(`· ${String(ungrouped)} ungrouped`)).first()).toBeVisible();
+    }
+    if (body.groups.length > 0 && samplesUngrouped) {
+      const section = main.getByRole('region', { name: 'Ungrouped', exact: true });
+      await expect(section).toContainText(`${String(ungrouped)} ${ungrouped === 1 ? 'project' : 'projects'} ·`);
+      // Still listed, and labelled.
+      await expect(section.getByText(/· Sample/).first()).toBeVisible();
+    }
   });
 
   test('Import… shows the CLI, the dry run first, then --write, and calls no server', async ({ page }) => {

@@ -1075,6 +1075,22 @@ export const foreman = {
   project: (code: string) => api.get<ProjectDetail>(`/api/projects/${code}`),
   /** New project (FRM-T-18.9). The code is the person's, checked against `ProjectCode` first. */
   createProject: (body: ProjectCreateInput) => api.post<CreatedProject>('/api/projects', body),
+  /**
+   * Every project's code and name, unscoped — what a new code must not repeat (FRM-T-18.9). Paged
+   * through to the end: the portfolio a screen holds may be narrowed to one group.
+   */
+  projectCodes: async (): Promise<{ code: string; name: string }[]> => {
+    const codes: { code: string; name: string }[] = [];
+    let cursor: string | null = null;
+    do {
+      const page: Page<{ code: string; name: string }> = await api.get(
+        `/api/projects?limit=200${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`,
+      );
+      codes.push(...page.items.map(({ code, name }) => ({ code, name })));
+      cursor = page.nextCursor;
+    } while (cursor !== null && codes.length < 10_000);
+    return codes;
+  },
   /** Remove a sample project — a soft delete; the server refuses a real one (FRM-T-18.9). */
   removeSampleProject: (code: string) => api.del(`/api/projects/${encodeURIComponent(code)}`),
   phases: (code: string) => api.get<Page<PhaseProgressRow>>(`/api/projects/${code}/phases`),

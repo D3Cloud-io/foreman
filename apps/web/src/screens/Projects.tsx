@@ -430,9 +430,14 @@ function NewProjectDialog({
   onOpenChange: (open: boolean) => void;
   listing: GroupListing;
   scope: string | null;
+  /** The rows on screen — possibly one group's. The check reads every project's code as well. */
   taken: readonly PortfolioRow[];
   onCreated: () => void;
 }) {
+  // Every code, not the scope's: a code is unique across the whole Foreman (ADR-008), and the
+  // portfolio this screen holds may be narrowed to one group. Read each time the dialog opens.
+  const everyCode = useAsync(() => (open ? foreman.projectCodes() : Promise.resolve([])), [open]);
+  const allTaken = everyCode.state.status === 'ready' ? [...everyCode.state.value, ...taken] : taken;
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [pitch, setPitch] = useState('');
@@ -441,7 +446,7 @@ function NewProjectDialog({
   const { mutate, pending } = useMutate();
 
   const chosen = group ?? defaultGroup(scope, listing);
-  const problem = codeProblem(code, taken);
+  const problem = codeProblem(code, allTaken);
   const valid = code !== '' && problem === null && name.trim() !== '';
   const groupName = listing.items.find((item) => item.humanId === chosen)?.name ?? null;
 
