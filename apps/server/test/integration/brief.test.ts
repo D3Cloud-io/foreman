@@ -239,6 +239,127 @@ describe.skipIf(url === undefined)('the session brief', () => {
     expect(brief.unconfirmedAttributions).toBe(1);
   });
 
+  describe('evidence (FRM-REQ-247)', () => {
+    const DAY = 86_400_000;
+    const ago = (days: number) => new Date(Date.now() - days * DAY);
+    let repoId: string;
+
+    const attribute = async (
+      taskId: string,
+      sha: string,
+      committedAt: Date,
+      data: { confirmed: boolean; rejectedAt?: Date | null; orphanedAt?: Date | null },
+    ) => {
+      const commit = await db.commit.create({
+        data: {
+          repoId,
+          sha,
+          message: `Work on ${sha.slice(0, 7)}`,
+          author: 'tester',
+          committedAt,
+          ...(data.orphanedAt === undefined ? {} : { orphanedAt: data.orphanedAt }),
+        },
+      });
+      await db.commitTask.create({
+        data: {
+          commitId: commit.id,
+          taskId,
+          source: data.confirmed ? 'declared' : 'file_overlap',
+          confidence: 0.9,
+          confirmed: data.confirmed,
+          ...(data.confirmed ? { confirmedAt: new Date() } : {}),
+          ...(data.rejectedAt === undefined ? {} : { rejectedAt: data.rejectedAt }),
+        },
+      });
+    };
+
+    beforeEach(async () => {
+      repoId = (await db.repo.create({ data: { projectId, fullName: 'test/brief-evidence' } })).id;
+    });
+
+    it('is nothing to compare, and says so, while no attribution has been confirmed', async () => {
+      await addTask(`${CODE}-T-1.1`, { status: 'done', completedAt: ago(1) });
+      const { brief } = await getBrief();
+      expect(brief.evidence).toEqual({ doneWithCommit: 0, done: 0, since: null });
+    });
+
+    it('counts confirmed commits only, and leaves out work that predates attribution', async () => {
+      // The first confirmed commit is ten days old: attribution began then. Its task is done and
+      // evidenced.
+      const began = ago(10);
+      const first = await addTask(`${CODE}-T-1.1`, { status: 'done', completedAt: ago(5) });
+      await attribute(first.id, 'a'.repeat(40), began, { confirmed: true });
+      // Done since, with only a suggestion behind it: counted as done, not as evidenced (ADR-005).
+      const suggested = await addTask(`${CODE}-T-1.2`, { status: 'done', completedAt: ago(3) });
+      await attribute(suggested.id, 'b'.repeat(40), ago(4), { confirmed: false });
+      // Done since, with a rejected attribution: the same.
+      const rejected = await addTask(`${CODE}-T-1.3`, { status: 'done', completedAt: ago(2) });
+      await attribute(rejected.id, 'c'.repeat(40), ago(3), { confirmed: false, rejectedAt: new Date() });
+      // Done before attribution began, and one with no recorded completion: left out of both numbers.
+      await addTask(`${CODE}-T-1.4`, { status: 'done', completedAt: ago(30) });
+      await addTask(`${CODE}-T-1.5`, { status: 'done' });
+      // Not done: not counted at all, whatever is attributed to it.
+      const open = await addTask(`${CODE}-T-1.6`, { status: 'in_progress' });
+      await attribute(open.id, 'd'.repeat(40), ago(1), { confirmed: true });
+
+      const { brief } = await getBrief();
+      expect(brief.evidence.done).toBe(3);
+      expect(brief.evidence.doneWithCommit).toBe(1);
+      expect(brief.evidence.since).toBe(began.toISOString());
+      // The declared figure is the phase's own, unchanged by any of it.
+      expect(brief.activePhase?.tasks.done).toBe(5);
+    });
+
+    it('does not take an orphaned commit, or an unconfirmed one, as the start of attribution', async () => {
+      const task = await addTask(`${CODE}-T-1.1`, { status: 'done', completedAt: ago(2) });
+      await attribute(task.id, 'e'.repeat(40), ago(20), { confirmed: true, orphanedAt: new Date() });
+      await attribute(task.id, 'f'.repeat(40), ago(15), { confirmed: false });
+      const { brief } = await getBrief();
+      expect(brief.evidence).toEqual({ doneWithCommit: 0, done: 0, since: null });
+    });
+  });
+
+  describe('deployed (FRM-REQ-245)', () => {
+    it('is null when nothing is recorded as deployed', async () => {
+      const { brief } = await getBrief();
+      expect(brief.deployed).toBeNull();
+    });
+
+    it('counts the commits main has made since the deployed one, and is unknown for a commit it has never seen', async () => {
+      const repo = await db.repo.create({ data: { projectId, fullName: 'test/brief-deployed' } });
+      const base = Date.now() - 10 * 86_400_000;
+      const shas = ['1', '2', '3', '4'].map((c) => c.repeat(40));
+      for (const [i, sha] of shas.entries()) {
+        await db.commit.create({
+          data: { repoId: repo.id, sha, message: `Commit ${String(i)}`, author: 't', committedAt: new Date(base + i * 86_400_000) },
+        });
+      }
+      await db.deployment.create({
+        data: {
+          projectId,
+          environment: 'production',
+          image: 'ghcr.io/test/brief',
+          imageSha: `sha-${'2'.repeat(7)}`,
+          deployedAt: new Date(base + 2 * 86_400_000),
+        },
+      });
+      let { brief } = await getBrief();
+      expect(brief.deployed).toMatchObject({ sha: `sha-${'2'.repeat(7)}`, ahead: 2 });
+
+      await db.deployment.create({
+        data: {
+          projectId,
+          environment: 'production',
+          image: 'ghcr.io/test/brief',
+          imageSha: 'sha-9999999',
+          deployedAt: new Date(),
+        },
+      });
+      ({ brief } = await getBrief());
+      expect(brief.deployed?.ahead).toBeNull();
+    });
+  });
+
   it('reports CI as unknown rather than as failing when nothing has been ingested', async () => {
     const { brief } = await getBrief();
     expect(brief.ci.unknown).toBe(true);

@@ -596,6 +596,30 @@ export interface BriefGuideline extends GuidelineSummary {
 }
 
 /**
+ * How much of the done work the repo bears out (FRM-REQ-247, FRM-DA-008). A neutral fraction, never
+ * a second progress bar: `doneWithCommit` of `done` tasks in the active phase have a **confirmed**
+ * commit (ADR-005 — a proposal is not evidence). Work that predates attribution is left out of
+ * both numbers, because it could not have had a commit attributed to it; `since` is the date the
+ * project's first confirmed attributed commit was made, or null when there is none yet.
+ */
+export interface BriefEvidence {
+  readonly doneWithCommit: number;
+  readonly done: number;
+  readonly since: string | null;
+}
+
+/**
+ * What is running, and how far main has moved on (FRM-REQ-245). `ahead` is the commits made after
+ * the deployed one, or null when the deployed SHA is not a commit Foreman knows — unknown, which is
+ * not zero.
+ */
+export interface BriefDeployed {
+  readonly sha: string;
+  readonly at: string;
+  readonly ahead: number | null;
+}
+
+/**
  * A guideline as the portfolio carries it: every active one, with where it applies — `'all'`, or
  * `'groups'` and the `GRP-` IDs it names, in group order.
  */

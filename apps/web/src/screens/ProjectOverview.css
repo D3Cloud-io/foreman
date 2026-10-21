@@ -1,0 +1,97 @@
+/* The project overview's brief sections (FRM-T-18.8). Tokens only (d3-check-usage). Hue is spent on
+   a blocked task and nowhere else; a kind of drift is a word and a count first. */
+
+.fm-next {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-8);
+  padding: var(--space-6) var(--space-8);
+  margin: 0 calc(var(--space-8) * -1);
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+}
+.fm-next:hover {
+  background: var(--color-surface-hover);
+}
+.fm-next:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: calc(var(--focus-offset) * -1);
+}
+.fm-next__meta {
+  display: inline-flex;
+  gap: var(--space-4);
+}
+.fm-next__why {
+  grid-column: 2 / -1;
+  font-size: var(--text-12);
+  line-height: var(--leading-12);
+}
+.fm-next__blocked {
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  color: var(--color-fg-muted);
+}
+
+.fm-drifted {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-8);
+  padding: var(--space-6) 0;
+  border-top: var(--border-width) solid var(--color-border);
+}
+.fm-drifted:first-child {
+  border-top: 0;
+}
+.fm-drifted__count {
+  font-size: var(--text-16);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-warning);
+}
+.fm-drifted__what {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+  overflow-wrap: anywhere;
+}
+.fm-drifted__action {
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  color: var(--color-accent);
+  white-space: nowrap;
+}
+
+.fm-recent {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-8);
+}
+.fm-recent__when {
+  font-size: var(--text-12);
+  white-space: nowrap;
+}
+.fm-recent__why {
+  grid-column: 2 / -1;
+  font-size: var(--text-12);
+}
+.fm-recent__heading {
+  font-size: var(--text-13);
+}
+
+@media (pointer: coarse) {
+  .fm-next,
+  .fm-drifted__action {
+    min-height: 44px;
+  }
+  .fm-drifted__action {
+    display: inline-flex;
+    align-items: center;
+  }
+}

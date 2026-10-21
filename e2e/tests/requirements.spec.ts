@@ -90,7 +90,8 @@ test.describe('requirement detail (S-14)', () => {
     await signIn(page);
     await page.goto('/requirements/EXMP-REQ-007');
 
-    await expect(page.getByText('backlog — no phase has claimed it')).toBeVisible();
+    // The rail's phase select reads the backlog by name, not as an empty value.
+    await expect(page.getByRole('combobox', { name: 'Phase of EXMP-REQ-007' })).toContainText('Backlog — no phase');
   });
 });
 
@@ -120,11 +121,14 @@ test.describe('the generated views (T-3.9)', () => {
     await signIn(page);
     await page.goto('/projects/EXMP');
 
-    // Both are reachable from the overview's section map and from the sidebar. The row of links
-    // that used to be the only route is gone: it lived on this screen alone, so following one was
-    // a one-way trip.
-    for (const name of ['Scope of work', 'Register', 'Requirements']) {
-      await expect(page.getByRole('link', { name }).first()).toBeVisible();
+    // Both are reachable from the sidebar, under Knowledge. The overview's map of section tiles is
+    // gone (FRM-T-18.8): the sidebar already carries every section, from every screen.
+    const nav = page.getByRole('navigation', { name: 'Main' });
+    await expect(nav.getByRole('link', { name: 'Requirements' }).first()).toBeVisible();
+    const knowledge = nav.getByRole('button', { name: 'Knowledge' });
+    if ((await knowledge.getAttribute('aria-expanded')) !== 'true') await knowledge.click();
+    for (const name of ['Scope of work', 'Register']) {
+      await expect(nav.getByRole('link', { name })).toBeVisible();
     }
   });
 });
