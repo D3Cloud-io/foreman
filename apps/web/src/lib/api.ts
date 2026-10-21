@@ -205,10 +205,10 @@ export interface PortfolioRow {
   /** `unknown` is a third state, and renders grey rather than green (S-04). */
   ci: { conclusion: string | null; unknown: boolean };
   /**
-   * CI in three words, served so Home and `foreman_portfolio` answer identically (FRM-T-18.6).
+   * CI in four words (`other` is any run that neither passed nor failed; `ci.conclusion` says which), served so Home and `foreman_portfolio` answer identically (FRM-T-18.6).
    * Optional on the type only so a fixture that predates it still compiles; the server always sends it.
    */
-  ciState?: 'passing' | 'failing' | 'never';
+  ciState?: 'passing' | 'failing' | 'other' | 'never';
   /** The first thing to pick up in the active phase, or null (FRM-REQ-245). */
   nextTask?: { humanId: string; title: string } | null;
   /** What is running; `ahead` is the commits since it, or null when its SHA is not a known commit. */

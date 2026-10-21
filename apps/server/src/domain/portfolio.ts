@@ -34,7 +34,7 @@ export interface PortfolioRow {
   readonly openCriticals: number;
   readonly ci: { readonly conclusion: string | null; readonly unknown: boolean };
   /**
-   * CI as the ledger says it, in three words (FRM-REQ-245): `never` is a project nothing was ever
+   * CI as the ledger says it, in four words (FRM-REQ-245): `never` is a project nothing was ever
    * ingested for — not passing, not failing, not asked. Derived from `ci`, so the two cannot
    * disagree.
    */
@@ -66,12 +66,18 @@ export interface PortfolioRow {
   readonly lastActivityAt: string | null;
 }
 
-export type CiState = 'passing' | 'failing' | 'never';
+/**
+ * `passing` is a success and only a success. `other` is any finished run that neither passed nor
+ * failed — cancelled, skipped, neutral, action_required, startup_failure — and the row's `ci.conclusion`
+ * says which, so a reader can say "CI cancelled" rather than call it a pass.
+ */
+export type CiState = 'passing' | 'failing' | 'other' | 'never';
 
 /** A run that failed. The console's `readCi` says the same two words, and so does this. */
 export function ciStateOf(ci: { conclusion: string | null; unknown: boolean }): CiState {
   if (ci.unknown) return 'never';
-  return ci.conclusion === 'failure' || ci.conclusion === 'timed_out' ? 'failing' : 'passing';
+  if (ci.conclusion === 'failure' || ci.conclusion === 'timed_out') return 'failing';
+  return ci.conclusion === 'success' ? 'passing' : 'other';
 }
 
 /** The first next task the brief would name for a project in `phaseId`, or null. */
@@ -93,13 +99,30 @@ async function nextTaskFor(
   return task;
 }
 
-/** The newest deployment, and how many commits on main are newer than the one it shipped. */
+/**
+ * What is running, and how far its repo has moved on.
+ *
+ * - **Which deployment.** The newest one in the environment named `production`; a project that has
+ *   none there reads its newest deployment of any environment. Taking the newest of all would let a
+ *   staging deploy of a later commit stand in for what is live.
+ * - **Which repo.** Only live repos (`deletedAt: null`). `ahead` is counted inside the repo that
+ *   holds the shipped commit, never across the project's repos: a second repo's commits are not
+ *   "ahead" of a commit in the first.
+ * - **Ahead, in commit order.** Commits at or after the shipped commit's timestamp, excluding the
+ *   shipped one itself. `gte`, not `gt`: git timestamps have one-second resolution, so a commit made
+ *   in the same second may be after it, and the order within a second cannot be known. Counting it
+ *   errs toward "main has moved", never toward a false "up to date".
+ * - `null` when no live repo holds the deployed SHA: unknown, which is not zero.
+ */
 async function deployedFor(db: Db, projectId: string): Promise<PortfolioRow['deployed']> {
-  const latest = await db.deployment.findFirst({
-    where: { projectId },
-    orderBy: { deployedAt: 'desc' },
-    select: { imageSha: true, deployedAt: true },
-  });
+  const select = { imageSha: true, deployedAt: true } as const;
+  const latest =
+    (await db.deployment.findFirst({
+      where: { projectId, environment: 'production' },
+      orderBy: { deployedAt: 'desc' },
+      select,
+    })) ??
+    (await db.deployment.findFirst({ where: { projectId }, orderBy: { deployedAt: 'desc' }, select }));
   if (latest === null) return null;
 
   // An image tag can read `sha-abc1234`, and is often the short form of the commit.
@@ -108,15 +131,20 @@ async function deployedFor(db: Db, projectId: string): Promise<PortfolioRow['dep
     sha.length < 7
       ? null
       : await db.commit.findFirst({
-          where: { repo: { projectId }, sha: { startsWith: sha }, orphanedAt: null },
+          where: { repo: { projectId, deletedAt: null }, sha: { startsWith: sha }, orphanedAt: null },
           orderBy: { committedAt: 'desc' },
-          select: { committedAt: true },
+          select: { repoId: true, sha: true, committedAt: true },
         });
   const ahead =
     shipped === null
       ? null
       : await db.commit.count({
-          where: { repo: { projectId }, orphanedAt: null, committedAt: { gt: shipped.committedAt } },
+          where: {
+            repoId: shipped.repoId,
+            orphanedAt: null,
+            sha: { not: shipped.sha },
+            committedAt: { gte: shipped.committedAt },
+          },
         });
   return { sha: latest.imageSha, at: latest.deployedAt.toISOString(), ahead };
 }

@@ -16,6 +16,8 @@ const RUN = Date.now().toString(36).slice(-4).toUpperCase();
 const GROUP = `Ledger ${RUN}`;
 const BUSY = `LB${RUN}`;
 const EMPTY = `LE${RUN}`;
+/** Two reasons to need you (a critical finding, a blocked task) and a next task to show. */
+const MULTI = `LM${RUN}`;
 const NEXT_TITLE = `Verify the signature ${RUN}`;
 
 async function signIn(page: Page): Promise<void> {
@@ -24,6 +26,25 @@ async function signIn(page: Page): Promise<void> {
   await page.getByRole('textbox', { name: 'Password' }).fill(PASSWORD);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await page.getByRole('navigation').first().waitFor();
+}
+
+/**
+ * This spec's own group section. Every Home locator below starts here (or in the Needs-you strip,
+ * narrowed to one project's item): other specs' groups and the seeded projects are on the same page,
+ * and a locator that matches them is a single-match assumption that breaks the day one of them needs you.
+ */
+const section = (page: Page) => page.getByRole('main').getByRole('region', { name: GROUP, exact: true });
+const rowOf = (page: Page, code: string) =>
+  section(page)
+    .getByRole('listitem')
+    .filter({ has: page.getByRole('link', { name: new RegExp(`^${code}`) }) });
+
+/** One project's card in the Needs-you strip, after opening it to every project (it shows six). */
+async function needsYouItem(page: Page, code: string) {
+  const strip = page.getByRole('main').getByRole('group', { name: 'Needs you' });
+  const all = strip.getByRole('button', { name: /^Show all/ });
+  if (await all.count()) await all.click();
+  return strip.getByRole('listitem').filter({ has: page.getByRole('link', { name: new RegExp(`^${code}`) }) });
 }
 
 interface Row {
@@ -42,7 +63,7 @@ test.describe('the portfolio ledger on Home', () => {
     const group = await page.request.post('/api/groups', { data: { name: GROUP, accent: 'foreman' } });
     expect(group.status(), await group.text()).toBe(201);
     const { humanId } = (await group.json()) as { humanId: string };
-    for (const code of [BUSY, EMPTY]) {
+    for (const code of [BUSY, EMPTY, MULTI]) {
       const created = await page.request.post('/api/projects', {
         data: { code, name: `Ledger ${code}`, group: humanId },
       });
@@ -60,6 +81,21 @@ test.describe('the portfolio ledger on Home', () => {
       data: { title: `Ledger finding ${RUN}`, severity: 'critical' },
     });
     expect(finding.status(), await finding.text()).toBe(201);
+    const multiPhase = await page.request.post(`/api/projects/${MULTI}/phases`, {
+      data: { number: 1, name: 'A phase with a rather long name' },
+    });
+    expect(multiPhase.status(), await multiPhase.text()).toBe(201);
+    for (const data of [
+      { title: `Blocked ${RUN}`, status: 'blocked', blockedReason: 'Waiting on the vendor' },
+      { title: `A next task with a fairly long title ${RUN}` },
+    ]) {
+      const made = await page.request.post(`/api/projects/${MULTI}/tasks?phase=${MULTI}-P-1`, { data });
+      expect(made.status(), await made.text()).toBe(201);
+    }
+    const multiFinding = await page.request.post(`/api/projects/${MULTI}/findings`, {
+      data: { title: `Ledger multi finding ${RUN}`, severity: 'critical' },
+    });
+    expect(multiFinding.status(), await multiFinding.text()).toBe(201);
     await page.close();
   });
 
@@ -89,10 +125,11 @@ test.describe('the portfolio ledger on Home', () => {
     // One strip, not one per group, and above every group's section.
     const strip = main.getByRole('group', { name: 'Needs you' });
     await expect(strip).toHaveCount(1);
-    await expect(strip.getByRole('link', { name: new RegExp(BUSY) }).first()).toBeVisible();
-    await expect(strip.getByRole('link', { name: /1 critical \+ high/ })).toBeVisible();
+    const busy = await needsYouItem(page, BUSY);
+    await expect(busy).toHaveCount(1);
+    await expect(busy.getByRole('link', { name: '1 critical + high' })).toBeVisible();
     // Nothing is planned for the empty one, and CI that never reported is not "failing".
-    await expect(strip.getByRole('link', { name: new RegExp(EMPTY) })).toHaveCount(0);
+    await expect(await needsYouItem(page, EMPTY)).toHaveCount(0);
 
     const order = await main.evaluate((el) => {
       const first = (sel: string) => Array.from(el.querySelectorAll(sel))[0];
@@ -111,37 +148,36 @@ test.describe('the portfolio ledger on Home', () => {
 
   test('a ledger row names its phase with progress, next task, drift, needs-you and CI "never"', async ({ page }) => {
     await page.goto('/');
-    const section = page.getByRole('main').getByRole('region', { name: GROUP });
-    const busy = section.getByRole('listitem').filter({ has: page.getByRole('link', { name: new RegExp(BUSY) }) });
-    await expect(busy.getByRole('link', { name: /P-1 · Ingest/ })).toBeVisible();
-    await expect(busy.getByText('0 of 1 tasks')).toBeVisible();
-    await expect(busy.getByRole('link', { name: new RegExp(NEXT_TITLE) })).toHaveAttribute(
-      'href',
-      new RegExp(`/tasks/${BUSY}-T-`),
-    );
-    await expect(busy.getByRole('link', { name: /1 critical \+ high/ })).toBeVisible();
-    // CI that never reported is its own word, and a link to where it would show.
-    await expect(busy.getByRole('link', { name: /CI\s+never/ })).toBeVisible();
+    const busy = rowOf(page, BUSY);
+    await expect(busy).toHaveCount(1);
+    await expect(busy.getByRole('link', { name: 'P-1 · Ingest' })).toBeVisible();
+    await expect(busy.locator('.fm-lrow__bar').getByText('0 of 1 tasks', { exact: true })).toBeVisible();
+    const next = busy.getByRole('link', { name: new RegExp(NEXT_TITLE) });
+    await expect(next).toHaveAttribute('href', new RegExp(`/tasks/${BUSY}-T-`));
+    await expect(busy.getByRole('link', { name: '1 critical + high' })).toBeVisible();
+    // Drift is a figure for a planned project; CI that never reported is its own word.
+    await expect(busy.getByRole('link', { name: /^\d+ drift$/ })).toBeVisible();
+    await expect(busy.getByRole('link', { name: 'CI never' })).toBeVisible();
 
-    const empty = section.getByRole('listitem').filter({ has: page.getByRole('link', { name: new RegExp(EMPTY) }) });
-    await expect(empty.getByText('No plan yet')).toBeVisible();
-    await expect(empty.getByText('not measurable yet').first()).toBeVisible();
-    await expect(empty.getByRole('link', { name: /CI\s+never/ })).toBeVisible();
+    const empty = rowOf(page, EMPTY);
+    await expect(empty.getByText('No plan yet', { exact: true })).toBeVisible();
+    await expect(empty.locator('.fm-lrow__phase').getByText('not measurable yet', { exact: true })).toBeVisible();
+    await expect(empty.getByRole('link', { name: 'CI never' })).toBeVisible();
   });
 
   test('the row opens a disclosure with deployed-vs-main and last activity, and closes it again', async ({ page }) => {
     await page.goto('/');
-    const section = page.getByRole('main').getByRole('region', { name: GROUP });
-    const toggle = section.getByRole('button', { name: `Show details for Ledger ${BUSY}` });
+    const busy = rowOf(page, BUSY);
+    const toggle = busy.getByRole('button', { name: `Show details for Ledger ${BUSY}` });
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(section.getByText('Deployed vs main').first()).toBeHidden();
+    await expect(busy.getByText('Deployed vs main', { exact: true })).toBeHidden();
 
     await toggle.focus();
     await page.keyboard.press('Enter');
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    await expect(section.getByText('Deployed vs main').first()).toBeVisible();
-    await expect(section.getByText('Never recorded as deployed.').first()).toBeVisible();
-    await expect(section.getByText('Last activity').first()).toBeVisible();
+    await expect(busy.getByText('Deployed vs main', { exact: true })).toBeVisible();
+    await expect(busy.getByText('Never recorded as deployed.', { exact: true })).toBeVisible();
+    await expect(busy.getByText('Last activity', { exact: true })).toBeVisible();
 
     await page.keyboard.press('Enter');
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -150,13 +186,11 @@ test.describe('the portfolio ledger on Home', () => {
   test('a group section still collapses, and the ledger goes with it', async ({ page }) => {
     await page.goto('/');
     const main = page.getByRole('main');
-    const toggle = main.getByRole('button', { name: `${GROUP} projects` });
+    const toggle = main.getByRole('button', { name: `${GROUP} projects`, exact: true });
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(
-      main.getByRole('region', { name: GROUP }).getByRole('link', { name: new RegExp(`^${BUSY}`) }),
-    ).toHaveCount(0);
+    await expect(section(page).getByRole('link', { name: new RegExp(`^${BUSY}`) })).toHaveCount(0);
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   });
@@ -166,8 +200,7 @@ test.describe('the portfolio ledger on Home', () => {
 
     test('a project is a two-line item, and the page does not scroll sideways', async ({ page }) => {
       await page.goto('/');
-      const section = page.getByRole('main').getByRole('region', { name: GROUP });
-      const row = section.getByRole('listitem').filter({ has: page.getByRole('link', { name: new RegExp(BUSY) }) });
+      const row = rowOf(page, BUSY);
       await expect(row).toBeVisible();
 
       const box = await row.boundingBox();
@@ -175,11 +208,38 @@ test.describe('the portfolio ledger on Home', () => {
       expect(box?.height ?? 0).toBeLessThan(110);
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow).toBeLessThanOrEqual(0);
+      await expect(row.getByRole('button', { name: /Show details/ })).toBeVisible();
+    });
 
-      // The disclosure is there and is a real target.
-      const toggle = row.getByRole('button', { name: /Show details/ });
-      const size = await toggle.boundingBox();
-      expect(size?.height ?? 0).toBeGreaterThanOrEqual(24);
+    test('a row with several reasons stays two lines: ONE chip and "+1 more", and a next task you can read', async ({
+      page,
+    }) => {
+      await page.goto('/');
+      const row = rowOf(page, MULTI);
+      await expect(row).toBeVisible();
+
+      const top = async (selector: string) => (await row.locator(selector).first().boundingBox())?.y ?? -1;
+      const line1 = await top('.fm-lrow__project a');
+      const line2 = await top('.fm-lrow__phase a');
+      expect(line2).toBeGreaterThan(line1);
+      // The phase, the next task and CI share line two; the chip shares line one.
+      expect(Math.abs((await top('.fm-lrow__next a')) - line2)).toBeLessThan(8);
+      expect(Math.abs((await top('.fm-lrow__ci a')) - line2)).toBeLessThan(12);
+      expect(Math.abs((await top('.fm-reasons--compact a')) - line1)).toBeLessThan(16);
+
+      // Exactly one chip is drawn, the most urgent; the rest are said in words.
+      const chips = await row.locator('.fm-reasons--compact a').evaluateAll((links) =>
+        links.filter((l) => (l as HTMLElement).offsetParent !== null).map((l) => l.textContent.trim()),
+      );
+      expect(chips).toEqual(['1 critical + high']);
+      await expect(row.getByText('+1 more', { exact: true })).toBeVisible();
+
+      // The next task is readable: it has room, and it says which task on hover.
+      const next = await row.locator('.fm-lrow__next a').boundingBox();
+      expect(next?.width ?? 0).toBeGreaterThanOrEqual(64);
+      await expect(row.locator('.fm-lrow__next a')).toHaveAttribute('title', new RegExp(`${MULTI}-T-.* A next task`));
+
+      expect((await row.boundingBox())?.height ?? 0).toBeLessThan(110);
     });
   });
 });

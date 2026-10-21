@@ -339,31 +339,47 @@ a.fm-sstat:hover {
   font-weight: var(--weight-medium);
 }
 
+/* A phone's break between lines; nothing anywhere else. */
+.fm-lrow__br {
+  display: none;
+}
+.fm-reasons__more {
+  display: none;
+}
+
+/* A thumb, not a cursor (FRM-REQ-219): every link and button the ledger draws is 44 by 44 or more
+   under a coarse pointer — the drift figure and the "Show all" button included. */
 @media (pointer: coarse) {
   .fm-ny__project,
   .fm-reasons__link,
   .fm-lrow__link,
   .fm-lrow__driftlink,
   .fm-lrow__cilink,
-  .fm-lrow__act {
+  .fm-lrow__act,
+  .fm-needsyou__more {
+    min-width: 44px;
     min-height: 44px;
   }
   .fm-lrow__driftlink,
-  .fm-lrow__cilink {
+  .fm-lrow__cilink,
+  .fm-reasons__link,
+  .fm-lrow__act,
+  .fm-needsyou__more {
+    display: inline-flex;
     align-items: center;
+    justify-content: center;
   }
   .fm-lrow__driftlink {
-    display: inline-flex;
-  }
-  .fm-reasons__link,
-  .fm-lrow__act {
-    padding-inline: var(--space-2);
+    justify-content: flex-end;
   }
 }
 
 /* ─── Phone: two-line items ─────────────────────────────────────────────
-   Line one: the project (code and name) and what needs you, and the disclosure. Line two: the phase,
-   the next task, drift and CI, each trimmed with an ellipsis, so a row never wraps to three. */
+   Line one: the project (code and name), the single most urgent chip with "+N more" as text, and the
+   disclosure. Line two: the phase, then the next task — which takes whatever is left, truncated with
+   its full title on hover, never squeezed to nothing — then drift when there is some, and CI. It is a
+   wrapping flex row, not a grid: a grid shares column widths between the two lines, and a wide chip
+   on line one would take the next task's room on line two. */
 @media (max-width: 48rem) {
   .fm-ledger__head {
     display: none;
@@ -375,44 +391,62 @@ a.fm-sstat:hover {
     padding: var(--space-8) var(--space-12);
   }
   .fm-lrow {
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
-    grid-template-areas:
-      'project project need x'
-      'phase next drift ci';
-    column-gap: var(--space-8);
-    row-gap: var(--space-2);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-8);
+    min-height: 0;
     padding: var(--space-8) var(--space-12);
   }
+  /* Line 1 */
   .fm-lrow__project {
-    grid-area: project;
+    order: 1;
+    flex: 1 1 0;
+    min-width: 0;
   }
   .fm-lrow__need {
-    grid-area: need;
+    order: 2;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 55%;
   }
   .fm-lrow > .fm-lrow__x {
-    grid-area: x;
-    grid-row: 1;
-    grid-column: 4;
+    order: 3;
+    flex: none;
   }
+  .fm-lrow__br {
+    display: block;
+    order: 4;
+    flex: 0 0 100%;
+    height: 0;
+  }
+  /* Line 2 */
   .fm-lrow__phase {
-    grid-area: phase;
+    order: 5;
+    flex: 0 1 auto;
     max-width: 7rem;
+    min-width: 0;
   }
   .fm-lrow__next {
-    grid-area: next;
+    order: 6;
+    flex: 1 1 0;
+    min-width: 4rem;
   }
   .fm-lrow__drift {
-    grid-area: drift;
+    order: 7;
+    flex: none;
   }
   .fm-lrow__ci {
-    grid-area: ci;
+    order: 8;
+    flex: none;
+  }
+  .fm-lrow__drift--quiet {
+    display: none;
   }
   .fm-lrow__life,
   .fm-lrow__bar,
   .fm-lrow__phase .fm-lrow__l2,
-  .fm-lrow__id {
-    display: none;
-  }
+  .fm-lrow__id,
   .fm-lrow__project .fm-lrow__l2 {
     display: none;
   }
@@ -424,9 +458,24 @@ a.fm-sstat:hover {
     font-size: var(--text-12);
     color: var(--color-fg-muted);
   }
+  /* One chip, then the count of the rest in words. */
+  .fm-reasons--compact {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+  .fm-reasons--compact > li:nth-child(n + 2):not(.fm-reasons__more) {
+    display: none;
+  }
+  .fm-reasons--compact .fm-reasons__more {
+    display: list-item;
+    flex: none;
+    font-size: var(--text-11);
+    color: var(--color-fg-muted);
+    white-space: nowrap;
+  }
   .fm-lrow__more {
-    grid-column: 1 / -1;
-    grid-row: 3;
+    order: 9;
+    flex: 0 0 100%;
     padding-left: 0;
   }
   .fm-ny__group {

@@ -14,7 +14,7 @@ import {
   Stack,
 } from '@d3cloud/ui';
 import { ArrowUpRight, ChevronDown, ChevronRight, UsersRound } from 'lucide-react';
-import { ciDetail, figuresOf, Ledger, NeedsYouStrip, StatStrip } from '../components/Ledger';
+import { CI_ANCHOR_ID, ciDetail, figuresOf, Ledger, NeedsYouStrip, StatStrip } from '../components/Ledger';
 import { ScopeNotice, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
 import { api, foreman, type FindingsPage, type PortfolioRow } from '../lib/api';
 import { scopedHref, scopeOf } from '../lib/scope';
@@ -225,14 +225,22 @@ export function PortfolioStats({
   );
 }
 
+/** The section the CI figure's anchor lands on: the first with a ledger to land on. */
+function firstWithRows(sections: readonly Section<PortfolioRow>[]): Section<PortfolioRow> | undefined {
+  return sections.find((section) => section.rows.length > 0);
+}
+
 function GroupSection({
   section,
   collapsed,
   onToggle,
+  anchor,
 }: {
   section: Section<PortfolioRow>;
   collapsed: boolean;
   onToggle: () => void;
+  /** An `id` for this section's ledger — the first one carries the CI figure's anchor. */
+  anchor?: string | undefined;
 }) {
   const { group } = section;
   const headingId = `fm-home-${section.key}`;
@@ -275,7 +283,7 @@ function GroupSection({
         {section.rows.length === 0 ? (
           <p className="fm-muted fm-group-note">No projects yet — move some here from Projects.</p>
         ) : (
-          <Ledger rows={section.rows} />
+          <Ledger rows={section.rows} {...(anchor === undefined ? {} : { anchor })} />
         )}
       </div>
     </section>
@@ -414,6 +422,7 @@ export function Home({ search }: { search: string }) {
         {sections.map((section) => (
           <GroupSection
             key={section.key}
+            anchor={section === firstWithRows(sections) ? CI_ANCHOR_ID : undefined}
             section={section}
             collapsed={isCollapsed(section.key)}
             onToggle={() => { toggle(section.key); }}
@@ -445,7 +454,7 @@ export function Home({ search }: { search: string }) {
           </EmptyState>
         ) : (
           <>
-            <Ledger rows={[...rows].sort((a, b) => a.name.localeCompare(b.name))} />
+            <Ledger rows={[...rows].sort((a, b) => a.name.localeCompare(b.name))} anchor={CI_ANCHOR_ID} />
             <WorkBelow rows={rows} />
           </>
         )}
@@ -474,6 +483,7 @@ export function Home({ search }: { search: string }) {
       {sections.map((section) => (
         <GroupSection
           key={section.key}
+          anchor={section === firstWithRows(sections) ? CI_ANCHOR_ID : undefined}
           section={section}
           collapsed={isCollapsed(section.key)}
           onToggle={() => { toggle(section.key); }}
