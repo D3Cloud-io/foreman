@@ -100,9 +100,14 @@
   line-height: var(--leading-14);
 }
 
+/* A touch target is the anchor's own box, not the cell around it: the link itself is 44px tall. */
 @media (pointer: coarse) {
   .fm-reality__cell:has(.fm-reality__link) {
     min-height: 44px;
+  }
+  .fm-reality__link {
+    min-height: 44px;
+    justify-content: center;
   }
 }
 
