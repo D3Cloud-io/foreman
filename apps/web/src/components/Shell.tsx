@@ -39,6 +39,7 @@ import {
   currentSectionSlug,
   isRecordPage,
   KNOWLEDGE_ROWS,
+  onBriefForgotten,
   PROJECT_ROWS,
   projectCodeFor,
   recordTrailEnd,
@@ -101,7 +102,7 @@ type ProjectState =
 
 function useProject(path: string): ProjectState {
   const claimed = projectCodeFor(path);
-  const { state } = useAsync<Brief | 'unknown' | null>(
+  const { state, refresh } = useAsync<Brief | 'unknown' | null>(
     () =>
       claimed === null
         ? Promise.resolve(null)
@@ -110,6 +111,14 @@ function useProject(path: string): ProjectState {
             throw error;
           }),
     [claimed],
+  );
+  // A rename (or any write that forgets the brief) re-reads the sidebar's project in place.
+  useEffect(
+    () =>
+      onBriefForgotten((code) => {
+        if (code === claimed) refresh();
+      }),
+    [claimed, refresh],
   );
 
   if (claimed === null) return { status: 'none' };

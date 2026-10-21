@@ -27,6 +27,7 @@ import { recordRoutes } from './routes/record.js';
 import { findingRoutes, projectFindingRoutes } from './routes/findings.js';
 import { operationsRoutes } from './routes/operations.js';
 import { attributionAcrossRoutes, realityRoutes } from './routes/reality.js';
+import { taskRealityRoutes } from './routes/taskReality.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { buildRegistry, type JobRegistry } from './jobs/index.js';
 import { linkRoutes } from './routes/links.js';
@@ -150,6 +151,8 @@ export function createApp({ config, db, oidc = null, registry, verifier: given }
   mount(app, '/api/projects', realityRoutes(db, jobs));
   mount(app, '/api/projects', projectFindingRoutes(db));
   mount(app, '/api/projects', screenRoutes(db, config));
+  // The reality behind one task or requirement — commits, CI, deploys (FRM-T-18.8).
+  mount(app, '/api', taskRealityRoutes(db));
   mount(app, '/api', findingRoutes(db));
   // Cross-project triage reads (FRM-T-18.7): proposed attributions and blocked tasks in a scope.
   mount(app, '/api', attributionAcrossRoutes(db));

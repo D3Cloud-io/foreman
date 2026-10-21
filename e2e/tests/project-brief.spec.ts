@@ -317,6 +317,9 @@ test.describe('project pages that show reality', () => {
       await dialog.getByRole('button', { name: 'Save' }).click();
       await expect(dialog).toBeHidden();
       await expect(page.getByRole('heading', { level: 1 })).toHaveText(`${name} renamed`);
+      // The sidebar and trail re-read too (they subscribe to the brief being forgotten): the old
+      // name is nowhere on the page.
+      await expect(page.getByText(name, { exact: true })).toHaveCount(0);
     } finally {
       await page.request.delete(`/api/projects/${code}`);
     }

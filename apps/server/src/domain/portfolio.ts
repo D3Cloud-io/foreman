@@ -1,6 +1,6 @@
 import type { GroupAccent, ScopedGuidelineSummary } from '@foreman/shared';
 import type { Db } from '../db.js';
-import { READY } from './brief.js';
+import { deployedFor, READY } from './brief.js';
 import { phaseInFlight } from './wherewestand.js';
 import { driftFor, type DriftCategory } from './drift.js';
 import { listGroups } from './groups.js';
@@ -97,56 +97,6 @@ async function nextTaskFor(
     select: { humanId: true, title: true },
   });
   return task;
-}
-
-/**
- * What is running, and how far its repo has moved on.
- *
- * - **Which deployment.** The newest one in the environment named `production`; a project that has
- *   none there reads its newest deployment of any environment. Taking the newest of all would let a
- *   staging deploy of a later commit stand in for what is live.
- * - **Which repo.** Only live repos (`deletedAt: null`). `ahead` is counted inside the repo that
- *   holds the shipped commit, never across the project's repos: a second repo's commits are not
- *   "ahead" of a commit in the first.
- * - **Ahead, in commit order.** Commits at or after the shipped commit's timestamp, excluding the
- *   shipped one itself. `gte`, not `gt`: git timestamps have one-second resolution, so a commit made
- *   in the same second may be after it, and the order within a second cannot be known. Counting it
- *   errs toward "main has moved", never toward a false "up to date".
- * - `null` when no live repo holds the deployed SHA: unknown, which is not zero.
- */
-async function deployedFor(db: Db, projectId: string): Promise<PortfolioRow['deployed']> {
-  const select = { imageSha: true, deployedAt: true } as const;
-  const latest =
-    (await db.deployment.findFirst({
-      where: { projectId, environment: 'production' },
-      orderBy: { deployedAt: 'desc' },
-      select,
-    })) ??
-    (await db.deployment.findFirst({ where: { projectId }, orderBy: { deployedAt: 'desc' }, select }));
-  if (latest === null) return null;
-
-  // An image tag can read `sha-abc1234`, and is often the short form of the commit.
-  const sha = latest.imageSha.replace(/^sha-/, '').toLowerCase();
-  const shipped =
-    sha.length < 7
-      ? null
-      : await db.commit.findFirst({
-          where: { repo: { projectId, deletedAt: null }, sha: { startsWith: sha }, orphanedAt: null },
-          orderBy: { committedAt: 'desc' },
-          select: { repoId: true, sha: true, committedAt: true },
-        });
-  const ahead =
-    shipped === null
-      ? null
-      : await db.commit.count({
-          where: {
-            repoId: shipped.repoId,
-            orphanedAt: null,
-            sha: { not: shipped.sha },
-            committedAt: { gte: shipped.committedAt },
-          },
-        });
-  return { sha: latest.imageSha, at: latest.deployedAt.toISOString(), ahead };
 }
 
 export async function portfolio(db: Db, codes?: string[]): Promise<PortfolioRow[]> {
