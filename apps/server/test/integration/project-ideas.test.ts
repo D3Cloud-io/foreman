@@ -175,6 +175,24 @@ describe.skipIf(url === undefined)('project ideas', () => {
     expect(converted.project?.code).toBe('PITA');
   });
 
+  it('undoes a conversion by reversing every event it answered with, last-first (FRM-T-18.14)', async () => {
+    const idea = await create({ title: 'PIT converted then undone', pitch: 'A pitch that travels.' });
+    const res = await convert(idea.humanId, { code: 'PITB', name: 'Undone Conversion' });
+    expect(res.status, await res.clone().text()).toBe(201);
+    const { auditEventIds } = (await res.json()) as { auditEventIds: string[] };
+    expect(auditEventIds.length).toBeGreaterThan(1);
+
+    for (const id of [...auditEventIds].reverse()) {
+      const undone = await api(`/undo/${id}`, { method: 'POST' });
+      expect(undone.status, await undone.clone().text()).toBe(200);
+    }
+
+    const after = (await (await api(`/project-ideas/${idea.humanId}`)).json()) as Idea;
+    expect(after.status).toBe('new');
+    expect(after.project).toBeNull();
+    expect((await api('/projects/PITB')).status).toBe(404);
+  });
+
   it('names the project after the idea when no name is given', async () => {
     const idea = await create({ title: 'PIT an offline notebook' });
     const res = await convert(idea.humanId, { code: 'PITB' });

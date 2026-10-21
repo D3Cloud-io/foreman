@@ -135,8 +135,10 @@ export function ReviewTab({ search, queue, phrase }: { search: string; queue: Re
       },
       // The sidebar's "waiting for review" changed with this answer.
       signals: true,
-      // Not reversible by the server yet (FRM-T-18.14): no Undo that would only be refused.
-      undoable: false,
+      // Undo puts the proposal back (FRM-T-18.14); the queue is read again, in place, to list it. The
+      // write itself does not re-read: a ruled row stays, marked, so the reviewer keeps their place.
+      undone: `${sha.slice(0, 7)} → ${task} is waiting for review again`,
+      onUndone: () => { queue.refresh(); },
     });
   };
 
@@ -339,7 +341,7 @@ export function ReviewTab({ search, queue, phrase }: { search: string; queue: Re
             gains the commit, and every count that reads confirmed work counts it. Rejecting leaves the commit
             unattributed to this task, and it is not proposed again.
           </p>
-          <p className="fm-muted">A ruling here cannot be undone from the console yet.</p>
+          <p className="fm-muted">A ruling can be undone from the toast that follows it.</p>
         </Card>
       </Stack>
     );

@@ -17,11 +17,10 @@ import {
   PageHeader,
   Skeleton,
   Stack,
-  useToast,
 } from '@d3cloud/ui';
 import { ChevronDown, ChevronUp, Ellipsis, Info, Plus } from 'lucide-react';
 import type { Group, GroupAccent, GroupListing, GroupWithProjects } from '@foreman/shared';
-import { useUndoToast } from '../lib/undo';
+import { undoReportWords, useMutate } from '../lib/mutate';
 import {
   ApiError,
   foreman,
@@ -111,9 +110,8 @@ export function Groups({ search }: { search: string }) {
   const [moveFor, setMoveFor] = useState<{ group: string; projects: MovingProject[] } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const { ref, focusAfter } = useReorderFocus();
-  const toast = useToast();
+  const { mutate, pending } = useMutate();
   const toastMove = useMoveToast(refresh);
-  const toastUndoable = useUndoToast();
 
   const allGuidelines = guidelines.state.status === 'ready' ? guidelines.state.value.items : [];
 
@@ -154,35 +152,39 @@ export function Groups({ search }: { search: string }) {
 
   const reorder = (index: number, delta: -1 | 1) => {
     const group = items[index];
-    if (group === undefined) return;
+    // One write at a time: a press while the last is with the server would move the row and then be
+    // refused, so it does not move at all.
+    if (group === undefined || pending) return;
     const next = moveBy(items, index, delta);
     // Moved now, confirmed by the answer: a button that waits on the network before the row moves
     // reads as a button that did nothing.
     setListing({ ...listing, items: next.map((g, position) => ({ ...g, position })) });
     focusAfter({ id: group.humanId, dir: delta < 0 ? 'up' : 'down' });
     setFailure(null);
-    foreman
-      .orderGroups(next.map((g) => g.humanId))
-      .then((result) => {
-        setListing(result);
-        toastUndoable({
-          message: `Moved ${group.name} ${delta < 0 ? 'up' : 'down'}`,
-          auditEventIds: result.auditEventIds,
-          undone: 'Put the order back',
-          reload: refresh,
-        });
-      })
-      .catch((caught: unknown) => {
-        setFailure(caught instanceof Error ? caught.message : String(caught));
-        refresh();
-      });
+    void mutate({
+      subject: group.name,
+      run: () => foreman.orderGroups(next.map((g) => g.humanId)),
+      message: () => `Moved ${group.name} ${delta < 0 ? 'up' : 'down'}`,
+      apply: (result) => { setListing(result); },
+      undone: 'Put the order back',
+      undoWords: undoReportWords('Put the order back'),
+      onUndone: refresh,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (outcome.ok) return;
+      if (outcome.inFlight !== true) setFailure(outcome.message);
+      // Put the row back where the server has it.
+      refresh();
+    });
   };
 
   const remove = (group: GroupWithProjects) => {
     setFailure(null);
-    foreman
-      .deleteGroup(group.humanId)
-      .then(() => {
+    void mutate({
+      subject: group.name,
+      run: () => foreman.deleteGroup(group.humanId),
+      message: () => `Deleted ${group.name}`,
+      apply: () => {
         setConfirming(null);
         setRefusals((current) => {
           const next = new Map(current);
@@ -190,23 +192,28 @@ export function Groups({ search }: { search: string }) {
           return next;
         });
         refresh();
-        toast.show({ message: `Deleted ${group.name}` });
-      })
-      .catch((caught: unknown) => {
-        setConfirming(null);
-        if (caught instanceof ApiError && caught.status === 409) {
-          const body = caught.body as Partial<GroupDeleteRefusal> | undefined;
-          setRefusals((current) =>
-            new Map(current).set(group.humanId, {
-              error: body?.error ?? caught.message,
-              projects: body?.projects ?? [],
-              guidelines: body?.guidelines ?? [],
-            }),
-          );
-          return;
-        }
-        setFailure(caught instanceof Error ? caught.message : String(caught));
-      });
+      },
+      undone: `Put ${group.name} back`,
+      undoWords: undoReportWords(`Put ${group.name} back`),
+      onUndone: refresh,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (outcome.ok || outcome.inFlight === true) return;
+      setConfirming(null);
+      const caught = outcome.error;
+      if (caught instanceof ApiError && caught.status === 409) {
+        const body = caught.body as Partial<GroupDeleteRefusal> | undefined;
+        setRefusals((current) =>
+          new Map(current).set(group.humanId, {
+            error: body?.error ?? caught.message,
+            projects: body?.projects ?? [],
+            guidelines: body?.guidelines ?? [],
+          }),
+        );
+        return;
+      }
+      setFailure(outcome.message);
+    });
   };
 
   const ungroupedGuidelines = applicableGuidelines(allGuidelines, null).length;
@@ -361,16 +368,11 @@ export function Groups({ search }: { search: string }) {
         listing={listing}
         guidelines={allGuidelines}
         onClose={() => { setEditing(null); }}
-        onSaved={(saved, created) => {
+        onSaved={() => {
           setEditing(null);
           refresh();
-          toastUndoable({
-            message: created ? `Created ${saved.name}` : `Saved ${saved.name}`,
-            auditEventIds: saved.auditEventIds,
-            undone: created ? `Removed ${saved.name}` : `Put ${saved.name} back as it was`,
-            reload: refresh,
-          });
         }}
+        onUndone={refresh}
       />
 
       <Modal
@@ -485,12 +487,15 @@ export function GroupEditor({
   guidelines,
   onClose,
   onSaved,
+  onUndone,
 }: {
   editing: GroupWithProjects | 'new' | null;
   listing: GroupListing;
   guidelines: readonly GuidelineRow[];
   onClose: () => void;
   onSaved: (saved: Audited<Group>, created: boolean) => void;
+  /** Re-read the screen after the toast's Undo. */
+  onUndone?: () => void;
 }) {
   return (
     <Modal
@@ -507,6 +512,7 @@ export function GroupEditor({
           guidelines={guidelines}
           onClose={onClose}
           onSaved={onSaved}
+          {...(onUndone === undefined ? {} : { onUndone })}
         />
       )}
     </Modal>
@@ -519,12 +525,14 @@ function EditorBody({
   guidelines,
   onClose,
   onSaved,
+  onUndone,
 }: {
   editing: GroupWithProjects | 'new';
   listing: GroupListing;
   guidelines: readonly GuidelineRow[];
   onClose: () => void;
   onSaved: (saved: Audited<Group>, created: boolean) => void;
+  onUndone?: (() => void) | undefined;
 }) {
   const [draft, setDraft] = useState<GroupInput>(
     editing === 'new'
@@ -536,7 +544,7 @@ function EditorBody({
           accent: editing.accent,
         },
   );
-  const [busy, setBusy] = useState(false);
+  const { mutate, pending: busy } = useMutate();
   const [error, setError] = useState<string | null>(null);
   // What the server said about each field on a 400 or a 409, shown beside the field it is about.
   const [serverFields, setServerFields] = useState<FieldErrors>({});
@@ -562,38 +570,49 @@ function EditorBody({
   const own = applying.filter((row) => row.appliesTo === 'groups').map((row) => row.humanId);
 
   const submit = () => {
-    setBusy(true);
     setError(null);
     setServerFields({});
-    (editing === 'new' ? foreman.createGroup(draft) : foreman.updateGroup(editing.humanId, draft))
-      .then((saved) => { onSaved(saved, editing === 'new'); })
-      .catch((caught: unknown) => {
-        if (caught instanceof ApiError && caught.status === 409) {
-          setServerFields({ name: `${caught.message}. Names are unique, ignoring case.` });
-          return;
-        }
-        // A 400 names each field and what is wrong with it — `Ungrouped` and `All` are reserved,
-        // a site must be https. Said beside the field, not as "the request body is not valid".
-        if (caught instanceof ApiError && caught.status === 400) {
-          const fields = (caught.body as { fields?: { path: string; message: string }[] } | undefined)?.fields ?? [];
-          const byField: FieldErrors = {};
-          const other: string[] = [];
-          for (const field of fields) {
-            if (field.path === 'name' || field.path === 'description' || field.path === 'siteUrl') {
-              byField[field.path] = byField[field.path] === undefined ? field.message : `${byField[field.path] ?? ''} ${field.message}`;
-            } else {
-              other.push(field.path === '' ? field.message : `${field.path}: ${field.message}`);
-            }
+    const created = editing === 'new';
+    void mutate({
+      subject: created ? 'the new group' : editing.name,
+      run: () => (created ? foreman.createGroup(draft) : foreman.updateGroup(editing.humanId, draft)),
+      message: (saved) => (created ? `Created ${saved.name}` : `Saved ${saved.name}`),
+      undone: created ? `Removed ${draft.name}` : `Put ${editing.name} back as it was`,
+      undoWords: undoReportWords(created ? `Removed ${draft.name}` : `Put ${editing.name} back as it was`),
+      ...(onUndone === undefined ? {} : { onUndone }),
+      failure: 'inline',
+    }).then((outcome) => {
+      if (outcome.ok) {
+        onSaved(outcome.value, created);
+        return;
+      }
+      if (outcome.inFlight === true) return;
+      const caught = outcome.error;
+      if (caught instanceof ApiError && caught.status === 409) {
+        setServerFields({ name: `${caught.message}. Names are unique, ignoring case.` });
+        return;
+      }
+      // A 400 names each field and what is wrong with it — `Ungrouped` and `All` are reserved,
+      // a site must be https. Said beside the field, not as "the request body is not valid".
+      if (caught instanceof ApiError && caught.status === 400) {
+        const fields = (caught.body as { fields?: { path: string; message: string }[] } | undefined)?.fields ?? [];
+        const byField: FieldErrors = {};
+        const other: string[] = [];
+        for (const field of fields) {
+          if (field.path === 'name' || field.path === 'description' || field.path === 'siteUrl') {
+            byField[field.path] = byField[field.path] === undefined ? field.message : `${byField[field.path] ?? ''} ${field.message}`;
+          } else {
+            other.push(field.path === '' ? field.message : `${field.path}: ${field.message}`);
           }
-          setServerFields(byField);
-          if (other.length > 0 || Object.keys(byField).length === 0) {
-            setError(other.length > 0 ? other.join(' ') : caught.message);
-          }
-          return;
         }
-        setError(caught instanceof Error ? caught.message : String(caught));
-      })
-      .finally(() => { setBusy(false); });
+        setServerFields(byField);
+        if (other.length > 0 || Object.keys(byField).length === 0) {
+          setError(other.length > 0 ? other.join(' ') : caught.message);
+        }
+        return;
+      }
+      setError(outcome.message);
+    });
   };
 
   return (

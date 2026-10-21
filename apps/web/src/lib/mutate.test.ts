@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ToastOptions } from '@d3cloud/ui';
 import { ApiError, auditIdsFromHeaders } from './api';
 import {
+  announceMutation,
   changedCharacters,
   discardQuestion,
   draftSize,
@@ -12,6 +13,7 @@ import {
   runMutation,
   STILL_SAVING,
   undoOutcome,
+  undoReportWords,
   withRollups,
 } from './mutate';
 
@@ -249,5 +251,104 @@ describe('drafts', () => {
   it('asks how many characters it would throw away', () => {
     expect(discardQuestion(12, 'BND-T-9.4')).toBe('Discard 12 unsaved characters in BND-T-9.4?');
     expect(discardQuestion(1)).toBe('Discard 1 unsaved character?');
+  });
+});
+
+/** FRM-T-18.14: the Groups screens' partial-undo report, and a write announced after the fact. */
+describe('undoWords — telling a partial undo item by item', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('says "Undid 1 of 2 — X has changed since", read back from the state', async () => {
+    // P1 moved on: its undo is refused, P2's goes through.
+    vi.stubGlobal('fetch', (url: string) =>
+      url.endsWith('/p1')
+        ? answer(409, { error: 'that change cannot be undone: groupId has changed since' })
+        : answer(200, {}),
+    );
+    const { shown, toast } = recorder();
+    const settled = new Promise<void>((resolve) => {
+      announceMutation(
+        {
+          subject: 'Moved KURO and BURR',
+          message: () => 'Moved KURO and BURR to Dormice',
+          undone: 'Put KURO and BURR back',
+          undoWords: undoReportWords('Put KURO and BURR back', () =>
+            Promise.resolve({ back: ['BURR'], notBack: ['KURO'] }),
+          ),
+          onUndone: () => { resolve(); },
+        },
+        { auditEventIds: ['p1', 'p2'] },
+        toast,
+      );
+      shown[0]?.action?.onAction();
+    });
+    await settled;
+
+    expect(shown[0]?.message).toBe('Moved KURO and BURR to Dormice');
+    expect(shown[1]?.message).toBe('Undid 1 of 2 — KURO has changed since');
+    // A partial undo stays until it is read.
+    expect(shown[1]?.duration).toBe(0);
+  });
+
+  it('is the success line when everything went back, and falls back to the server’s words if it cannot say', async () => {
+    vi.stubGlobal('fetch', () => answer(200, {}));
+    const { shown, toast } = recorder();
+    const done = new Promise<void>((resolve) => {
+      announceMutation(
+        {
+          subject: 'Dormice',
+          message: () => 'Moved Dormice up',
+          undone: 'Put the order back',
+          undoWords: () => Promise.reject(new Error('read-back failed')),
+          onUndone: () => { resolve(); },
+        },
+        { auditEventIds: ['one'] },
+        toast,
+      );
+      shown[0]?.action?.onAction();
+    });
+    await done;
+    expect(shown[1]?.message).toBe('Put the order back');
+  });
+
+  it('offers no Undo when the write answered with no events', () => {
+    const { shown, toast } = recorder();
+    announceMutation({ subject: 'x', message: () => 'Did it' }, { auditEventIds: [] }, toast);
+    expect(shown[0]?.action).toBeUndefined();
+  });
+});
+
+describe('an attribution decision is undoable from the console (FRM-T-18.14)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('offers Undo on a confirm, and puts the proposal back through POST /api/undo', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (url: string) => {
+      calls.push(url);
+      return answer(200, {});
+    });
+    const { shown, toast } = recorder();
+    const undone = new Promise<void>((resolve) => {
+      void runMutation(
+        {
+          subject: 'abc1234 → BND-T-1.1',
+          run: () => Promise.resolve({ commitSha: 'abc1234', confirmed: true, auditEventIds: ['decision'] }),
+          message: () => 'abc1234 confirmed as BND-T-1.1',
+          undone: 'abc1234 is waiting to be reviewed again',
+          onUndone: () => { resolve(); },
+        },
+        toast,
+      ).then(() => {
+        expect(shown[0]?.action?.label).toBe('Undo');
+        shown[0]?.action?.onAction();
+      });
+    });
+    await undone;
+    expect(calls).toEqual(['/api/undo/decision']);
+    expect(shown[1]?.message).toBe('abc1234 is waiting to be reviewed again');
   });
 });

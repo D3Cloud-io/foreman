@@ -117,4 +117,75 @@ test.describe('project ideas (S-28)', () => {
     await expect(page.getByRole('button', { name: 'Convert' })).toBeHidden();
     await expect(page.getByRole('button', { name: 'Edit', exact: true })).toBeHidden();
   });
+
+  const toast = (page: import('@playwright/test').Page, text: string | RegExp) =>
+    page.locator('.d3-toast').filter({ hasText: text }).last();
+
+  test('every write says what it did with an Undo: create, edit, delete (FRM-T-18.14)', async ({ page }) => {
+    await signIn(page);
+    const text = await create(page, 'Original pitch.');
+    const humanId = /\/project-ideas\/(PI-\d+)$/.exec(page.url())?.[1] ?? '';
+    expect(humanId).not.toBe('');
+
+    // Creating is said, on the page it opened.
+    await expect(toast(page, `${humanId} written down`).getByRole('button', { name: 'Undo' })).toBeVisible();
+
+    // Editing: in place, a toast naming the fields, and Undo puts the pitch back.
+    await page.getByRole('button', { name: 'Edit', exact: true }).first().click();
+    await page.getByRole('textbox', { name: 'Pitch' }).fill('A changed pitch.');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('dialog')).toBeHidden();
+    const saved = toast(page, `Saved ${humanId} — pitch`);
+    await expect(saved).toBeVisible();
+    await saved.getByRole('button', { name: 'Undo' }).click();
+    await expect(toast(page, `Undone — ${humanId} is as it was`)).toBeVisible();
+    await expect.poll(async () => ((await (await page.request.get(`/api/project-ideas/${humanId}`)).json()) as { pitch: string }).pitch).toBe('Original pitch.');
+
+    // Deleting acts at once; Undo brings it back and returns to it.
+    await page.getByRole('button', { name: `Delete ${humanId}` }).click();
+    await expect(page).toHaveURL(/\/project-ideas$/);
+    await toast(page, `${humanId} deleted`).getByRole('button', { name: 'Undo' }).click();
+    await expect(page).toHaveURL(new RegExp(`/project-ideas/${humanId}$`));
+    await expect(page.getByRole('heading', { name: text, level: 1 })).toBeVisible();
+  });
+
+  test('closing the editor with unsaved words asks first, and Cancel does not (FRM-T-18.14)', async ({ page }) => {
+    await signIn(page);
+    await create(page, 'Kept as it is.');
+
+    await page.getByRole('button', { name: 'Edit', exact: true }).first().click();
+    await page.getByRole('textbox', { name: 'Pitch' }).fill('Kept as it is. Plus a draft nobody saved.');
+
+    const asked: string[] = [];
+    page.once('dialog', (dialog) => {
+      asked.push(dialog.message());
+      void dialog.dismiss();
+    });
+    await page.keyboard.press('Escape');
+    expect(asked[0]).toMatch(/^Discard \d+ unsaved characters? in PI-\d+\?$/);
+    // Dismissed: the draft is still there.
+    await expect(page.getByRole('textbox', { name: 'Pitch' })).toHaveValue('Kept as it is. Plus a draft nobody saved.');
+
+    // Cancel is the person saying discard, so it is not asked again.
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByRole('dialog')).toBeHidden();
+  });
+
+  test('converting offers Undo, and Undo makes it an idea again (FRM-T-18.14)', async ({ page }) => {
+    await signIn(page);
+    const text = await create(page, 'Converted, then taken back.');
+    const humanId = /\/project-ideas\/(PI-\d+)$/.exec(page.url())?.[1] ?? '';
+    const projectCode = code();
+
+    await page.getByRole('button', { name: 'Convert' }).click();
+    await page.getByRole('textbox', { name: 'Code' }).fill(projectCode);
+    await page.getByRole('button', { name: 'Convert to project' }).click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${projectCode}$`));
+
+    await toast(page, `${humanId} converted — ${projectCode} created`).getByRole('button', { name: 'Undo' }).click();
+    await expect(page).toHaveURL(new RegExp(`/project-ideas/${humanId}$`));
+    await expect(page.getByRole('heading', { name: text, level: 1 })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Convert' })).toBeVisible();
+    expect((await page.request.get(`/api/projects/${projectCode}`)).status()).toBe(404);
+  });
 });
