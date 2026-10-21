@@ -18,6 +18,7 @@ import {
 } from '../ui/status';
 import { relativeDay } from '../ui/tone';
 import './Ledger.css';
+import { formatDate } from '../lib/text';
 
 /**
  * Home as one portfolio ledger (FRM-T-18.6, FRM-REQ-245, FRM-DA-006, board D-06).
@@ -541,7 +542,7 @@ function LedgerRow({ row }: { row: PortfolioRow }) {
             <dd>
               {row.lastActivityAt === null
                 ? 'No commits ingested yet.'
-                : `Last commit ${relativeDay(row.lastActivityAt)} (${row.lastActivityAt.slice(0, 10)}).`}
+                : `Last commit ${relativeDay(row.lastActivityAt)} (${formatDate(row.lastActivityAt)}).`}
             </dd>
           </div>
           <div>

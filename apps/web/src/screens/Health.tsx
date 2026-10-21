@@ -16,6 +16,7 @@ import { useAsync } from '../lib/useAsync';
 import { Pill, SegmentBar, StatCard } from '../ui/viz';
 import { relativeDay, SERIES } from '../ui/tone';
 import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
+import { formatDateTime } from '../lib/text';
 
 /**
  * S-26 and S-07 — is Foreman itself well, and what is everything made of.
@@ -25,7 +26,7 @@ import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePrior
  */
 
 const when = (iso: string | null): string =>
-  iso === null ? 'never' : new Date(iso).toLocaleString();
+  iso === null ? 'never' : formatDateTime(iso);
 
 function Problems({ report }: { report: HealthReport }) {
   if (report.ok) {

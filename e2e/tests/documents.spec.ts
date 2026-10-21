@@ -152,7 +152,7 @@ test.describe('decisions, risks and the glossary', () => {
 
     await expect(page.getByRole('heading', { name: 'Risks' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Tripwire' })).toBeVisible();
-    await expect(page.getByText(/tripwires? has fired/)).toBeVisible();
+    await expect(page.getByText(/tripwires? ha(s|ve) fired/)).toBeVisible();
   });
 
   test('shows ecosystem terms alongside the project’s own', async ({ page }) => {

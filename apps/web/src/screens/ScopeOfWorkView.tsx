@@ -13,6 +13,7 @@ import { foreman, type ScopeOfWorkTask } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { phaseStatusTone, taskStatusTone } from '../ui/status';
+import { formatDateTime } from '../lib/text';
 
 /**
  * The Scope of Work, generated (T-3.9, FRM-REQ-074, ADR-006).
@@ -145,7 +146,7 @@ export function ScopeOfWorkView({ code }: { code: string }) {
       )}
 
       <p className="fm-muted">
-        Generated {new Date(sow.generatedAt).toLocaleString()}. Nothing here was authored twice.
+        Generated {formatDateTime(sow.generatedAt)}. Nothing here was authored twice.
       </p>
     </Page>
   );

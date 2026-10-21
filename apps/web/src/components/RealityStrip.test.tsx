@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Brief } from '../lib/api';
 import { evidenceLine, readStrip, shortSha } from './RealityStrip';
+import { formatDate } from '../lib/text';
 import { forgetBrief, onBriefForgotten } from '../lib/project';
 
 /** FRM-T-18.8: the reality strip, read honestly (FRM-REQ-247, FRM-REQ-241, FRM-DA-008). */
@@ -47,13 +48,13 @@ const cell = (cells: ReturnType<typeof readStrip>, key: string) => {
 describe('the evidenced fraction', () => {
   it('is a neutral sentence with the date attribution began, not a percentage', () => {
     expect(evidenceLine({ doneWithCommit: 5, done: 8, since: '2026-08-29T10:00:00.000Z' }, 8)).toBe(
-      '5 of 8 done tasks have a commit · attribution since 2026-08-29',
+      `5 of 8 done tasks have a commit · attribution since ${formatDate('2026-08-29T10:00:00.000Z')}`,
     );
   });
 
   it('says how many done tasks predate attribution rather than counting them against it', () => {
     expect(evidenceLine({ doneWithCommit: 3, done: 4, since: '2026-08-29T10:00:00.000Z' }, 8)).toBe(
-      '3 of 4 done tasks have a commit · attribution since 2026-08-29 · 4 done before attribution began',
+      `3 of 4 done tasks have a commit · attribution since ${formatDate('2026-08-29T10:00:00.000Z')} · 4 done before attribution began`,
     );
   });
 
@@ -77,7 +78,7 @@ describe('the strip', () => {
     });
     expect(cell(cells, 'tasks')).toMatchObject({ value: '8 of 12 done', tone: 'neutral' });
     expect(cell(cells, 'tasks').detail).toContain('5 of 8 done tasks have a commit');
-    expect(cell(cells, 'deployed')).toMatchObject({ value: '3f8e21c', detail: 'main +4 · 2026-08-30' });
+    expect(cell(cells, 'deployed')).toMatchObject({ value: '3f8e21c', detail: `main +4 · ${formatDate('2026-08-30T09:00:00.000Z')}` });
   });
 
   it('never makes evidence red, however little there is', () => {
@@ -144,8 +145,8 @@ describe('the strip', () => {
   it('says plainly when nothing is deployed, or main has not moved, or the deployed commit is unknown', () => {
     const at = (deployed: Exclude<Brief['deployed'], undefined>) => cell(readStrip('BND', brief({ deployed }), FULL_PLAN), 'deployed');
     expect(at(null)).toMatchObject({ value: 'not recorded', muted: true });
-    expect(at({ sha: 'sha-3f8e21c', at: '2026-08-30T00:00:00Z', ahead: 0 }).detail).toBe('main is deployed · 2026-08-30');
-    expect(at({ sha: 'sha-3f8e21c', at: '2026-08-30T00:00:00Z', ahead: null }).detail).toBe('main unknown · 2026-08-30');
+    expect(at({ sha: 'sha-3f8e21c', at: '2026-08-30T00:00:00Z', ahead: 0 }).detail).toBe(`main is deployed · ${formatDate('2026-08-30T00:00:00Z')}`);
+    expect(at({ sha: 'sha-3f8e21c', at: '2026-08-30T00:00:00Z', ahead: null }).detail).toBe(`main unknown · ${formatDate('2026-08-30T00:00:00Z')}`);
   });
 
   it('shortens an image tag or digest to seven characters', () => {

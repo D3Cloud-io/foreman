@@ -23,6 +23,7 @@ import { ApiError, foreman, type DiffResult, type DocumentSection } from '../lib
 import { useAsync } from '../lib/useAsync';
 import { draftSize, useDraftGuard, useMutate } from '../lib/mutate';
 import { OpenInConstellation } from '../components/OpenInConstellation';
+import { formatDateTime } from '../lib/text';
 
 /**
  * S-22 — the document editor.
@@ -316,7 +317,7 @@ function RevisionHistory({ code, id }: { code: string; id: string }) {
                   <li key={revision.revisionNo}>
                     <strong>#{revision.revisionNo}</strong> — {revision.actor}{' '}
                     <span className="fm-muted">
-                      {new Date(revision.createdAt).toLocaleString()}
+                      {formatDateTime(revision.createdAt)}
                     </span>
                     {revision.note === null ? null : <div>{revision.note}</div>}
                     {previous === undefined ? null : (

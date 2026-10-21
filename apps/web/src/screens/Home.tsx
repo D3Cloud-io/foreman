@@ -481,7 +481,7 @@ export function Home({ search }: { search: string }) {
         <NeedsYouStrip rows={rows} />
         {rows.length === 0 ? (
           <EmptyState kind="empty" heading="No projects yet">
-            Import the vault, or convert a project idea, to start.
+            Create a project, import one, or convert a project idea, to start.
           </EmptyState>
         ) : (
           <>

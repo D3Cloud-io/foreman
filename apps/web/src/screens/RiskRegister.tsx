@@ -10,6 +10,8 @@ import { foreman, type RiskRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
+import { plural } from '../ui/status';
+import { formatDate } from '../lib/text';
 
 /**
  * The Risk Register, generated (T-4.12, FRM-REQ-073, ADR-006).
@@ -65,7 +67,7 @@ export function RiskRegister({ code }: { code: string }) {
       cell: (row) =>
         row.status === 'fired' ? (
           <Badge tone="danger">
-            fired{row.firedAt === null ? '' : ` ${row.firedAt.slice(0, 10)}`}
+            fired{row.firedAt === null ? '' : ` ${formatDate(row.firedAt)}`}
           </Badge>
         ) : (
           <Badge tone="neutral">{row.status}</Badge>
@@ -89,7 +91,7 @@ export function RiskRegister({ code }: { code: string }) {
       {fired.length === 0 ? null : (
         <Alert
           tone="danger"
-          title={`${String(fired.length)} tripwire${fired.length === 1 ? '' : 's'} has fired`}
+          title={`${plural(fired.length, 'tripwire has', 'tripwires have')} fired`}
         >
           {fired.map((r) => `${r.humanId} — ${r.title}`).join('; ')}
         </Alert>

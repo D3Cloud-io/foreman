@@ -557,7 +557,7 @@ function Rating({ humanId, board, disabled }: { humanId: string; board: boolean;
             ? `Board: ${String(summary.impact)}↑ / ${String(summary.effort)}↓ from ${String(summary.count)} ${summary.count === 1 ? 'reviewer' : 'reviewers'}`
             : summary !== null && summary.ratio !== null
               ? `${String(summary.ratio)}× — ${quadrant(summary.impact ?? 0, summary.effort ?? 0)}`
-              : '1 is marginal or an afternoon; 5 is transformative or a quarter.'}
+              : '1 is marginal or small; 5 is transformative or large.'}
         </span>
       </Stack>
     </Card>
