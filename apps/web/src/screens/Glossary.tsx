@@ -4,12 +4,12 @@ import {
   Page,
   Skeleton,
   Table,
-  type TableColumn,
 } from '@d3cloud/ui';
 import { foreman, type TermRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { InlineMarkdown } from '../components/InlineMarkdown';
 import { ProjectHeader } from '../components/ProjectHeader';
+import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
 
 /**
  * The Glossary, generated (T-4.12, FRM-REQ-071, FRM-REQ-073).
@@ -25,13 +25,34 @@ import { ProjectHeader } from '../components/ProjectHeader';
 export function Glossary({ code }: { code: string }) {
   const { state } = useAsync(() => foreman.glossary(code), [code]);
 
-  const columns: TableColumn<TermRow>[] = [
-    { key: 'term', header: 'Term', width: '14rem', sortable: true, cell: (row) => <InlineMarkdown>{row.term}</InlineMarkdown> },
-    { key: 'definition', header: 'Definition', cell: (row) => <InlineMarkdown>{row.definition}</InlineMarkdown> },
+  // Below 768px: the term is the title with its definition under it, its scope stays as the
+  // status, and the aliases fold into the sub-line (FRM-REQ-249).
+  const termColumns: PriorityColumn<TermRow>[] = [
+    {
+      key: 'term',
+      header: 'Term',
+      width: '14rem',
+      sortable: true,
+      phone: 'host',
+      phoneCell: (row) => (
+        <>
+          <strong>
+            <InlineMarkdown>{row.term}</InlineMarkdown>
+          </strong>
+          <div>
+            <InlineMarkdown>{row.definition}</InlineMarkdown>
+          </div>
+        </>
+      ),
+      cell: (row) => <InlineMarkdown>{row.term}</InlineMarkdown>,
+    },
+    { key: 'definition', header: 'Definition', phone: 'hide', cell: (row) => <InlineMarkdown>{row.definition}</InlineMarkdown> },
     {
       key: 'aliases',
       header: 'Also called',
       width: '12rem',
+      phone: 'fold',
+      foldCell: (row) => (row.aliases.length === 0 ? null : <InlineMarkdown>{row.aliases.join(', ')}</InlineMarkdown>),
       cell: (row) =>
         row.aliases.length === 0 ? (
           <span className="fm-muted">—</span>
@@ -43,11 +64,14 @@ export function Glossary({ code }: { code: string }) {
       key: 'scope',
       header: 'Scope',
       width: '8rem',
+      phoneWidth: '6.5rem',
       cell: (row) => (
         <Badge tone={row.scope === 'ecosystem' ? 'attention' : 'neutral'}>{row.scope}</Badge>
       ),
     },
   ];
+
+  const columns = priorityColumns(termColumns, usePhone());
 
   return (
     <Page>
@@ -65,6 +89,7 @@ export function Glossary({ code }: { code: string }) {
         </EmptyState>
       ) : (
         <Table
+          className="fm-tbl"
           caption={`Glossary for ${code}`}
           captionHidden
           density="compact"

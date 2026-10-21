@@ -278,6 +278,10 @@ export function BarRow({
  * muted when it is not measurable yet, plain ink when clean. There is no green. `tone` is the older
  * hand-set tint, kept for screens that have not adopted `signal`; success and accent are plain ink.
  *
+ * Below `md` (FRM-REQ-249) a card is one line — the label, then the figure and its badge — so four of
+ * them do not fill a phone's first screen. The detail, chart and action are kept for a screen reader
+ * and drawn again from `md`: nothing is removed from the DOM, and the semantics do not change.
+ *
  * A `href` makes the whole card the target, because a statistic you cannot click is a statistic you
  * have to go and find; `action` names where it goes ("Open these 3 findings").
  */
@@ -337,8 +341,8 @@ export function StatCard({
           : 'neutral';
 
   return (
-    <Card padding="md" {...behaviour}>
-      <Stack gap="4">
+    <Card padding="md" className="fm-stat" {...behaviour}>
+      <Stack gap="4" className="fm-stat__body">
         <span className="fm-stat__label">{label}</span>
         <span className="fm-stat__row">
           <span className={`fm-stat__value fm-stat__value--${valueTone}`}>{value}</span>

@@ -10,12 +10,12 @@ import {
   Select,
   Skeleton,
   Table,
-  type TableColumn,
 } from '@d3cloud/ui';
 import { foreman, type RequirementFilters, type RequirementRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { CoverageSummary } from '../components/CoverageSummary';
+import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
 
 /**
  * S-13 — the register, at the volume it actually has.
@@ -65,28 +65,46 @@ export function Requirements({ code, search }: { code: string; search: string })
     ...(lint === ANY ? {} : { earsLint: lint as 'ok' | 'warned' }),
   });
 
-  const columns: TableColumn<RequirementRow>[] = [
+  // Below 768px: the statement is the title, headed by its ID as the row's link; the priority stays
+  // as the status, and phase, coverage and EARS fold into the sub-line (FRM-REQ-249).
+  const requirementColumns: PriorityColumn<RequirementRow>[] = [
     {
       key: 'humanId',
       header: 'ID',
       width: '8.5rem',
+      phone: 'hide',
       cell: (row) => <Link href={`/requirements/${row.humanId}`}>{row.humanId}</Link>,
     },
     {
       key: 'priority',
       header: 'Priority',
       width: '5.5rem',
+      phoneWidth: '5rem',
       cell: (row) => (
         <Badge tone={PRIORITY_TONE[row.priority] ?? 'neutral'}>
           {PRIORITY_LABEL[row.priority] ?? row.priority}
         </Badge>
       ),
     },
-    { key: 'statement', header: 'Statement', cell: (row) => row.statement },
+    {
+      key: 'statement',
+      header: 'Statement',
+      phone: 'host',
+      phoneCell: (row) => (
+        <>
+          <Link className="fm-rowlink" href={`/requirements/${row.humanId}`}>
+            {row.humanId}
+          </Link>
+          <div>{row.statement}</div>
+        </>
+      ),
+      cell: (row) => row.statement,
+    },
     {
       key: 'phase',
       header: 'Phase',
       width: '7.5rem',
+      phone: 'fold',
       cell: (row) =>
         row.phase === null ? <span className="fm-muted">backlog</span> : row.phase.humanId,
     },
@@ -94,6 +112,7 @@ export function Requirements({ code, search }: { code: string; search: string })
       key: 'coveredBy',
       header: 'Covered by',
       width: '7rem',
+      phone: 'fold',
       numeric: true,
       cell: (row) =>
         row.coveredBy === 0 ? (
@@ -107,6 +126,7 @@ export function Requirements({ code, search }: { code: string; search: string })
       key: 'ears',
       header: 'EARS',
       width: '7rem',
+      phone: 'fold',
       cell: (row) =>
         row.earsLintOk ? (
           row.earsPattern
@@ -117,6 +137,8 @@ export function Requirements({ code, search }: { code: string; search: string })
         ),
     },
   ];
+
+  const columns = priorityColumns(requirementColumns, usePhone());
 
   const phaseOptions = [
     { value: ANY, label: 'Any phase' },
@@ -202,6 +224,7 @@ export function Requirements({ code, search }: { code: string; search: string })
           {/* Not virtualized: a virtualized table needs every row the same height, and a
               statement is one line or four. Two hundred rows of DOM is the cheaper trade. */}
           <Table
+            className="fm-tbl"
             caption={`Requirements of ${code}`}
             captionHidden
             density="compact"
