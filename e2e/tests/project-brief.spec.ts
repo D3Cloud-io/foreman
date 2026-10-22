@@ -177,9 +177,9 @@ test.describe('project pages that show reality', () => {
     // The sentence, not a bar: no progress element anywhere in the strip.
     await expect(strip).toContainText(
       read.evidence.done === 0
-        ? /no done work since attribution began, \d{4}-\d{2}-\d{2}/
+        ? /no done work since attribution began, [A-Z][a-z]{2} \d{1,2}, \d{4}/
         : new RegExp(
-            `${String(read.evidence.doneWithCommit)} of ${String(read.evidence.done)} done tasks? ha(s|ve) a commit · attribution since \\d{4}-\\d{2}-\\d{2}`,
+            `${String(read.evidence.doneWithCommit)} of ${String(read.evidence.done)} done tasks? ha(s|ve) a commit · attribution since [A-Z][a-z]{2} \\d{1,2}, \\d{4}`,
           ),
     );
     await expect(strip.getByRole('progressbar')).toHaveCount(0);
