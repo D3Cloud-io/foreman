@@ -17,6 +17,7 @@ import { Pill, SegmentBar, StatCard } from '../ui/viz';
 import { relativeDay, SERIES } from '../ui/tone';
 import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
 import { formatDateTime } from '../lib/text';
+import { plural } from '../ui/status';
 
 /**
  * S-26 and S-07 — is Foreman itself well, and what is everything made of.
@@ -216,7 +217,7 @@ export function Health() {
             {tech.state.value.disagreements.length === 0 ? null : (
               <Alert
                 tone="warning"
-                title={`${String(tech.state.value.disagreements.length)} technologies are on different versions`}
+                title={`${plural(tech.state.value.disagreements.length, 'technology is', 'technologies are')} on a different version`}
               >
                 {tech.state.value.disagreements.map((row) => row.name).join(', ')}
               </Alert>

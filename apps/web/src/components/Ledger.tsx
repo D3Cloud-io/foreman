@@ -4,18 +4,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { FindingsPage, PortfolioRow } from '../lib/api';
 import { scopedHref, UNGROUPED } from '../lib/scope';
 import { AccentDot } from '../ui/groups';
-import {
-  breakdown,
-  ciTone,
-  CRITICAL_PLUS_HIGH,
-  plural,
-  readAcross,
-  readCi,
-  readValue,
-  rowPlanned,
-  type BadgeTone,
-  type Signal,
-} from '../ui/status';
+import { CRITICAL_PLUS_HIGH, breakdown, ciTone, plural, readAcross, readCi, readValue, rowPlanned, type BadgeTone, type Signal } from '../ui/status';
 import { relativeDay } from '../ui/tone';
 import './Ledger.css';
 import { formatDate } from '../lib/text';
@@ -433,7 +422,7 @@ function phaseCell(row: PortfolioRow) {
         <span className="fm-bar" aria-hidden="true">
           <span className="fm-bar__fill" style={{ width: `${String(width)}%` }} />
         </span>
-        <span className="fm-lrow__l2">{total === 0 ? 'no tasks yet' : `${String(closed)} of ${String(total)} tasks`}</span>
+        <span className="fm-lrow__l2">{total === 0 ? 'no tasks yet' : `${String(closed)} of ${plural(total, 'task', 'tasks')}`}</span>
       </span>
     </>
   );
@@ -548,7 +537,7 @@ function LedgerRow({ row }: { row: PortfolioRow }) {
           <div>
             <dt>Plan</dt>
             <dd>
-              {`${row.lifecycle} · ${total === 0 ? 'no tasks yet' : `${String(closed)} of ${String(total)} tasks closed, ${String(row.tasks.open)} open, ${String(row.tasks.blocked)} blocked`}${planned ? ` · ${String(row.drift.total)} drift` : ''}`}
+              {`${row.lifecycle} · ${total === 0 ? 'no tasks yet' : `${String(closed)} of ${plural(total, 'task', 'tasks')} closed, ${String(row.tasks.open)} open, ${String(row.tasks.blocked)} blocked`}${planned ? ` · ${String(row.drift.total)} drift` : ''}`}
             </dd>
           </div>
         </dl>

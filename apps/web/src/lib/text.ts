@@ -49,3 +49,15 @@ export function formatDateTime(iso: string): string {
   if (Number.isNaN(at.getTime())) return '—';
   return new Intl.DateTimeFormat(undefined, DATE_TIME).format(at);
 }
+
+/** The time of day alone, in the operator's locale: `2:02 PM`. For "first call at …", not for a record. */
+export function formatTime(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '—';
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(at);
+}
+
+/** How long ago, in whole days and in words: `today`, `1 day ago`, `12 days ago`. */
+export function daysAgo(days: number): string {
+  return days <= 0 ? 'today' : `${days} ${days === 1 ? 'day' : 'days'} ago`;
+}

@@ -1,4 +1,5 @@
 import type { ProjectIdeaRow } from '../lib/api';
+import { plural } from './status';
 
 /**
  * The pieces an idea is read by at a glance (FRM-ADR-017): how far it has been thought through,
@@ -164,7 +165,7 @@ export function IdeaMatrix({
             viewBox={`0 0 ${String(W)} ${String(H)}`}
             className="fm-matrix__svg"
             role="group"
-            aria-label={`${String(rated.length)} ideas by impact and effort`}
+            aria-label={`${plural(rated.length, 'idea', 'ideas')} by impact and effort`}
           >
             {/* The quadrants, named for what to do with an idea that lands in them. Divided at
                 2.5, not 3: a 3 is "high" on both axes everywhere else on the page, and a divider

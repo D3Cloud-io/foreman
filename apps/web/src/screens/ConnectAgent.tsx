@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Alert, Button, Stack, TabPanel, Tabs } from '@d3cloud/ui';
 import type { TokenRow } from '../lib/api';
 import './FirstRun.css';
+import { formatTime } from '../lib/text';
 
 /**
  * Connect an agent (FRM-T-18.9, FRM-REQ-248, FRM-DA-009): three ways in, each a real command for
@@ -57,7 +58,7 @@ export function skillsSnippet(origin: string, token: string = WRITE_TOKEN_PLACEH
 
 /** The time of day a first call landed, as the line says it: "14:02". */
 function clock(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return formatTime(iso);
 }
 
 /** The waiting line's words, from the token's last-used time. */

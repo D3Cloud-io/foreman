@@ -65,10 +65,34 @@ describe('console copy (FRM-REQ-251)', () => {
   });
 
   it('says "vault" nowhere but the Import dialog', () => {
-    const stray = offences.filter(
-      (o) => !ALLOWED.some((a) => a.file === o.file && a.text === o.text),
-    );
+    // Exact, whole-string matches, each entry spent once: a second copy of an allowed string, or a
+    // longer string that merely contains one, is a stray.
+    const unspent = [...ALLOWED];
+    const stray = offences.filter((o) => {
+      const at = unspent.findIndex((a) => a.file === o.file && a.text === o.text);
+      if (at === -1) return true;
+      unspent.splice(at, 1);
+      return false;
+    });
     expect(stray).toEqual([]);
+  });
+
+  it('keeps one date format: nothing outside lib/text.ts formats a date or time itself', () => {
+    const FORBIDDEN = [
+      /\.toLocale(Date|Time)?String\s*\(/,
+      /\.slice\(\s*0\s*,\s*\d+\s*\)\s*\.replace\(\s*'T'/,
+      /Intl\.DateTimeFormat/,
+    ];
+    const offending = sources(SRC)
+      .filter((path) => relative(SRC, path).split('\\').join('/') !== 'lib/text.ts')
+      .flatMap((path) =>
+        readFileSync(path, 'utf8')
+          .split('\n')
+          .flatMap((line, index) =>
+            FORBIDDEN.some((rule) => rule.test(line)) ? [`${relative(SRC, path)}:${String(index + 1)}: ${line.trim()}`] : [],
+          ),
+      );
+    expect(offending).toEqual([]);
   });
 
   it('keeps the allowlist exact: every entry still matches a string, and has a reason', () => {

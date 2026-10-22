@@ -21,7 +21,8 @@ import { foreman, type CommitRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { useMutate } from '../lib/mutate';
-import { formatDate, formatDateTime } from '../lib/text';
+import { daysAgo, formatDate, formatDateTime } from '../lib/text';
+import { plural } from '../ui/status';
 
 /**
  * S-24 — what actually happened: commits, their attribution proposals, CI and what is deployed.
@@ -101,7 +102,7 @@ export function Activity({ code }: { code: string }) {
             <DescriptionItem term="Last commit">
               {cadence.state.status !== 'ready' || cadence.state.value.lastCommitAt === null
                 ? 'nothing ingested'
-                : `${String(cadence.state.value.dormantDays ?? 0)} days ago`}
+                : daysAgo(cadence.state.value.dormantDays ?? 0)}
             </DescriptionItem>
             <DescriptionItem term="Commits" numeric>
               {cadence.state.status !== 'ready'
@@ -116,7 +117,7 @@ export function Activity({ code }: { code: string }) {
             // A dormant project is visibly dormant (FRM-REQ-113). Across nineteen projects, the
             // ones that stopped are the ones worth noticing.
             <Alert tone="warning" title="Nothing has landed here in a month">
-              {cadence.state.value.dormantDays} days since the last commit.
+              {plural(cadence.state.value.dormantDays ?? 0, 'day', 'days')} since the last commit.
             </Alert>
           ) : null}
         </Card>
@@ -153,7 +154,7 @@ export function Activity({ code }: { code: string }) {
         aria-label="Filter the commits"
         trailing={
           commits.state.status === 'ready' ? (
-            <span className="fm-muted">{commits.state.value.total} commits</span>
+            <span className="fm-muted">{plural(commits.state.value.total, 'commit', 'commits')}</span>
           ) : null
         }
       >

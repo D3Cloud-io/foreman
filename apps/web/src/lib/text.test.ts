@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDate, formatDateTime } from './text';
+import { daysAgo, formatDate, formatDateTime, formatTime } from './text';
 import { plural } from '../ui/status';
 
 describe('formatDate / formatDateTime', () => {
@@ -19,6 +19,8 @@ describe('formatDate / formatDateTime', () => {
 
   it('adds the time of day for an event, and a dash for what it cannot read', () => {
     expect(formatDateTime('2026-08-30T12:00:00.000Z')).toContain(formatDate('2026-08-30T12:00:00.000Z'));
+    expect(formatTime('2026-08-30T12:00:00.000Z')).toMatch(/\d/);
+    expect(formatTime('')).toBe('—');
     expect(formatDate('')).toBe('—');
     expect(formatDateTime('not a date')).toBe('—');
   });
@@ -28,5 +30,13 @@ describe('tripwire pluralisation', () => {
   it('agrees the verb with the count', () => {
     expect(`${plural(1, 'tripwire has', 'tripwires have')} fired`).toBe('1 tripwire has fired');
     expect(`${plural(2, 'tripwire has', 'tripwires have')} fired`).toBe('2 tripwires have fired');
+  });
+});
+
+describe('daysAgo', () => {
+  it('says today, one day, and many days', () => {
+    expect(daysAgo(0)).toBe('today');
+    expect(daysAgo(1)).toBe('1 day ago');
+    expect(daysAgo(12)).toBe('12 days ago');
   });
 });
