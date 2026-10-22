@@ -12,6 +12,8 @@ import {
 import { foreman, type ScopeOfWorkTask } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
+import { phaseStatusTone, taskStatusTone } from '../ui/status';
+import { formatDateTime } from '../lib/text';
 
 /**
  * The Scope of Work, generated (T-3.9, FRM-REQ-074, ADR-006).
@@ -21,14 +23,11 @@ import { ProjectHeader } from '../components/ProjectHeader';
  * argument: the authored version was wrong within a fortnight and nobody noticed for months.
  */
 
-const statusTone = (status: string): 'danger' | 'attention' | 'neutral' =>
-  status === 'blocked' ? 'danger' : status === 'in_progress' ? 'attention' : 'neutral';
-
 function Task({ task }: { task: ScopeOfWorkTask }) {
   return (
     <li>
       <Link href={`/tasks/${task.humanId}`}>{task.humanId}</Link> — {task.title}{' '}
-      <Badge tone={statusTone(task.status)}>{task.status}</Badge>
+      <Badge tone={taskStatusTone(task.status)}>{task.status}</Badge>
       {task.size === null ? null : <span className="fm-muted"> {task.size}</span>}
       {task.satisfies.length === 0 ? (
         // The citation the authored document kept by hand, and its absence said out loud.
@@ -86,9 +85,7 @@ export function ScopeOfWorkView({ code }: { code: string }) {
             </CardTitle>
             <Stack gap="12">
               <div>
-                <Badge tone={phase.status === 'active' ? 'attention' : 'neutral'}>
-                  {phase.status}
-                </Badge>{' '}
+                <Badge tone={phaseStatusTone(phase.status)}>{phase.status}</Badge>{' '}
                 <span className="fm-muted">
                   {phase.done} of {phase.tasks.length} done
                   {phase.cancelled === 0 ? '' : `, ${String(phase.cancelled)} cancelled`}
@@ -99,10 +96,12 @@ export function ScopeOfWorkView({ code }: { code: string }) {
               {phase.objective === null ? null : <div>{phase.objective}</div>}
 
               {phase.exitDemo === null ? (
-                <Alert tone="warning" title="No exit demo">
-                  Nothing states what would show this phase is finished, and it cannot be completed
-                  until something does.
-                </Alert>
+                // Neutral, and a link to where it is counted. It used to say the phase "cannot be
+                // completed" beside a phase the server had already marked complete; the status is
+                // the server's, and this only notes that no demo states what finished means.
+                <a className="fm-chip fm-chip--link fm-chip--quiet" href={`/projects/${code}/drift`}>
+                  no exit demo
+                </a>
               ) : (
                 <div className="fm-muted">Exit demo: {phase.exitDemo}</div>
               )}
@@ -116,8 +115,8 @@ export function ScopeOfWorkView({ code }: { code: string }) {
                     phase.uncoveredMusts.length === 1 ? '' : 's'
                   } with no task`}
                 >
-                  {phase.uncoveredMusts.join(', ')} — this phase cannot be completed until something
-                  covers them.
+                  {phase.uncoveredMusts.join(', ')}
+                  {phase.status === 'complete' ? '' : ' — this phase cannot be completed until something covers them.'}
                 </Alert>
               )}
 
@@ -147,7 +146,7 @@ export function ScopeOfWorkView({ code }: { code: string }) {
       )}
 
       <p className="fm-muted">
-        Generated {new Date(sow.generatedAt).toLocaleString()}. Nothing here was authored twice.
+        Generated {formatDateTime(sow.generatedAt)}. Nothing here was authored twice.
       </p>
     </Page>
   );

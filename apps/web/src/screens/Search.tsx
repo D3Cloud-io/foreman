@@ -98,7 +98,7 @@ export function Search({ search }: { search: string }) {
         title="Search"
         description={
           scope === null
-            ? 'Across every project — which is the question the vault could never answer.'
+            ? 'Across every project, by ID or by words.'
             : phrase === null
               ? 'By kind, an exact ID first.'
               : `Across ${phrase} — by kind, an exact ID first.`

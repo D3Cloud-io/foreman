@@ -815,7 +815,8 @@ describe.skipIf(url === undefined)('groups', () => {
 
     it('soft-deletes an empty one, and undo restores it', async () => {
       const group = await create({ name: `${PREFIX}Empty` });
-      expect((await send('DELETE', `/api/groups/${group.humanId}`)).status).toBe(204);
+      const deleted = await send('DELETE', `/api/groups/${group.humanId}`);
+      expect(deleted.status).toBe(204);
 
       const row = await db.projectGroup.findUniqueOrThrow({ where: { id: group.id } });
       expect(row.deletedAt).not.toBeNull();
@@ -824,6 +825,9 @@ describe.skipIf(url === undefined)('groups', () => {
 
       const event = await lastEvent('group', group.id);
       expect(event.action).toBe('delete');
+      // A 204 has no body, so the delete's own event comes back in a header (FRM-T-18.3).
+      expect(deleted.headers.get('audit-event-id')).toBe(event.id);
+      expect(deleted.headers.get('audit-event-ids')?.split(',')[0]).toBe(event.id);
       await ok(await undo(event.id));
       expect((await ok<Group>(await api(`/api/groups/${group.humanId}`))).name).toBe(`${PREFIX}Empty`);
     });

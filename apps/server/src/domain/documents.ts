@@ -102,6 +102,35 @@ async function touchDocument(tx: TransactionClient, documentId: string): Promise
   await tx.document.update({ where: { id: documentId }, data: { updatedAt: new Date() } });
 }
 
+/**
+ * After an undo reversed a change to one of a document's sections (FRM-T-18.4): the document moves
+ * and the history records it, exactly as a section write does.
+ *
+ * The undo restores the section row alone, and a reader's version is the *document's* — so without
+ * this the reversal left the ETag where the undone write had put it. A conditional read was then
+ * answered 304 with the body from before the undo, and the next save, carrying that ETag, passed
+ * `If-Match` and wrote the undone text straight back.
+ */
+export async function afterSectionUndo(
+  tx: TransactionClient,
+  actor: Actor,
+  sectionId: string,
+): Promise<number | null> {
+  const section = await tx.documentSection.findUnique({
+    where: { id: sectionId },
+    select: { documentId: true, key: true },
+  });
+  if (section === null) return null;
+
+  await touchDocument(tx, section.documentId);
+  const document = await tx.document.findUnique({
+    where: { id: section.documentId },
+    include: { sections: { where: { deletedAt: null }, orderBy: { sortOrder: 'asc' } } },
+  });
+  if (document === null) return null;
+  return writeRevision(tx, document.id, actor, snapshotOf(document), `undo of a change to ${section.key}`);
+}
+
 // ─── Documents ─────────────────────────────────────────────────────────────
 
 export async function createDocument(db: Db, actor: Actor, code: string, input: DocumentCreate) {
@@ -141,14 +170,14 @@ export async function createDocument(db: Db, actor: Actor, code: string, input: 
       await syncCitations(tx, 'document_section', section.id, section.bodyMd);
     }
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'document',
       entityId: document.id,
       after: document,
     });
-    return document;
+    return { ...document, auditEventIds: [event] };
   });
 }
 
@@ -186,7 +215,7 @@ export async function updateDocument(db: Db, actor: Actor, id: string, input: Do
     });
 
     await writeRevision(tx, id, actor, snapshotOf(document));
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'document',
@@ -194,7 +223,7 @@ export async function updateDocument(db: Db, actor: Actor, id: string, input: Do
       before,
       after: document,
     });
-    return document;
+    return { ...document, auditEventIds: [event] };
   });
 }
 
@@ -237,7 +266,7 @@ export async function updateSection(
     // Citations are re-read on every write, so a removed mention stops being a backlink.
     await syncCitations(tx, 'document_section', section.id, section.bodyMd);
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'document_section',
@@ -247,7 +276,7 @@ export async function updateSection(
       after: section,
     });
 
-    return { ...section, revisionNo };
+    return { ...section, revisionNo, auditEventIds: [event] };
   });
 }
 
@@ -289,7 +318,7 @@ export async function addSection(db: Db, actor: Actor, documentId: string, input
     await writeRevision(tx, documentId, actor, snapshotOf({ ...document, sections: fresh }));
     await syncCitations(tx, 'document_section', section.id, section.bodyMd);
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'document_section',
@@ -297,7 +326,7 @@ export async function addSection(db: Db, actor: Actor, documentId: string, input
       entityHumanId: `${document.project.code}/${document.kind}#${key}`,
       after: section,
     });
-    return section;
+    return { ...section, auditEventIds: [event] };
   });
 }
 

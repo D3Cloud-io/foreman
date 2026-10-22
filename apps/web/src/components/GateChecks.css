@@ -1,0 +1,68 @@
+/* A phase's exit gate as required checks (FRM-T-18.8). Tokens only (d3-check-usage). A met check is
+   plain ink and the word "met"; hue is spent only on a check that stands in the way. */
+
+.fm-gate__summary {
+  margin: 0;
+  font-size: var(--text-13);
+  color: var(--color-fg-muted);
+}
+.fm-gate__summary strong {
+  color: var(--color-fg);
+}
+.fm-gate {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fm-gate__check {
+  padding: var(--space-8) 0;
+  border-top: var(--border-width) solid var(--color-border);
+}
+.fm-gate__check:first-child {
+  border-top: 0;
+}
+.fm-gate__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+.fm-gate__title {
+  font-size: var(--text-13);
+  font-weight: var(--weight-medium);
+}
+.fm-gate__met {
+  margin: var(--space-4) 0 0;
+  font-size: var(--text-12);
+  line-height: var(--leading-12);
+  color: var(--color-fg-muted);
+}
+.fm-gate__failures {
+  list-style: none;
+  margin: var(--space-6) 0 0;
+  padding: 0 0 0 var(--space-12);
+  border-left: 2px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.fm-gate__failure {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-8);
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+}
+.fm-gate__detail {
+  overflow-wrap: anywhere;
+}
+@media (pointer: coarse) {
+  .fm-gate__failure a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}

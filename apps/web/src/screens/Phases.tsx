@@ -1,11 +1,12 @@
-import { Card, Cluster, EmptyState, Grid, Page, Section, Skeleton, Stack } from '@d3cloud/ui';
-import { foreman, type PhaseRow, type TaskRow } from '../lib/api';
+import { Badge, Card, Cluster, EmptyState, Grid, Link, Page, Section, Skeleton, Stack } from '@d3cloud/ui';
+import { foreman, type PhaseRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { percentClosed } from '../lib/completion';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { plainText } from '../lib/text';
-import { Donut, Pill, SegmentBar } from '../ui/viz';
-import { phaseStatusTone, SERIES } from '../ui/tone';
+import { Donut, SegmentBar } from '../ui/viz';
+import { SERIES } from '../ui/tone';
+import { phaseStatusTone, plural } from '../ui/status';
 
 /**
  * S-10 — the phases of one project.
@@ -17,6 +18,11 @@ import { phaseStatusTone, SERIES } from '../ui/tone';
  * Twenty-two phases as twenty-two table rows told you their names and made you compute the shape
  * of the project yourself — a `8 / 8` in a cell is a fraction you have to divide. Each phase is a
  * card with a ring now, and the strip at the top is the whole project in one bar.
+ *
+ * **A phase shows the server's status, word for word** (FRM-ADR-018, FRM-DA-002) — never a status
+ * the client worked out for itself — and a missing exit demo is a neutral chip beside it that links
+ * to Drift, where the absence is counted. Neither is coloured: a complete phase is neither an alarm
+ * nor a celebration.
  */
 
 interface Counted {
@@ -26,12 +32,12 @@ interface Counted {
   readonly total: number;
 }
 
-function PhaseCard({ counted, code }: { counted: Counted; code: string }) {
+export function PhaseCard({ counted, code }: { counted: Counted; code: string }) {
   const { phase, done, cancelled, total } = counted;
   const percent = percentClosed(done, cancelled, total);
 
   return (
-    <Card padding="md" href={`/projects/${code}/phases/${phase.humanId}`} interactive>
+    <Card padding="md">
       <Cluster gap="16" align="center">
         <Donut
           size={72}
@@ -49,17 +55,26 @@ function PhaseCard({ counted, code }: { counted: Counted; code: string }) {
         <Stack gap="4" className="fm-grow">
           <Cluster gap="8" align="center" justify="between">
             <span className="fm-phase__number">Phase {phase.number}</span>
-            <Pill tone={phaseStatusTone(phase.status)}>{phase.status}</Pill>
+            <Badge tone={phaseStatusTone(phase.status)} size="sm">
+              {phase.status}
+            </Badge>
           </Cluster>
-          <span className="fm-card__title">{plainText(phase.name)}</span>
+          <Link href={`/projects/${code}/phases/${phase.humanId}`}>
+            <span className="fm-card__title">{plainText(phase.name)}</span>
+          </Link>
           <span className="fm-muted">
             {total === 0
               ? 'No tasks'
               : `${String(done)} of ${String(total)} done${cancelled === 0 ? '' : `, ${String(cancelled)} cancelled`}`}
             {phase.size === null ? '' : ` · ${phase.size}`}
           </span>
-          {/* Worth saying out loud: a phase with no exit demo has no definition of done. */}
-          {phase.exitDemo === null && <Pill tone="warning" dot>no exit demo</Pill>}
+          {/* Worth saying out loud: a phase with no exit demo has no definition of done. Neutral,
+              and a link to Drift, which is where it is counted. */}
+          {phase.exitDemo === null && (
+            <a className="fm-chip fm-chip--link fm-chip--quiet" href={`/projects/${code}/drift`}>
+              no exit demo
+            </a>
+          )}
         </Stack>
       </Cluster>
     </Card>
@@ -67,26 +82,26 @@ function PhaseCard({ counted, code }: { counted: Counted; code: string }) {
 }
 
 export function Phases({ code }: { code: string }) {
+  // Each phase arrives with its task counts, counted by the server over the whole set; this
+  // screen counts nothing (FRM-REQ-242).
   const phases = useAsync(() => foreman.phases(code), [code]);
-  const tasks = useAsync(() => foreman.tasks(code), [code]);
 
   const items = phases.state.status === 'ready' ? phases.state.value.items : [];
-  const taskItems: TaskRow[] = tasks.state.status === 'ready' ? tasks.state.value.items : [];
 
-  const counted: Counted[] = items.map((phase) => {
-    const mine = taskItems.filter((task) => task.phaseId === phase.id);
-    return {
-      phase,
-      done: mine.filter((task) => task.status === 'done').length,
-      cancelled: mine.filter((task) => task.status === 'cancelled').length,
-      total: mine.length,
-    };
-  });
+  const counted: Counted[] = items.map((phase) => ({
+    phase,
+    done: phase.tasks.done,
+    cancelled: phase.tasks.cancelled,
+    total: phase.tasks.total,
+  }));
 
   const complete = items.filter((phase) => phase.status === 'complete').length;
   const active = items.filter((phase) => phase.status === 'active').length;
   const cancelled = items.filter((phase) => phase.status === 'cancelled').length;
   const parked = items.filter((phase) => phase.status === 'parked').length;
+  const completeWithoutDemo = items.filter(
+    (phase) => phase.status === 'complete' && phase.exitDemo === null,
+  ).length;
   const planned = items.length - complete - active - cancelled - parked;
 
   return (
@@ -122,6 +137,14 @@ export function Phases({ code }: { code: string }) {
                 { label: 'Parked', value: parked, color: SERIES.warning },
               ]}
             />
+            {completeWithoutDemo > 0 && (
+              <p className="fm-muted">
+                {plural(completeWithoutDemo, 'complete phase has', 'complete phases have')} no exit demo ·{' '}
+                <Link variant="inline" href={`/projects/${code}/drift`}>
+                  Drift
+                </Link>
+              </p>
+            )}
           </Section>
 
           <Grid minItemWidth="md">

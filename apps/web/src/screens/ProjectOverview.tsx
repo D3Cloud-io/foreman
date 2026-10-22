@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  Badge,
   Button,
   Card,
   Cluster,
@@ -17,50 +18,49 @@ import {
   Stack,
 } from '@d3cloud/ui';
 import { Ellipsis, UsersRound } from 'lucide-react';
-import { foreman, type Brief, type ProjectGroupRef } from '../lib/api';
+import { foreman, type Brief, type CommitRow, type DriftItem, type ProjectGroupRef } from '../lib/api';
 import { applicableGuidelines, listJoin } from '../lib/groups';
 import { GroupChip, MoveToGroupDialog, useMoveToast } from '../ui/groups';
 import { replaceLocation, useLocation } from '../lib/router';
 import { useAsync } from '../lib/useAsync';
-import { percentClosed } from '../lib/completion';
 import { EditForm, LIFECYCLES } from './EditForms';
 import { ProjectHeader } from '../components/ProjectHeader';
-import { forgetBrief, SECTIONS } from '../lib/project';
+import { dayOf, shortSha } from '../components/RealityStrip';
+import { forgetBrief } from '../lib/project';
 import { plainText } from '../lib/text';
-import { Donut, Pill, StatCard } from '../ui/viz';
-import { ciTone, SERIES, severityTone } from '../ui/tone';
+import { checkMeasurable, measurable, plural, readCount, taskStatusTone } from '../ui/status';
+import { CATEGORIES } from './DriftView';
+import './ProjectOverview.css';
 
 /**
  * S-09 — a project's overview.
  *
- * It is the brief, rendered. The same call a Claude session makes answers this screen, which is the
- * point of both surfaces being peers: they cannot disagree, because there is only one answer.
+ * It is the brief, rendered (FRM-REQ-247). The same call a Claude session makes answers this
+ * screen, which is the point of both surfaces being peers: they cannot disagree, because there is
+ * only one answer.
  *
- * What changed is the arrangement. It was two description lists — "Phase: 1 — Retrieval", "Tasks:
- * 11 of 13 done" — which is a correct answer you have to read twice to feel. The phase now has a
- * ring, the four drift figures are four numbers you can see from across the room, and the three
- * lists that matter are cards rather than bullets.
- *
- * The row of section links is gone: the sidebar carries them now, from every screen rather than
- * only from this one.
+ * The reality strip is the header's own second row (see `ProjectHeader`), so it is not repeated
+ * here. Under it, three things in the order a session starts with them: **What's next** (three
+ * tasks to pick up), **What drifted** (by kind, each with the way in) and **Recent reality**
+ * (commits, and the attributions waiting for a decision). The grid of section tiles is gone — the
+ * sidebar already carries every section, from every screen.
  */
 
-function CiLine({ ci }: { ci: Brief['ci'] }) {
-  return (
-    <Cluster gap="8" align="center">
-      <Pill tone={ciTone(ci.conclusion, ci.unknown)} dot>
-        {ci.unknown ? 'never reported' : (ci.conclusion ?? 'unknown')}
-      </Pill>
-      {ci.commitSha !== null && <code className="fm-card__code">{ci.commitSha.slice(0, 7)}</code>}
-    </Cluster>
-  );
-}
+/** How many next tasks the overview names. The brief carries five; three is a glance. */
+const NEXT_SHOWN = 3;
+/** How many commits, and how many waiting attributions, Recent reality lists. */
+const COMMITS_SHOWN = 4;
+const WAITING_SHOWN = 3;
 
 export function ProjectOverview({ code }: { code: string }) {
-  const { state, reload } = useAsync(() => foreman.brief(code), [code]);
+  const { state, refresh } = useAsync(() => foreman.brief(code), [code]);
   // The brief does not carry the group (FRM-T-17.2 adds scope to it); the project row does.
   const project = useAsync(() => foreman.project(code), [code]);
   const groups = useAsync(() => foreman.groups(), []);
+  // What drifted, item by item: the brief carries the counts, and this is the lines under them.
+  const drift = useAsync(() => foreman.drift(code), [code]);
+  // Recent reality: the newest commits with what each is attributed to.
+  const commits = useAsync(() => foreman.commits(code), [code]);
   const guidelines = useAsync(() => foreman.guidelines(), []);
   const [moving, setMoving] = useState(false);
   // `?move=1` opens Move to group… — where a toast elsewhere sends you to finish a move that did
@@ -103,12 +103,29 @@ export function ProjectOverview({ code }: { code: string }) {
 
   const brief = state.value;
   const phase = brief.activePhase;
-  const done = phase?.tasks.done ?? 0;
-  const cancelled = phase?.tasks.cancelled ?? 0;
-  const total = phase?.tasks.total ?? 0;
-  const percent = percentClosed(done, cancelled, total);
   const group: ProjectGroupRef | null = project.state.status === 'ready' ? project.state.value.group : null;
   const listing = groups.state.status === 'ready' ? groups.state.value : null;
+
+  // What the plan lets each signal measure (FRM-REQ-241). While the project row loads there is no
+  // answer; if it fails to load the plan is *unknown*, so nothing is measurable and no zero can
+  // read clean — what is found still shows.
+  const counts =
+    project.state.status === 'loading'
+      ? ('loading' as const)
+      : project.state.status === 'ready'
+        ? project.state.value.counts
+        : null;
+  const can =
+    counts === 'loading' || counts === null
+      ? { hasPlan: false, drift: false, coverage: false, blocked: false }
+      : measurable(counts);
+  // Drift is clean only when every check could run on what is recorded: a project with one phase
+  // and nothing else ran two of six, and "0 · clean" would claim all six (FRM-REQ-241).
+  const allDriftChecks =
+    counts !== 'loading' && counts !== null && CATEGORIES.every((c) => checkMeasurable(c.key, counts));
+  const driftSignal = readCount(brief.drift.total, { measured: can.drift && allDriftChecks });
+  const open = phase === null ? 0 : Math.max(0, phase.tasks.total - phase.tasks.done - phase.tasks.cancelled);
+  const next = brief.nextTasks.slice(0, NEXT_SHOWN);
 
   return (
     <Page>
@@ -138,7 +155,7 @@ export function ProjectOverview({ code }: { code: string }) {
               // The sidebar and the breadcrumb read a cached brief. Without this they keep showing
               // the old name until a reload, on the one screen where you just changed it.
               forgetBrief(code);
-              reload();
+              refresh();
             }}
             initial={{
               name: brief.project.name,
@@ -168,89 +185,33 @@ export function ProjectOverview({ code }: { code: string }) {
       />
 
       <Stack gap="24">
-        <Grid minItemWidth="sm">
-          <StatCard
-            label="Coverage holes"
-            value={brief.drift.counts['coverage-hole']}
-            tone={brief.drift.counts['coverage-hole'] === 0 ? 'success' : 'warning'}
-            detail={
-              brief.drift.counts['coverage-hole'] === 0
-                ? 'Every Must has a task, every task a reason'
-                : 'Musts with no task, or tasks citing nothing'
-            }
-            {...(brief.drift.counts['coverage-hole'] === 0
-              ? {}
-              : { href: `/projects/${code}/drift` })}
-          />
-          <StatCard
-            label="Open criticals"
-            value={brief.openCriticals.length}
-            tone={brief.openCriticals.length === 0 ? 'success' : 'danger'}
-            detail={brief.openCriticals.length === 0 ? 'Nothing on fire' : 'Needs a decision'}
-            href={`/projects/${code}/audits`}
-          />
-          <StatCard
-            label="Drift"
-            value={brief.drift.total}
-            tone={brief.drift.total === 0 ? 'success' : 'warning'}
-            detail="Plan against reality"
-            href={`/projects/${code}/drift`}
-          />
-          <StatCard
-            label="Blocked"
-            value={brief.blocked.length}
-            tone={brief.blocked.length === 0 ? 'neutral' : 'warning'}
-            detail={brief.blocked.length === 0 ? 'Nothing waiting' : 'Cannot start'}
-          />
-        </Grid>
+        {counts !== 'loading' && counts !== null && !can.hasPlan && (
+          <Card padding="md">
+            <Stack gap="4">
+              <strong>{brief.project.name} has no plan in Foreman yet.</strong>
+              <span className="fm-muted">
+                These signals start reporting once it has requirements and phases.
+              </span>
+            </Stack>
+          </Card>
+        )}
 
         <Grid minItemWidth="md">
-          <Section title="In flight" surface="card">
+          <Section
+            title="What's next"
+            surface="card"
+            description={phase === null ? undefined : `in P-${phase.number} · ${String(open)} open`}
+            actions={
+              phase === null ? undefined : (
+                <Link href={`/projects/${code}/phases/${phase.humanId}`}>Phase gate</Link>
+              )
+            }
+          >
             {phase === null ? (
               <EmptyState kind="empty" size="inline" heading="No phase is active">
                 Add a phase, or mark one active.
               </EmptyState>
-            ) : (
-              <Stack gap="16">
-                <Cluster gap="20" align="center">
-                  <Donut
-                    size={104}
-                    segments={[
-                      { label: 'Done', value: done, color: SERIES.done },
-                      { label: 'Cancelled', value: cancelled, color: SERIES.quiet },
-                      {
-                        label: 'Remaining',
-                        value: Math.max(0, total - done - cancelled),
-                        color: SERIES.waiting,
-                      },
-                    ]}
-                    label={total === 0 ? '—' : `${String(percent)}%`}
-                    caption={`${String(done + cancelled)} of ${String(total)}`}
-                  />
-                  <Stack gap="6" className="fm-grow">
-                    <Link href={`/projects/${code}/phases/${phase.humanId}`}>
-                      <span className="fm-card__title">
-                        {phase.number} — {phase.name}
-                      </span>
-                    </Link>
-                    {phase.objective !== null && (
-                      <span className="fm-muted">{phase.objective}</span>
-                    )}
-                    <CiLine ci={brief.ci} />
-                  </Stack>
-                </Cluster>
-                {phase.exitDemo !== null && (
-                  <div className="fm-callout">
-                    <span className="fm-callout__label">Exit demo</span>
-                    {phase.exitDemo}
-                  </div>
-                )}
-              </Stack>
-            )}
-          </Section>
-
-          <Section title="Next up" surface="card">
-            {brief.nextTasks.length === 0 ? (
+            ) : next.length === 0 ? (
               <EmptyState kind="empty" size="inline" heading="Nothing ready to pick up">
                 {brief.blocked.length > 0
                   ? 'Everything open is blocked.'
@@ -258,17 +219,89 @@ export function ProjectOverview({ code }: { code: string }) {
               </EmptyState>
             ) : (
               <Stack gap="6">
-                {brief.nextTasks.map((task) => (
-                  <a key={task.humanId} className="fm-item" href={`/tasks/${task.humanId}`}>
+                {next.map((task) => (
+                  <a key={task.humanId} className="fm-next" href={`/tasks/${task.humanId}`}>
                     <code className="fm-item__id">{task.humanId}</code>
                     <span className="fm-item__title">{plainText(task.title)}</span>
-                    {task.size !== null && <Pill tone="neutral">{task.size}</Pill>}
+                    <span className="fm-next__meta">
+                      {task.size !== null && (
+                        <Badge tone="neutral" size="sm">
+                          {task.size}
+                        </Badge>
+                      )}
+                      <Badge tone={taskStatusTone(task.status)} size="sm">
+                        {task.status === 'in_progress' ? 'in progress' : task.status === 'todo' ? 'to do' : task.status}
+                      </Badge>
+                    </span>
+                    {task.requirements !== undefined && task.requirements.length > 0 && (
+                      <span className="fm-next__why fm-muted">{task.requirements.join(', ')}</span>
+                    )}
+                  </a>
+                ))}
+                {open > next.length && (
+                  <Link href={`/projects/${code}/phases/${phase.humanId}`}>
+                    {`+${String(open - next.length)} more in ${phase.humanId}`}
+                  </Link>
+                )}
+              </Stack>
+            )}
+            {brief.blocked.length > 0 && (
+              <Stack gap="6">
+                <span className="fm-next__blocked">
+                  {plural(brief.blocked.length, 'task cannot', 'tasks cannot')} start
+                </span>
+                {brief.blocked.slice(0, NEXT_SHOWN).map((task) => (
+                  <a key={task.humanId} className="fm-next" href={`/tasks/${task.humanId}`}>
+                    <code className="fm-item__id">{task.humanId}</code>
+                    <span className="fm-item__title">{plainText(task.title)}</span>
+                    <span className="fm-next__meta">
+                      <Badge tone={taskStatusTone('blocked')} size="sm">
+                        blocked
+                      </Badge>
+                    </span>
+                    <span className="fm-next__why fm-muted">{task.reason ?? 'no reason recorded'}</span>
                   </a>
                 ))}
               </Stack>
             )}
           </Section>
+
+          <Section
+            title="What drifted"
+            surface="card"
+            description={
+              driftSignal.state === 'not-measurable'
+                ? 'not measurable yet'
+                : `${String(brief.drift.total)} across ${plural(
+                    CATEGORIES.filter((c) => brief.drift.counts[c.key] > 0).length,
+                    'kind',
+                    'kinds',
+                  )}`
+            }
+            actions={<Link href={`/projects/${code}/drift`}>All drift</Link>}
+          >
+            <DriftByKind
+              code={code}
+              brief={brief}
+              items={drift.state.status === 'ready' ? drift.state.value.items : null}
+              measured={driftSignal.state !== 'not-measurable'}
+              planKnown={counts !== null}
+            />
+          </Section>
         </Grid>
+
+        <Section
+          title="Recent reality"
+          surface="card"
+          description={mainVersusDeployed(brief)}
+          actions={<Link href={`/projects/${code}/activity`}>Activity</Link>}
+        >
+          <RecentReality
+            code={code}
+            brief={brief}
+            commits={commits.state.status === 'ready' ? commits.state.value.items : null}
+          />
+        </Section>
 
         {project.state.status === 'ready' && (
           <Section
@@ -292,56 +325,6 @@ export function ProjectOverview({ code }: { code: string }) {
             />
           </Section>
         )}
-
-        {brief.blocked.length > 0 && (
-          <Section title="Blocked" surface="card" description="Work to unblock, not work to do.">
-            <Stack gap="8">
-              {brief.blocked.map((task) => (
-                <a key={task.humanId} className="fm-item fm-item--stacked" href={`/tasks/${task.humanId}`}>
-                  <Cluster gap="8" align="center">
-                    <Pill tone="warning" dot>
-                      blocked
-                    </Pill>
-                    <code className="fm-item__id">{task.humanId}</code>
-                    <span className="fm-item__title">{plainText(task.title)}</span>
-                  </Cluster>
-                  <span className="fm-muted">{task.reason ?? 'no reason recorded'}</span>
-                </a>
-              ))}
-            </Stack>
-          </Section>
-        )}
-
-        {brief.openCriticals.length > 0 && (
-          <Section
-            title="Open criticals"
-            surface="card"
-            actions={<Link href="/findings">The inbox</Link>}
-          >
-            <Stack gap="8">
-              {brief.openCriticals.map((finding) => (
-                <Card key={finding.humanId} padding="sm" href={`/findings/${finding.humanId}`} interactive>
-                  <Stack gap="4">
-                    <Cluster gap="8" align="center">
-                      <Pill tone={severityTone(finding.severity)}>{finding.severity}</Pill>
-                      <code className="fm-card__code">{finding.humanId}</code>
-                    </Cluster>
-                    <span className="fm-finding__title">{plainText(finding.title)}</span>
-                    {finding.location !== null && (
-                      <code className="fm-muted fm-path">{finding.location}</code>
-                    )}
-                  </Stack>
-                </Card>
-              ))}
-            </Stack>
-          </Section>
-        )}
-
-        {/* Everything the project holds, as one strip — a map rather than eleven guesses about
-            which sidebar item has what you want. */}
-        <Section title="Sections" surface="card">
-          <SectionMap code={code} />
-        </Section>
       </Stack>
 
       {listing !== null && (
@@ -394,26 +377,186 @@ function GroupSummary({
   );
 }
 
+/** "main is 4 commits ahead of what is deployed" — the one sentence the strip's last cell abbreviates. */
+export function mainVersusDeployed(brief: Pick<Brief, 'deployed'>): string {
+  const deployed = brief.deployed ?? null;
+  if (deployed === null) return 'nothing is recorded as deployed';
+  if (deployed.ahead === null) return `deployed ${shortSha(deployed.sha)}, which is not a commit Foreman knows`;
+  if (deployed.ahead === 0) return 'main is what is deployed';
+  return `main is ${plural(deployed.ahead, 'commit', 'commits')} ahead of what is deployed`;
+}
+
+/** Where each kind of drift is dealt with, and what the action there is called. */
+function driftAction(code: string, category: DriftItem['category'], first: DriftItem | undefined): { href: string; label: string } {
+  switch (category) {
+    case 'coverage-hole':
+      return { href: `/projects/${code}/requirements?uncovered=true`, label: 'Open coverage' };
+    case 'stale-task':
+      return { href: first === undefined ? `/projects/${code}/phases` : `/tasks/${first.humanId}`, label: 'Set status' };
+    case 'fired-tripwire':
+      return { href: `/projects/${code}/risks`, label: 'Open risk' };
+    case 'failed-exit-gate':
+      return {
+        href: first === undefined ? `/projects/${code}/phases` : `/projects/${code}/phases/${first.humanId}`,
+        label: 'Review gate',
+      };
+    case 'orphan-adr':
+      return { href: `/projects/${code}/adrs`, label: 'Cite or supersede' };
+    case 'screen-drift':
+      return {
+        href: first === undefined ? `/projects/${code}/screens` : `/projects/${code}/screens/${first.humanId}`,
+        label: 'Open screens',
+      };
+  }
+}
+
 /**
- * Every section of the project, as a strip of tiles.
- *
- * A map, not a menu: the sidebar already lists these, and this is the version you can take in at
- * once from the screen you land on.
- *
- * Deliberately without counts. There is no endpoint that answers "how many ADRs does BND have",
- * and the alternatives were both wrong for a redesign pass — inventing one is API surface added
- * from a screen, and fetching eight lists to read eight totals is eight requests to render a
- * label. Worth adding to the brief later; not worth faking now.
+ * Drift by kind, each kind a row with the way in (FRM-REQ-247). The counts are the brief's — the
+ * drift engine's own — and the lines under them are the engine's items, so a row says what is
+ * wrong in the engine's words, not the console's.
  */
-function SectionMap({ code }: { code: string }) {
+function DriftByKind({
+  code,
+  brief,
+  items,
+  measured,
+  planKnown,
+}: {
+  code: string;
+  brief: Brief;
+  /** The engine's items, or null while they load or when they did not. */
+  items: readonly DriftItem[] | null;
+  measured: boolean;
+  planKnown: boolean;
+}) {
+  if (!measured) {
+    return (
+      <EmptyState kind="empty" size="inline" heading="Not measurable yet">
+        {planKnown
+          ? 'The checks need a plan to compare with what shipped: requirements, phases and tasks.'
+          : "The project's plan could not be read, so this is not measured."}
+      </EmptyState>
+    );
+  }
+  const kinds = CATEGORIES.filter((category) => brief.drift.counts[category.key] > 0);
+  if (kinds.length === 0) {
+    return <span className="fm-muted">0 drift · the checks found nothing in what is recorded</span>;
+  }
   return (
-    <Grid minItemWidth="sm">
-      {SECTIONS.map((section) => (
-        <a key={section.slug} className="fm-tile" href={`/projects/${code}/${section.slug}`}>
-          <span className="fm-tile__label">{section.label}</span>
-          <span className="fm-tile__group">{section.group}</span>
-        </a>
-      ))}
-    </Grid>
+    <Stack gap="8">
+      {kinds.map((category) => {
+        const mine = (items ?? []).filter((item) => item.category === category.key);
+        const first = mine[0];
+        const action = driftAction(code, category.key, first);
+        return (
+          <div key={category.key} className="fm-drifted" data-kind={category.key}>
+            <span className="fm-drifted__count">{brief.drift.counts[category.key]}</span>
+            <div className="fm-drifted__what">
+              <strong>{category.label}</strong>
+              {first === undefined ? (
+                <span className="fm-muted">{category.blurb}</span>
+              ) : (
+                <span className="fm-muted">
+                  {mine
+                    .slice(0, 2)
+                    .map((item) => item.humanId)
+                    .join(', ')}
+                  {mine.length > 2 ? ` and ${String(mine.length - 2)} more` : ''} — {first.detail}
+                </span>
+              )}
+            </div>
+            <a className="fm-drifted__action" href={action.href}>
+              {action.label}
+            </a>
+          </div>
+        );
+      })}
+    </Stack>
+  );
+}
+
+/** What an attribution says about a commit, in words: confirmed to a task, waiting, or none. */
+export function attributionWords(commit: Pick<CommitRow, 'attributions'>): string {
+  const live = commit.attributions.filter((a) => a.rejectedAt === null);
+  const confirmed = live.filter((a) => a.confirmed).map((a) => a.task.humanId);
+  if (confirmed.length > 0) return confirmed.join(', ');
+  const waiting = live.filter((a) => !a.confirmed);
+  if (waiting.length > 0) return `suggested ${waiting.map((a) => a.task.humanId).join(', ')} · waiting`;
+  return 'no task';
+}
+
+/** Recent commits with what each is attributed to, and the attributions waiting for a decision. */
+function RecentReality({
+  code,
+  brief,
+  commits,
+}: {
+  code: string;
+  brief: Brief;
+  commits: readonly CommitRow[] | null;
+}) {
+  const recent = commits === null ? null : commits.slice(0, COMMITS_SHOWN);
+  const waiting =
+    commits === null
+      ? []
+      : commits.flatMap((commit) =>
+          commit.attributions
+            .filter((a) => !a.confirmed && a.rejectedAt === null)
+            .map((a) => ({ commit, task: a.task.humanId })),
+        );
+  return (
+    <Stack gap="16">
+      {recent === null ? (
+        // The commits did not read: the brief's own three still say something.
+        brief.recentCommits.length === 0 ? (
+          <span className="fm-muted">No commit has been ingested for this project.</span>
+        ) : (
+          <Stack gap="6">
+            {brief.recentCommits.map((commit) => (
+              <div key={commit.sha} className="fm-recent">
+                <code className="fm-item__id">{commit.sha}</code>
+                <span className="fm-item__title">{plainText(commit.message)}</span>
+                <span className="fm-muted fm-recent__when">{dayOf(commit.at)}</span>
+              </div>
+            ))}
+          </Stack>
+        )
+      ) : recent.length === 0 ? (
+        <span className="fm-muted">No commit has been ingested for this project.</span>
+      ) : (
+        <Stack gap="6">
+          {recent.map((commit) => (
+            <div key={commit.id} className="fm-recent">
+              <code className="fm-item__id">{commit.sha.slice(0, 7)}</code>
+              <span className="fm-item__title">{plainText(commit.message.split('\n')[0] ?? '')}</span>
+              <span className="fm-muted fm-recent__when">{dayOf(commit.committedAt)}</span>
+              <span className="fm-recent__why fm-muted">{attributionWords(commit)}</span>
+            </div>
+          ))}
+        </Stack>
+      )}
+
+      <Stack gap="6">
+        <strong className="fm-recent__heading">Attributions waiting · {brief.unconfirmedAttributions}</strong>
+        {brief.unconfirmedAttributions === 0 ? (
+          <span className="fm-muted">Nothing is waiting for a decision.</span>
+        ) : (
+          <>
+            <span className="fm-muted">
+              Suggested from file paths. Not counted as evidence until you confirm (ADR-005).
+            </span>
+            {waiting.slice(0, WAITING_SHOWN).map((row) => (
+              <div key={`${row.commit.sha}:${row.task}`} className="fm-recent">
+                <code className="fm-item__id">{row.commit.sha.slice(0, 7)}</code>
+                <span className="fm-item__title">
+                  → <a href={`/tasks/${row.task}`}>{row.task}</a>
+                </span>
+              </div>
+            ))}
+            <Link href={`/projects/${code}/activity`}>Review in Activity</Link>
+          </>
+        )}
+      </Stack>
+    </Stack>
   );
 }

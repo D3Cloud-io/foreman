@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createLocationStore, type LocationHost } from './router';
+import { createLocationStore, splitHref, type LocationHost } from './router';
 
 /**
  * FRM-T-17.4: one location store for the whole console. Two readers of the location — a screen and
@@ -14,22 +14,24 @@ type Listener = (event: MouseEvent) => void;
 function fakeHost(start = '/') {
   let href = start;
   const popstate = new Set<() => void>();
+  const hashchange = new Set<() => void>();
   const clicks = new Set<Listener>();
   const split = () => {
-    const at = href.indexOf('?');
-    return at === -1 ? { pathname: href, search: '' } : { pathname: href.slice(0, at), search: href.slice(at) };
+    const { path, search, hash } = splitHref(href);
+    return { pathname: path, search, hash };
   };
   const host: LocationHost = {
     location: {
       get pathname() { return split().pathname; },
       get search() { return split().search; },
+      get hash() { return split().hash; },
     },
     history: {
       pushState: (_d, _u, url) => { href = String(url); },
       replaceState: (_d, _u, url) => { href = String(url); },
     },
-    addEventListener: (_type, listener) => { popstate.add(listener); },
-    removeEventListener: (_type, listener) => { popstate.delete(listener); },
+    addEventListener: (type, listener) => { (type === 'hashchange' ? hashchange : popstate).add(listener); },
+    removeEventListener: (type, listener) => { (type === 'hashchange' ? hashchange : popstate).delete(listener); },
     document: {
       addEventListener: (_type, listener) => { clicks.add(listener); },
       removeEventListener: (_type, listener) => { clicks.delete(listener); },
@@ -62,7 +64,18 @@ function fakeHost(start = '/') {
     for (const listener of clicks) listener(event);
     return prevented;
   };
-  return { host, back, click, listenerCount: () => ({ clicks: clicks.size, popstate: popstate.size }) };
+  /** The browser moving only the fragment (`<a href="#x">`), then firing `hashchange`. */
+  const fragment = (to: string) => {
+    href = to;
+    for (const listener of hashchange) listener();
+  };
+  return {
+    host,
+    back,
+    click,
+    fragment,
+    listenerCount: () => ({ clicks: clicks.size, popstate: popstate.size, hashchange: hashchange.size }),
+  };
 }
 
 /** Two readers, as two `useLocation`s are: each re-reads the snapshot when told. */
@@ -104,9 +117,9 @@ describe('the location store', () => {
     const fake = fakeHost('/');
     const store = createLocationStore(fake.host);
     const { stop } = twoReaders(store);
-    expect(fake.listenerCount()).toEqual({ clicks: 1, popstate: 1 });
+    expect(fake.listenerCount()).toEqual({ clicks: 1, popstate: 1, hashchange: 1 });
     stop();
-    expect(fake.listenerCount()).toEqual({ clicks: 0, popstate: 0 });
+    expect(fake.listenerCount()).toEqual({ clicks: 0, popstate: 0, hashchange: 0 });
   });
 
   it('leaves server paths and other origins to the browser', () => {
@@ -117,5 +130,38 @@ describe('the location store', () => {
     expect(fake.click('https://dormice.ai/')).toBe(false);
     expect(seen[0]).toEqual([]);
     stop();
+  });
+});
+
+describe('the fragment (FRM-T-18.13)', () => {
+  it('keeps the hash through navigate and tells every reader, even when only the hash changed', () => {
+    const fake = fakeHost('/projects/BND/adrs');
+    const store = createLocationStore(fake.host);
+    const { seen, stop } = twoReaders(store);
+
+    store.navigate('/projects/BND/adrs#BND-ADR-002');
+    expect(store.snapshot()).toBe('/projects/BND/adrs#BND-ADR-002');
+    store.navigate('/projects/BND/adrs#BND-ADR-003');
+
+    const expected = ['/projects/BND/adrs#BND-ADR-002', '/projects/BND/adrs#BND-ADR-003'];
+    expect(seen[0]).toEqual(expected);
+    expect(seen[1]).toEqual(expected);
+    stop();
+  });
+
+  it('hears a fragment link the browser handled itself', () => {
+    const fake = fakeHost('/guidelines');
+    const store = createLocationStore(fake.host);
+    const { seen, stop } = twoReaders(store);
+    fake.fragment('/guidelines#GL-004');
+    expect(seen[0]).toEqual(['/guidelines#GL-004']);
+    stop();
+  });
+
+  it('splits a path, a query and a fragment', () => {
+    expect(splitHref('/a/b')).toEqual({ path: '/a/b', search: '', hash: '' });
+    expect(splitHref('/a?x=1')).toEqual({ path: '/a', search: '?x=1', hash: '' });
+    expect(splitHref('/a#BND-ADR-002')).toEqual({ path: '/a', search: '', hash: '#BND-ADR-002' });
+    expect(splitHref('/a?x=1#T-1')).toEqual({ path: '/a', search: '?x=1', hash: '#T-1' });
   });
 });

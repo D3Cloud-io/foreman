@@ -353,6 +353,65 @@ describe.skipIf(url === undefined)('findings', () => {
       const listed = await get<{ items: { severity: string }[] }>('/findings?severity=critical');
       expect(listed.items.every((f) => f.severity === 'critical')).toBe(true);
     });
+
+    it('counts the whole matching set in total, however small the page (FRM-REQ-242)', async () => {
+      await makeFinding(A, { title: 'First critical', severity: 'critical' });
+      await makeFinding(A, { title: 'Second critical', severity: 'critical' });
+      await makeFinding(B, { title: 'Third critical', severity: 'critical' });
+      await makeFinding(B, { title: 'Not a critical', severity: 'low' });
+
+      // The page is one row; the total is the set the page was cut from. The sidebar badge reads
+      // exactly this, so it must not be the number of rows returned.
+      const page = await get<{ items: unknown[]; nextCursor: null; total: number }>(
+        `/findings?severity=critical&status=open&project=${A}&limit=1`,
+      );
+      expect(page.items).toHaveLength(1);
+      expect(page.total).toBe(2);
+      expect(page.nextCursor).toBeNull();
+
+      const both = await get<{ items: unknown[]; total: number }>(
+        '/findings?severity=critical&status=open&limit=1',
+      );
+      expect(both.items).toHaveLength(1);
+      // Other tests' projects may share the database, so the floor is ours.
+      expect(both.total).toBeGreaterThanOrEqual(3);
+
+      // Unfiltered by severity, the same project still counts its whole open set.
+      const open = await get<{ total: number }>(`/findings?project=${B}&limit=1`);
+      expect(open.total).toBe(2);
+    });
+
+    it('totals and counts under the lens and status filters, over the whole set', async () => {
+      await makeFinding(A, { title: 'Contrast', severity: 'critical', lenses: ['accessibility'] });
+      await makeFinding(A, { title: 'Focus order', severity: 'high', lenses: ['accessibility'] });
+      await makeFinding(A, { title: 'Labels', severity: 'high', lenses: ['accessibility'] });
+      await makeFinding(A, { title: 'Slow query', severity: 'low', lenses: ['performance'] });
+      const done = await makeFinding(A, { title: 'Fixed a11y', severity: 'high', lenses: ['accessibility'] });
+      await patch(`/projects/${A}/findings/${done.humanId}`, { status: 'fixed' });
+
+      type Counted = {
+        items: unknown[];
+        total: number;
+        counts: Record<'critical' | 'high' | 'medium' | 'low', number>;
+      };
+      const lens = await get<Counted>(`/findings?project=${A}&lens=accessibility&limit=1`);
+      expect(lens.items).toHaveLength(1);
+      expect(lens.total).toBe(3);
+      expect(lens.counts).toEqual({ critical: 1, high: 2, medium: 0, low: 0 });
+
+      // A severity filter narrows the total and the page, never the counts the chips show.
+      const high = await get<Counted>(`/findings?project=${A}&lens=accessibility&severity=high&limit=1`);
+      expect(high.total).toBe(2);
+      expect(high.counts).toEqual({ critical: 1, high: 2, medium: 0, low: 0 });
+
+      const fixed = await get<Counted>(`/findings?project=${A}&status=fixed&limit=1`);
+      expect(fixed.total).toBe(1);
+      expect(fixed.counts).toEqual({ critical: 0, high: 1, medium: 0, low: 0 });
+
+      const open = await get<Counted>(`/findings?project=${A}&limit=1`);
+      expect(open.total).toBe(4);
+      expect(open.counts).toEqual({ critical: 1, high: 2, medium: 0, low: 1 });
+    });
   });
 
   describe('recurrence (T-6.7, FRM-REQ-121, FRM-REQ-122)', () => {

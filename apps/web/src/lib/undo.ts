@@ -1,4 +1,3 @@
-import { useToast } from '@d3cloud/ui';
 import { ApiError, foreman } from './api';
 import { listJoin } from './groups';
 
@@ -83,6 +82,10 @@ export function undoSummary(report: UndoReport, undone: string, check?: UndoChec
   return `Undid ${String(report.undone)} of ${String(report.total)} changes — the rest ${movedOn ? 'had changed since' : 'failed'}`;
 }
 
+/**
+ * What a write that already happened hands to its toast (`useUndoToast` in `mutate.ts`, which turns
+ * it into the one announcement every write uses).
+ */
 export interface Undoable {
   /** One line saying what just happened: "Moved KURO and BURR to Dormice". */
   readonly message: string;
@@ -94,39 +97,4 @@ export interface Undoable {
   readonly check?: () => Promise<UndoCheck>;
   /** Re-read in place after the undo, whether it worked or not. */
   readonly reload: () => void;
-}
-
-/**
- * A toast saying what just happened, with Undo (`@d3cloud/ui` Toast through `ToastRegion`). Undo
- * reverses the write's events last-first, then says what it did — all of it, part of it naming
- * what it could not put back, or none of it — and reloads the screen in place.
- */
-export function useUndoToast(): (undoable: Undoable) => void {
-  const toast = useToast();
-  return ({ message, auditEventIds, undone = 'Undone', check, reload }) => {
-    toast.show({
-      message,
-      ...(auditEventIds.length === 0
-        ? {}
-        : {
-            action: {
-              label: 'Undo',
-              onAction: () => {
-                void (async () => {
-                  const report = await undoAll(auditEventIds);
-                  let checked: UndoCheck | undefined;
-                  if (report.refused.length > 0 && check !== undefined) {
-                    checked = await check().catch(() => undefined);
-                  }
-                  // A partial undo stays until it is read: it is the one that needs acting on.
-                  toast.show({
-                    message: undoSummary(report, undone, checked),
-                    ...(report.refused.length > 0 ? { duration: 0 } : {}),
-                  });
-                })().finally(reload);
-              },
-            },
-          }),
-    });
-  };
 }

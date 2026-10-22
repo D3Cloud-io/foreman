@@ -10,12 +10,14 @@ import {
   Skeleton,
   Stack,
   Table,
-  type TableColumn,
 } from '@d3cloud/ui';
 import { foreman, type HealthReport, type TechRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { Pill, SegmentBar, StatCard } from '../ui/viz';
 import { relativeDay, SERIES } from '../ui/tone';
+import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
+import { formatDateTime } from '../lib/text';
+import { plural } from '../ui/status';
 
 /**
  * S-26 and S-07 — is Foreman itself well, and what is everything made of.
@@ -25,12 +27,12 @@ import { relativeDay, SERIES } from '../ui/tone';
  */
 
 const when = (iso: string | null): string =>
-  iso === null ? 'never' : new Date(iso).toLocaleString();
+  iso === null ? 'never' : formatDateTime(iso);
 
 function Problems({ report }: { report: HealthReport }) {
   if (report.ok) {
     return (
-      <Alert tone="success" title="Everything is running">
+      <Alert tone="info" title="Everything is running">
         The queue is moving, the nightly dump is current, and the restore drill has been performed.
       </Alert>
     );
@@ -57,12 +59,15 @@ export function Health() {
   const health = useAsync(() => foreman.healthReport(), []);
   const tech = useAsync(() => foreman.tech(), []);
 
-  const columns: TableColumn<TechRow>[] = [
-    { key: 'name', header: 'Technology', width: '14rem', sortable: true, cell: (row) => row.name },
-    { key: 'category', header: 'Kind', width: '9rem', cell: (row) => row.category },
+  // Below 768px: the technology is the title and how many versions it is on stays as the status;
+  // its kind and who uses it fold into the sub-line (FRM-REQ-249).
+  const techColumns: PriorityColumn<TechRow>[] = [
+    { key: 'name', header: 'Technology', width: '14rem', sortable: true, phone: 'host', cell: (row) => row.name },
+    { key: 'category', header: 'Kind', width: '9rem', phone: 'fold', foldLabel: '', cell: (row) => row.category },
     {
       key: 'projects',
       header: 'Used by',
+      phone: 'fold',
       cell: (row) =>
         row.projects
           .map((p) => `${p.code}${p.version === null ? '' : ` ${p.version}`}`)
@@ -72,6 +77,7 @@ export function Health() {
       key: 'spread',
       header: 'Versions',
       width: '7rem',
+      phoneWidth: '6rem',
       numeric: true,
       cell: (row) => {
         const versions = new Set(row.projects.map((p) => p.version ?? 'unknown'));
@@ -85,6 +91,8 @@ export function Health() {
       },
     },
   ];
+
+  const columns = priorityColumns(techColumns, usePhone());
 
   return (
     <Page>
@@ -123,7 +131,7 @@ export function Health() {
               <StatCard
                 label="Failed"
                 value={health.state.value.queue.failed}
-                tone={health.state.value.queue.failed === 0 ? 'success' : 'danger'}
+                tone={health.state.value.queue.failed === 0 ? 'neutral' : 'danger'}
                 detail={
                   health.state.value.queue.failed === 0
                     ? 'Nothing dead-lettered'
@@ -134,7 +142,7 @@ export function Health() {
                 label="Restore drill"
                 // The one that matters: an untested backup is not a backup (R-04).
                 value={relativeDay(health.state.value.lastRestoreDrill)}
-                tone={health.state.value.lastRestoreDrill === null ? 'danger' : 'success'}
+                tone={health.state.value.lastRestoreDrill === null ? 'danger' : 'neutral'}
                 detail={
                   health.state.value.lastRestoreDrill === null
                     ? 'Never performed'
@@ -209,7 +217,7 @@ export function Health() {
             {tech.state.value.disagreements.length === 0 ? null : (
               <Alert
                 tone="warning"
-                title={`${String(tech.state.value.disagreements.length)} technologies are on different versions`}
+                title={`${plural(tech.state.value.disagreements.length, 'technology is', 'technologies are')} on a different version`}
               >
                 {tech.state.value.disagreements.map((row) => row.name).join(', ')}
               </Alert>

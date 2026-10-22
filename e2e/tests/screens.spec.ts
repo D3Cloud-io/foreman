@@ -153,6 +153,11 @@ test.describe('screens (FRM-T-12.3)', () => {
       buffer: bytes('dropped'),
     });
     await expect(proposed.getByRole('status')).toHaveText('dropped.png is now the current desktop dark proposal.');
+    // Through useMutate (FRM-T-18.14): a toast says it. A proposal is history the server keeps, so
+    // there is no Undo that would only be refused.
+    const proposalToast = page.locator('.d3-toast').filter({ hasText: `${humanId} has a new desktop dark proposal` }).last();
+    await expect(proposalToast).toBeVisible();
+    await expect(proposalToast.getByRole('button', { name: 'Undo' })).toHaveCount(0);
     await loaded(proposed.getByRole('img', { name: `Proposed design for ${name}, desktop dark` }), sha('dropped'));
     await expect(proposed.getByText('Dropped in the console')).toBeVisible();
 
@@ -176,7 +181,10 @@ test.describe('screens (FRM-T-12.3)', () => {
     await note.fill(what);
     await submit.click();
     await expect(built.getByText('Recorded: Drifted — fix.')).toBeVisible();
-    await expect(built.locator('.fm-pill', { hasText: 'Drifted — fix' })).toBeVisible();
+    const verdictToast = page.locator('.d3-toast').filter({ hasText: `${humanId} capture: Drifted — fix` }).last();
+    await expect(verdictToast).toBeVisible();
+    await expect(verdictToast.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+    await expect(built.locator('.fm-badge', { hasText: 'Drifted — fix' })).toBeVisible();
     await expect(built.getByText(what)).toBeVisible();
 
     // And it is the record, not only the page: kind, reviewer and note stored.

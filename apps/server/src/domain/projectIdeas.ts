@@ -200,7 +200,7 @@ export async function createProjectIdea(
       select: SELECT,
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'project_idea',
@@ -208,7 +208,7 @@ export async function createProjectIdea(
       entityHumanId: idea.humanId,
       after: idea,
     });
-    return idea;
+    return { ...idea, auditEventIds: [event] };
   });
 }
 
@@ -261,7 +261,7 @@ export async function updateProjectIdea(
       select: DETAIL,
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'project_idea',
@@ -272,7 +272,7 @@ export async function updateProjectIdea(
     });
     // The same shape as a read, maturity included: the console replaces its copy with this, and a
     // response missing a field the page renders is a page that breaks on its first save.
-    return { ...idea, maturity: maturity(idea) };
+    return { ...idea, maturity: maturity(idea), auditEventIds: [event] };
   });
 }
 
@@ -297,7 +297,7 @@ export async function convertProjectIdea(
 
   // Created first, and outside the update: `createProject` refuses a code already in use, and a
   // refusal has to leave the idea exactly as it was rather than half-converted.
-  const project = await createProject(db, actor, {
+  const { auditEventIds: projectEvents, ...project } = await createProject(db, actor, {
     code: input.code,
     name: input.name ?? before.title,
     ...(before.pitch === null ? {} : { pitch: before.pitch }),
@@ -316,7 +316,7 @@ export async function convertProjectIdea(
       select: SELECT,
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'project_idea',
@@ -325,11 +325,19 @@ export async function convertProjectIdea(
       before,
       after: converted,
     });
-    return converted;
+    return { converted, event };
   });
 
-  const brief = await writeBrief(db, actor, project.code, before, humanId);
-  return { idea, project, brief };
+  const written = await writeBrief(db, actor, project.code, before, humanId);
+  const { auditEventIds: briefEvents, ...brief } = written ?? { auditEventIds: [] as string[] };
+  // The idea's own event first, then the project it made and the brief written into it. They are
+  // three changes, so undoing the conversion is undoing each — the console names them together.
+  return {
+    idea: idea.converted,
+    project,
+    brief: written === null ? null : brief,
+    auditEventIds: [idea.event, ...projectEvents, ...briefEvents],
+  };
 }
 
 /**

@@ -41,6 +41,9 @@ async function seed(db: Db, config: ReturnType<typeof loadConfig>): Promise<void
       lifecycle: 'building',
       pitch: 'The disposable project development runs against. Never the real corpus.',
       vaultPath: 'D3 Cloud Vault/Example Project',
+      // A sample, not work (FRM-T-18.9): labelled in the console, left out of Home's figures, and
+      // removable from it.
+      sample: true,
     },
   });
 
@@ -530,6 +533,7 @@ async function seed(db: Db, config: ReturnType<typeof loadConfig>): Promise<void
       slug: 'neighbour-project',
       lifecycle: 'building',
       pitch: 'A second project, so the findings inbox and recurrence have more than one.',
+      sample: true,
     },
   });
   // Both join the end of the ungrouped, so positions stay 0..n-1 (FRM-REQ-226).

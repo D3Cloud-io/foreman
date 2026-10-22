@@ -7,7 +7,9 @@ import {
   RequirementCreate,
   RequirementUpdate,
   TaskCreate,
+  TasksAcrossQuery,
   TaskUpdate,
+  type TaskAcrossRow,
 } from '@foreman/shared';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -21,11 +23,14 @@ import {
   createTask,
   findProject,
   listPhases,
+  removeSampleProject,
   updatePhase,
   updateProject,
   updateRequirement,
   updateTask,
 } from '../domain/projects.js';
+import { phaseProgress } from '../domain/wherewestand.js';
+import { codeFilter, resolveScope, scopeCodes } from '../domain/scope.js';
 import { requireAuth, requireScope } from '../auth/middleware.js';
 import { assertFresh, setEtag } from './concurrency.js';
 import {
@@ -37,6 +42,7 @@ import {
   parseBody,
   parseQuery,
 } from './helpers.js';
+import { noContentWithEvents } from './undo.js';
 
 /**
  * What `foreman_create` addresses by human ID, resolved to the row IDs the create shapes take.
@@ -213,14 +219,36 @@ export function projectRoutes(db: Db): Router {
     }),
   );
 
+  // A sample project only (FRM-T-18.9) — a real one is a 409 that says so. A soft delete: the
+  // events come back in the headers, and Undo restores it.
+  router.delete(
+    '/:code',
+    canWrite,
+    handler(async (req, res) => {
+      const { auditEventIds } = await removeSampleProject(db, actorOf(req), param(req, 'code'));
+      noContentWithEvents(res, auditEventIds);
+    }),
+  );
+
   // ─── Phases ──────────────────────────────────────────────────────────────
 
   router.get(
     '/:code/phases',
     handler(async (req, res) => {
       // Ordered by build order, not by number: Bindery built 0–8.5, 9–11, 13–16, with 12 ahead.
-      const phases = await listPhases(db, param(req, 'code'));
-      res.json({ items: phases, nextCursor: null, total: phases.length });
+      const code = param(req, 'code');
+      const project = await findProject(db, code);
+      const [phases, progress] = await Promise.all([
+        listPhases(db, code),
+        phaseProgress(db, project.id),
+      ]);
+      // Each phase carries its task counts, from the whole set (FRM-REQ-242): the same read the
+      // brief's active phase uses. A phase with no tasks is absent from the grouping; zeros.
+      const items = phases.map((phase) => ({
+        ...phase,
+        tasks: progress.get(phase.id) ?? { done: 0, cancelled: 0, total: 0 },
+      }));
+      res.json({ items, nextCursor: null, total: items.length });
     }),
   );
 
@@ -451,8 +479,8 @@ export function projectRoutes(db: Db): Router {
     '/:code/requirements/:humanId',
     canWrite,
     handler(async (req, res) => {
-      await softDelete(db, actorOf(req), 'requirement', param(req, 'humanId'));
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'requirement', param(req, 'humanId'));
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 
@@ -460,8 +488,8 @@ export function projectRoutes(db: Db): Router {
     '/:code/tasks/:humanId',
     canWrite,
     handler(async (req, res) => {
-      await softDelete(db, actorOf(req), 'task', param(req, 'humanId'));
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'task', param(req, 'humanId'));
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 
@@ -469,8 +497,60 @@ export function projectRoutes(db: Db): Router {
     '/:code/phases/:humanId',
     canWrite,
     handler(async (req, res) => {
-      await softDelete(db, actorOf(req), 'phase', param(req, 'humanId'));
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'phase', param(req, 'humanId'));
+      noContentWithEvents(res, auditEventIds);
+    }),
+  );
+
+  return router;
+}
+
+/**
+ * Tasks in one status across a scope (FRM-T-18.7): `GET /api/tasks?status=blocked&group=` — the
+ * Blocked tab of `/findings`. Each project's own list stays at `/api/projects/:code/tasks`; this is
+ * the read that has no project in it, so it is mounted at `/api`, and its guards sit on the route
+ * so mounting it there puts nothing in front of any other `/api` route.
+ *
+ * Ordered by project, then ID, so a family's blocked work reads project by project.
+ */
+export function taskAcrossRoutes(db: Db): Router {
+  const router = Router();
+
+  router.get(
+    '/tasks',
+    requireAuth,
+    requireScope(db, 'read'),
+    handler(async (req, res) => {
+      const query = parseQuery(TasksAcrossQuery, req, res);
+      if (query === null) return;
+      // An unknown, deleted or `all` group is a 404, never "everyone" (FRM-ADR-024).
+      const scope = await resolveScope(db, query.group);
+      const where = {
+        deletedAt: null,
+        status: query.status,
+        project: { deletedAt: null, ...codeFilter(scopeCodes(scope), query.project) },
+      };
+      const [rows, total] = await Promise.all([
+        db.task.findMany({
+          where,
+          orderBy: [{ project: { code: 'asc' } }, { humanId: 'asc' }],
+          take: query.limit,
+          select: {
+            humanId: true,
+            title: true,
+            status: true,
+            blockedReason: true,
+            size: true,
+            doneWhen: true,
+            updatedAt: true,
+            phase: { select: { humanId: true, name: true } },
+            project: { select: { code: true, name: true } },
+          },
+        }),
+        db.task.count({ where }),
+      ]);
+      const items: TaskAcrossRow[] = rows.map((row) => ({ ...row, updatedAt: row.updatedAt.toISOString() }));
+      res.json({ items, nextCursor: null, total });
     }),
   );
 

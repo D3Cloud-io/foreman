@@ -1,0 +1,97 @@
+/* First run (FRM-T-18.9): the setup checklist, the agent snippets, and the import lines. Tokens
+   only (d3-check-usage). A ticked step is a neutral check with its word, never green. */
+
+.fm-setup {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-12);
+}
+
+.fm-setup__step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-12);
+  align-items: start;
+  padding: var(--space-12) 0;
+  border-top: var(--border-width) solid var(--color-border);
+}
+.fm-setup__step:first-child {
+  border-top: 0;
+}
+
+.fm-setup__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: var(--radius-full);
+  border: var(--border-width) solid var(--color-border);
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  color: var(--color-fg-muted);
+}
+.fm-setup__step--next .fm-setup__mark {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.fm-setup__mark svg {
+  width: var(--icon-16);
+  height: var(--icon-16);
+}
+
+.fm-setup__title {
+  font-weight: var(--weight-semibold);
+  color: var(--color-fg);
+}
+
+.fm-setup__evidence {
+  color: var(--color-fg-muted);
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+  overflow-wrap: anywhere;
+}
+
+/* A command to copy: the line, then its button. The line wraps rather than scrolling the page. */
+.fm-snippet {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-8);
+  align-items: start;
+}
+
+.fm-snippet__waiting {
+  color: var(--color-fg-muted);
+  font-size: var(--text-13);
+}
+
+.fm-sample-label {
+  margin-left: var(--space-8);
+}
+
+.fm-figure-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--space-8);
+}
+.fm-figure-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-12);
+  flex-wrap: wrap;
+}
+
+/* A project code is typed in mono: its characters are the point (ADR-008). */
+.fm-code-input,
+.fm-code-input input {
+  font-family: var(--font-mono);
+}
+
+/* Finish setting up: one quiet line above the ledger until it is opened. */
+.fm-finish {
+  display: block;
+}

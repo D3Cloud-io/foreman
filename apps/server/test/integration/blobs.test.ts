@@ -149,7 +149,10 @@ describe.skipIf(url === undefined)('blobs', () => {
 
     const first = await upload(form(PNG, 'image/png', 'shot.png'));
     expect(first.status, await first.clone().text()).toBe(201);
-    const created = (await first.json()) as StoredBlob;
+    const { auditEventIds: uploadEvents, ...created } = (await first.json()) as StoredBlob & {
+      auditEventIds: string[];
+    };
+    expect(uploadEvents).toHaveLength(1);
     expect(created).toMatchObject({
       sha256: digest,
       mediaType: 'image/png',
@@ -159,7 +162,8 @@ describe.skipIf(url === undefined)('blobs', () => {
 
     const second = await upload(form(PNG, 'image/png', 'same-shot-again.png'));
     expect(second.status, await second.clone().text()).toBe(200);
-    expect((await second.json()) as StoredBlob).toEqual(created);
+    // The same blob, and no event to name: nothing was written the second time (FRM-T-18.3).
+    expect(await second.json()).toEqual({ ...created, auditEventIds: [] });
 
     expect(await db.blob.count({ where: { sha256: digest } })).toBe(1);
     // Exactly one file, named by the hash, holding the bytes: no temporary left behind, no copy.

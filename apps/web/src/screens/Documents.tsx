@@ -5,11 +5,12 @@ import {
   Page,
   Skeleton,
   Table,
-  type TableColumn,
 } from '@d3cloud/ui';
 import { foreman, type DocumentRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
+import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
+import { formatDate } from '../lib/text';
 
 /**
  * S-21 — the documents of one project, by kind.
@@ -21,11 +22,18 @@ import { ProjectHeader } from '../components/ProjectHeader';
 export function Documents({ code }: { code: string }) {
   const { state } = useAsync(() => foreman.documents(code), [code]);
 
-  const columns: TableColumn<DocumentRow>[] = [
+  // Below 768px the document is the title and its link; kind, sections, phase and date fold under it.
+  const documentColumns: PriorityColumn<DocumentRow>[] = [
     {
       key: 'title',
       header: 'Document',
       sortable: true,
+      phone: 'host',
+      phoneCell: (row) => (
+        <Link className="fm-rowlink" href={`/projects/${code}/documents/${row.id}`}>
+          {row.title}
+        </Link>
+      ),
       cell: (row) => <Link href={`/projects/${code}/documents/${row.id}`}>{row.title}</Link>,
     },
     {
@@ -33,12 +41,15 @@ export function Documents({ code }: { code: string }) {
       header: 'Kind',
       width: '10rem',
       sortable: true,
+      phone: 'fold',
+      foldLabel: '',
       cell: (row) => <Badge tone="neutral">{row.kind.replace(/_/g, ' ')}</Badge>,
     },
     {
       key: 'sections',
       header: 'Sections',
       width: '6rem',
+      phone: 'fold',
       numeric: true,
       cell: (row) => row.sections.length,
     },
@@ -46,6 +57,8 @@ export function Documents({ code }: { code: string }) {
       key: 'phase',
       header: 'Phase',
       width: '8rem',
+      phone: 'fold',
+      foldCell: (row) => row.phase?.humanId ?? null,
       cell: (row) => row.phase?.humanId ?? <span className="fm-muted">—</span>,
     },
     {
@@ -53,9 +66,12 @@ export function Documents({ code }: { code: string }) {
       header: 'Last edited',
       width: '10rem',
       sortable: true,
-      cell: (row) => new Date(row.updatedAt).toLocaleDateString(),
+      phone: 'fold',
+      cell: (row) => formatDate(row.updatedAt),
     },
   ];
+
+  const columns = priorityColumns(documentColumns, usePhone());
 
   return (
     <Page>

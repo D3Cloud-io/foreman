@@ -12,6 +12,7 @@ import {
 } from '../domain/guidelines.js';
 import { softDelete } from '../domain/undo.js';
 import { actorOf, handler, param, parseBody, parseQuery } from './helpers.js';
+import { noContentWithEvents } from './undo.js';
 
 /**
  * Guidelines (FRM-REQ-186 … FRM-REQ-188). No project in the path, because a guideline has none —
@@ -71,8 +72,8 @@ export function guidelineRoutes(db: Db): Router {
     '/:humanId',
     canWrite,
     handler(async (req, res) => {
-      await softDelete(db, actorOf(req), 'guideline', param(req, 'humanId'));
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'guideline', param(req, 'humanId'));
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 

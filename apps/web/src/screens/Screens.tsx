@@ -1,4 +1,4 @@
-import { EmptyState, Link, Page, Skeleton, Table, type TableColumn } from '@d3cloud/ui';
+import { EmptyState, Link, Page, Skeleton, Table } from '@d3cloud/ui';
 import type {
   Screen,
   ScreenTheme,
@@ -7,6 +7,7 @@ import type {
   ScreenViewport,
 } from '@foreman/shared';
 import { ProjectHeader } from '../components/ProjectHeader';
+import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
 import { foreman } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import type { Tone } from '../ui/tone';
@@ -81,11 +82,16 @@ export function VerdictPill({ verdict }: { verdict: ScreenVerdictKind | null }) 
 export function Screens({ code }: { code: string }) {
   const { state } = useAsync(() => foreman.screens(code), [code]);
 
-  const columns: TableColumn<Screen>[] = [
+  // Below 768px the screen is the title and its link; the ID, route and gaps fold under it, the
+  // built verdict stays as the status, and the thumbnail goes (it is on the screen's own page).
+  const screenColumns: PriorityColumn<Screen>[] = [
     {
       key: 'humanId',
       header: 'ID',
       width: '9rem',
+      phone: 'fold',
+      foldLabel: '',
+      foldCell: (row) => <code>{row.humanId}</code>,
       cell: (row) => (
         <Link href={`/projects/${code}/screens/${row.humanId}`}>
           <code>{row.humanId}</code>
@@ -96,6 +102,7 @@ export function Screens({ code }: { code: string }) {
       key: 'thumbnail',
       header: 'Proposal',
       width: '8rem',
+      phone: 'hide',
       cell: (row) => {
         const thumb = thumbnailFor(row);
         return thumb === null ? (
@@ -110,10 +117,22 @@ export function Screens({ code }: { code: string }) {
         );
       },
     },
-    { key: 'name', header: 'Screen', cell: (row) => row.name },
+    {
+      key: 'name',
+      header: 'Screen',
+      phone: 'host',
+      phoneCell: (row) => (
+        <Link className="fm-rowlink" href={`/projects/${code}/screens/${row.humanId}`}>
+          {row.name}
+        </Link>
+      ),
+      cell: (row) => row.name,
+    },
     {
       key: 'route',
       header: 'Route',
+      phone: 'fold',
+      foldLabel: '',
       cell: (row) =>
         row.route === null ? <span className="fm-muted">—</span> : <code>{row.route}</code>,
     },
@@ -121,16 +140,20 @@ export function Screens({ code }: { code: string }) {
       key: 'verdict',
       header: 'Built',
       width: '11rem',
+      phoneWidth: '9rem',
       cell: (row) => <VerdictPill verdict={latestVerdict(row)} />,
     },
     {
       key: 'gaps',
       header: 'Gaps',
       width: '5rem',
+      phone: 'fold',
       numeric: true,
       cell: (row) => row.components.filter((c) => c.kind === 'gap').length,
     },
   ];
+
+  const columns = priorityColumns(screenColumns, usePhone());
 
   return (
     <Page>

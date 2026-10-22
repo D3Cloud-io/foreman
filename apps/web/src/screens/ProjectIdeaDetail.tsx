@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   Alert,
   Button,
@@ -20,7 +20,6 @@ import {
 import { IDEA_SECTIONS } from '@foreman/shared';
 import {
   foreman,
-  ApiError,
   type ChecklistItem,
   type CommentRow,
   type IdeaLinkRow,
@@ -29,20 +28,17 @@ import {
   type ScoreSummary,
 } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
+import { draftSize, useDraftGuard, useMutate } from '../lib/mutate';
+import { navigate } from '../lib/router';
+import { listJoin } from '../lib/groups';
+import { HistoryDrawer } from '../components/HistoryDrawer';
 import { useMode, useMoney, useReviews, useSession } from '../lib/session';
 import { Markdown } from '../components/Markdown';
 import { Pill } from '../ui/viz';
 import { relativeDay } from '../ui/tone';
 import { MaturityBar, StarsControl } from '../ui/ideas';
 import { FundIdea } from './BoardControls';
-import {
-  ALL,
-  ConvertIdea,
-  DECIDED_ELSEWHERE,
-  DeleteProjectIdea,
-  ideaTone,
-  ProjectIdeaForm,
-} from './ProjectIdeas';
+import { ALL, ConvertIdea, DECIDED_ELSEWHERE, ideaTone, ProjectIdeaForm } from './ProjectIdeas';
 
 /**
  * One project idea, on a page of its own (FRM-ADR-017, FRM-REQ-173 … FRM-REQ-178).
@@ -61,6 +57,10 @@ import {
  *
  * Everything saves as it is changed. There is no Save for the page, because a page of eight
  * separately edited parts with one button is a page where edits are lost to a closed tab.
+ *
+ * Each save lands in place and its toast offers Undo (FRM-T-18.4); History lists every change with
+ * an Undo on each one the server can reverse. Delete is soft, so it acts at once — Undo brings the
+ * idea back and returns here. An open section editor asks before Escape throws a draft away.
  */
 
 const PITCH = {
@@ -80,6 +80,24 @@ function entityHref(id: string): string {
   return `/search?q=${encodeURIComponent(id)}`;
 }
 
+/** What a patch changed, in the page's own words — for the toast. */
+export function patchLabels(patch: ProjectIdeaPatch): string[] {
+  const names: Record<string, string> = {
+    pitch: 'the pitch',
+    excitement: 'how much you want it',
+    tags: 'tags',
+    questions: 'open questions',
+    nextSteps: 'next steps',
+    links: 'links',
+    related: 'related',
+    title: 'the title',
+    status: 'the status',
+    reason: 'the reason',
+  };
+  for (const section of IDEA_SECTIONS) names[section.key] = section.heading.toLowerCase();
+  return Object.keys(patch).map((key) => names[key] ?? key);
+}
+
 /** An 8-character id for a new list item: stable across edits, cheap, and never shown. */
 const newId = () => crypto.randomUUID().slice(0, 8);
 
@@ -88,10 +106,9 @@ export function ProjectIdeaDetail({ humanId }: { humanId: string }) {
   const reviews = useReviews();
   const money = useMoney();
   const { user } = useSession();
-  const [nonce, setNonce] = useState(0);
-  const refresh = useCallback(() => { setNonce((n) => n + 1); }, []);
-
-  const { state } = useAsync(() => foreman.projectIdea(humanId), [humanId, nonce]);
+  // `refresh` re-reads in place; the page also keeps its own copy below, so nothing flashes.
+  const { state, refresh } = useAsync(() => foreman.projectIdea(humanId), [humanId]);
+  const { mutate } = useMutate();
 
   // Held locally as well as loaded, so a save updates the page from the server's answer rather
   // than refetching — a refetch would flash the skeleton over the section somebody just wrote.
@@ -105,16 +122,36 @@ export function ProjectIdeaDetail({ humanId }: { humanId: string }) {
   const save = useCallback(
     async (patch: ProjectIdeaPatch): Promise<boolean> => {
       setSaveError(null);
-      try {
-        setIdea(await foreman.updateProjectIdea(humanId, patch));
-        return true;
-      } catch (caught) {
-        setSaveError(caught instanceof ApiError ? caught.message : 'That did not save.');
-        return false;
-      }
+      const outcome = await mutate({
+        subject: humanId,
+        run: () => foreman.updateProjectIdea(humanId, patch),
+        message: () => `Saved ${humanId} — ${listJoin(patchLabels(patch))}`,
+        // The server's answer is the page: no refetch, so nothing flashes over what was written.
+        apply: setIdea,
+        onUndone: refresh,
+        failure: 'inline',
+      });
+      if (!outcome.ok && outcome.inFlight !== true) setSaveError(outcome.message);
+      return outcome.ok;
     },
-    [humanId],
+    [humanId, mutate, refresh],
   );
+
+  const remove = () => {
+    void mutate({
+      subject: humanId,
+      run: () => foreman.deleteProjectIdea(humanId),
+      message: () => `${humanId} deleted`,
+      // Soft, and undoable: it acts at once, and Undo brings it back and returns to it.
+      apply: () => {
+        navigate('/project-ideas');
+      },
+      undone: `Undone — ${humanId} is back`,
+      onUndone: (report) => {
+        if (report.refused.length === 0) navigate(`/project-ideas/${humanId}`);
+      },
+    });
+  };
 
   if (idea === null) {
     return (
@@ -153,11 +190,11 @@ export function ProjectIdeaDetail({ humanId }: { humanId: string }) {
             {canEdit && <ProjectIdeaForm idea={idea} onSaved={refresh} />}
             {board && reviews && !settled && <FundIdea idea={idea} onFunded={refresh} />}
             {!board && reviews && !settled && <ConvertIdea idea={idea} onConverted={refresh} />}
+            <HistoryDrawer entity={idea.humanId} onUndone={refresh} />
             {canEdit && (
-              <DeleteProjectIdea
-                idea={idea}
-                onDeleted={() => { window.location.assign('/project-ideas'); }}
-              />
+              <Button aria-label={`Delete ${idea.humanId}`} onClick={remove}>
+                Delete
+              </Button>
             )}
           </Cluster>
         }
@@ -284,7 +321,7 @@ function blankSections(idea: Detail): string[] {
 function Outcome({ idea, money }: { idea: Detail; money: (cents: number | null) => string }) {
   if (idea.project !== null) {
     return (
-      <Alert tone="success" title={`Became ${idea.project.code} — ${idea.project.name}`}>
+      <Alert tone="info" title={`Became ${idea.project.code} — ${idea.project.name}`}>
         <Cluster gap="8" align="center">
           <span>
             Converted {relativeDay(idea.convertedAt)}. This canvas is the project’s discovery
@@ -297,7 +334,7 @@ function Outcome({ idea, money }: { idea: Detail; money: (cents: number | null) 
   }
   if (idea.status === 'funded') {
     return (
-      <Alert tone="success" title={`Funded — ${money(idea.fundedAmountCents)}`}>
+      <Alert tone="info" title={`Funded — ${money(idea.fundedAmountCents)}`}>
         {idea.reason}
       </Alert>
     );
@@ -343,10 +380,16 @@ function SectionCard({
   const [draft, setDraft] = useState(value ?? '');
   const [busy, setBusy] = useState(false);
   const written = value !== null && value.trim().length > 0;
+  const allowClose = useDraftGuard(editing ? draftSize({ text: value ?? '' }, { text: draft }) : 0, heading);
 
+  // A ref, not `busy`: two ⌘↵ in one tick both read the state from before either render.
+  const saving = useRef(false);
   const commit = () => {
+    if (saving.current) return;
+    saving.current = true;
     setBusy(true);
     void onSave(draft).then((ok) => {
+      saving.current = false;
       setBusy(false);
       if (ok) setEditing(false);
     });
@@ -358,6 +401,8 @@ function SectionCard({
       commit();
     }
     if (event.key === 'Escape') {
+      // Escape is the easy key to hit by accident, so a draft asks first.
+      if (!allowClose()) return;
       setDraft(value ?? '');
       setEditing(false);
     }
@@ -439,8 +484,8 @@ const SCALE = ['1', '2', '3', '4', '5'].map((v) => ({ value: v, label: v }));
  */
 function Rating({ humanId, board, disabled }: { humanId: string; board: boolean; disabled: boolean }) {
   const { user } = useSession();
-  const [nonce, setNonce] = useState(0);
-  const { state } = useAsync(() => foreman.scores(humanId), [humanId, nonce]);
+  const { state, refresh } = useAsync(() => foreman.scores(humanId), [humanId]);
+  const { mutate } = useMutate();
   const mineSaved =
     state.status === 'ready' ? state.value.scores.find((s) => s.user.id === user.id) : undefined;
 
@@ -454,16 +499,22 @@ function Rating({ humanId, board, disabled }: { humanId: string; board: boolean;
   const persist = (nextImpact: string, nextEffort: string) => {
     if (nextImpact === '' || nextEffort === '') return;
     setError(null);
-    void foreman
-      .setScore(humanId, { impact: Number(nextImpact), effort: Number(nextEffort) })
-      .then(() => {
-        setImpact(null);
-        setEffort(null);
-        setNonce((n) => n + 1);
-      })
-      .catch((caught: unknown) => {
-        setError(caught instanceof ApiError ? caught.message : 'That rating did not save.');
-      });
+    void mutate({
+      subject: humanId,
+      run: () => foreman.setScore(humanId, { impact: Number(nextImpact), effort: Number(nextEffort) }),
+      message: () => `Rated ${humanId}: impact ${nextImpact}, effort ${nextEffort}`,
+      // A score is not in what the server can undo; a new rating replaces it.
+      undoable: false,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (!outcome.ok) {
+        if (outcome.inFlight !== true) setError(outcome.message);
+        return;
+      }
+      setImpact(null);
+      setEffort(null);
+      refresh();
+    });
   };
 
   const summary: ScoreSummary | null = state.status === 'ready' ? state.value.summary : null;
@@ -506,7 +557,7 @@ function Rating({ humanId, board, disabled }: { humanId: string; board: boolean;
             ? `Board: ${String(summary.impact)}↑ / ${String(summary.effort)}↓ from ${String(summary.count)} ${summary.count === 1 ? 'reviewer' : 'reviewers'}`
             : summary !== null && summary.ratio !== null
               ? `${String(summary.ratio)}× — ${quadrant(summary.impact ?? 0, summary.effort ?? 0)}`
-              : '1 is marginal or an afternoon; 5 is transformative or a quarter.'}
+              : '1 is marginal or small; 5 is transformative or large.'}
         </span>
       </Stack>
     </Card>
@@ -833,30 +884,39 @@ function Thoughts({
   reviews: boolean;
   userId: string;
 }) {
-  const [nonce, setNonce] = useState(0);
-  const refresh = () => { setNonce((n) => n + 1); };
-  const { state } = useAsync(() => foreman.comments(humanId), [humanId, nonce]);
+  const { state, refresh } = useAsync(() => foreman.comments(humanId), [humanId]);
+  const { mutate, pending: busy } = useMutate();
 
   const [body, setBody] = useState('');
   const [internal, setInternal] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A half-written thought survives nothing but this: closing the tab asks first.
+  useDraftGuard(body.trim().length, board ? 'the discussion' : 'a thought');
 
+  // One post per press: a second ⌘↵ before the first lands is ignored, not stored twice. A ref,
+  // because two key presses in one tick both see the state from before either render.
+  const posting = useRef(false);
   const post = () => {
-    if (body.trim().length === 0) return;
-    setBusy(true);
+    if (posting.current || busy || body.trim().length === 0) return;
+    posting.current = true;
     setError(null);
-    void foreman
-      .addComment(humanId, { body, internal })
-      .then(() => {
-        setBody('');
-        setInternal(false);
-        refresh();
-      })
-      .catch((caught: unknown) => {
-        setError(caught instanceof ApiError ? caught.message : 'That did not post.');
-      })
-      .finally(() => { setBusy(false); });
+    void mutate({
+      subject: humanId,
+      run: () => foreman.addComment(humanId, { body, internal }),
+      message: () => (board ? 'Posted' : 'Thought added'),
+      refresh,
+      // A thought is not in what the server can undo; Withdraw is how one is taken back.
+      undoable: false,
+      failure: 'inline',
+    }).then((outcome) => {
+      posting.current = false;
+      if (!outcome.ok) {
+        if (outcome.inFlight !== true) setError(outcome.message);
+        return;
+      }
+      setBody('');
+      setInternal(false);
+    });
   };
 
   const items = state.status === 'ready' ? [...state.value.items].reverse() : [];
@@ -930,11 +990,30 @@ function Thought({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(thought.body);
+  const { mutate } = useMutate();
+  useDraftGuard(editing ? draftSize({ body: thought.body }, { body: draft }) : 0, 'this thought');
 
   const save = () => {
-    void foreman.editComment(humanId, thought.id, draft).then(() => {
-      setEditing(false);
-      onChanged();
+    void mutate({
+      subject: 'The thought',
+      run: () => foreman.editComment(humanId, thought.id, draft),
+      message: () => 'Thought reworded',
+      refresh: onChanged,
+      undoable: false,
+    }).then((outcome) => {
+      if (outcome.ok) setEditing(false);
+    });
+  };
+
+  const withdraw = () => {
+    // The server cannot put a withdrawn thought back, so this is the one place here that asks.
+    if (!window.confirm('Withdraw this thought? This cannot be undone.')) return;
+    void mutate({
+      subject: 'The thought',
+      run: () => foreman.deleteComment(humanId, thought.id),
+      message: () => 'Thought withdrawn',
+      refresh: onChanged,
+      undoable: false,
     });
   };
 
@@ -957,9 +1036,7 @@ function Thought({
               <Button variant="ghost" onClick={() => { setDraft(thought.body); setEditing(true); }}>Edit</Button>
               <Button
                 variant="ghost"
-                onClick={() => {
-                  void foreman.deleteComment(humanId, thought.id).then(onChanged).catch(() => undefined);
-                }}
+                onClick={withdraw}
               >
                 Withdraw
               </Button>

@@ -1,4 +1,5 @@
 import {
+  DriftCategory,
   type AdrCreate,
   type AdrUpdate,
   type DecisionCreate,
@@ -62,7 +63,7 @@ export async function createAdr(db: Db, actor: Actor, code: string, input: AdrCr
     });
 
     await syncCitations(tx, 'adr', adr.id, adrProse(adr));
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'adr',
@@ -70,7 +71,7 @@ export async function createAdr(db: Db, actor: Actor, code: string, input: AdrCr
       entityHumanId: humanId,
       after: adr,
     });
-    return adr;
+    return { ...adr, auditEventIds: [event] };
   });
 }
 
@@ -119,7 +120,7 @@ export async function updateAdr(db: Db, actor: Actor, humanId: string, input: Ad
     });
 
     await syncCitations(tx, 'adr', adr.id, adrProse(adr));
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'adr',
@@ -128,7 +129,7 @@ export async function updateAdr(db: Db, actor: Actor, humanId: string, input: Ad
       before,
       after: adr,
     });
-    return adr;
+    return { ...adr, auditEventIds: [event] };
   });
 }
 
@@ -226,11 +227,14 @@ export async function createDecision(db: Db, actor: Actor, code: string, input: 
         value: input.value,
         ...(input.rationale === undefined ? {} : { rationale: input.rationale }),
         ...(input.lockedAt === undefined ? {} : { lockedAt: new Date(input.lockedAt) }),
+        ...(input.acceptsDriftSubject === undefined
+          ? {}
+          : { acceptsDriftSubject: input.acceptsDriftSubject, acceptsDriftCategory: input.acceptsDriftCategory ?? null }),
       },
     });
 
     await syncCitations(tx, 'decision', decision.id, input.rationale ?? '');
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'decision',
@@ -238,7 +242,7 @@ export async function createDecision(db: Db, actor: Actor, code: string, input: 
       entityHumanId: humanId,
       after: decision,
     });
-    return decision;
+    return { ...decision, auditEventIds: [event] };
   });
 }
 
@@ -263,7 +267,7 @@ export async function updateDecision(
     });
 
     await syncCitations(tx, 'decision', decision.id, decision.rationale ?? '');
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'decision',
@@ -272,8 +276,112 @@ export async function updateDecision(
       before,
       after: decision,
     });
-    return decision;
+    return { ...decision, auditEventIds: [event] };
   });
+}
+
+// ─── Drift a decision accepts (FRM-T-18.15) ────────────────────────────────
+
+/** One decision accepting drift, as the triage Drift tab reads it. */
+export interface DriftAcceptance {
+  readonly id: string;
+  readonly humanId: string;
+  readonly statement: string;
+  readonly value: string;
+  readonly rationale: string | null;
+  readonly lockedAt: Date | null;
+  readonly acceptsDriftSubject: string;
+  readonly acceptsDriftCategory: string;
+}
+
+/**
+ * Every decision in a project that accepts drift, keyset-paged by ID (UUIDv7, so in the order they
+ * were made). Read by the link columns, never by the statement's wording, and never capped: the
+ * caller follows `nextCursor` until it is null.
+ */
+export async function driftAcceptances(
+  db: Db,
+  code: string,
+  page: { limit: number; after: string | null },
+): Promise<{ items: DriftAcceptance[]; nextCursor: string | null; total: number }> {
+  const project = await findProject(db, code);
+  const where = { projectId: project.id, deletedAt: null, acceptsDriftSubject: { not: null } };
+  const [rows, total] = await Promise.all([
+    db.decision.findMany({
+      where: page.after === null ? where : { ...where, id: { gt: page.after } },
+      orderBy: { id: 'asc' },
+      take: page.limit + 1,
+    }),
+    db.decision.count({ where }),
+  ]);
+  const more = rows.length > page.limit;
+  const items = rows.slice(0, page.limit).map((row) => ({
+    id: row.id,
+    humanId: row.humanId,
+    statement: row.statement,
+    value: row.value,
+    rationale: row.rationale,
+    lockedAt: row.lockedAt,
+    acceptsDriftSubject: row.acceptsDriftSubject ?? '',
+    acceptsDriftCategory: row.acceptsDriftCategory ?? '',
+  }));
+  return { items, nextCursor: more ? (items[items.length - 1]?.id ?? null) : null, total };
+}
+
+/** What the console wrote before the link had columns: `Accepted drift on BND-REQ-041 (coverage-hole)…`. */
+const ACCEPTED_DRIFT = /^Accepted drift on (\S+) \(([a-z-]+)\)/;
+
+/** The record and category an old acceptance's statement names, or null when it names none. */
+export function acceptedDriftIn(statement: string): { subject: string; category: DriftCategory } | null {
+  const match = ACCEPTED_DRIFT.exec(statement);
+  const category = DriftCategory.safeParse(match?.[2]);
+  if (match === null || match[1] === undefined || !category.success) return null;
+  return { subject: match[1], category: category.data };
+}
+
+/**
+ * Give every decision the console recorded as an acceptance before FRM-T-18.15 its link: the subject
+ * and category its statement names, written to the columns with one audited update each. The
+ * statement is left as it is — it is what the decision register shows. Without `write` nothing is
+ * changed. Idempotent: a decision already linked is not read.
+ */
+export async function linkDriftAcceptances(
+  db: Db,
+  actor: Actor,
+  options: { write: boolean; project?: string | undefined },
+): Promise<{ humanId: string; subject: string; category: string }[]> {
+  const candidates = await db.decision.findMany({
+    where: {
+      deletedAt: null,
+      acceptsDriftSubject: null,
+      statement: { startsWith: 'Accepted drift on ' },
+      ...(options.project === undefined ? {} : { project: { code: options.project } }),
+    },
+    orderBy: { humanId: 'asc' },
+  });
+  const linked: { humanId: string; subject: string; category: string }[] = [];
+  for (const decision of candidates) {
+    const named = acceptedDriftIn(decision.statement);
+    if (named === null) continue;
+    linked.push({ humanId: decision.humanId, subject: named.subject, category: named.category });
+    if (!options.write) continue;
+    await db.$transaction(async (tx) => {
+      const after = await tx.decision.update({
+        where: { id: decision.id },
+        data: { acceptsDriftSubject: named.subject, acceptsDriftCategory: named.category },
+      });
+      await record(tx, {
+        ...actor,
+        action: 'update',
+        entityType: 'decision',
+        entityId: decision.id,
+        entityHumanId: decision.humanId,
+        before: decision,
+        after,
+      });
+    });
+  }
+  return linked;
 }
 
 // ─── Risk ──────────────────────────────────────────────────────────────────
@@ -297,7 +405,7 @@ export async function createRisk(db: Db, actor: Actor, code: string, input: Risk
     });
 
     await syncCitations(tx, 'risk', risk.id, `${input.mitigation ?? ''}\n${input.tripwire}`);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'risk',
@@ -305,7 +413,7 @@ export async function createRisk(db: Db, actor: Actor, code: string, input: Risk
       entityHumanId: humanId,
       after: risk,
     });
-    return risk;
+    return { ...risk, auditEventIds: [event] };
   });
 }
 
@@ -332,7 +440,7 @@ export async function updateRisk(db: Db, actor: Actor, humanId: string, input: R
       },
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'risk',
@@ -341,7 +449,7 @@ export async function updateRisk(db: Db, actor: Actor, humanId: string, input: R
       before,
       after: risk,
     });
-    return risk;
+    return { ...risk, auditEventIds: [event] };
   });
 }
 
@@ -372,7 +480,7 @@ export async function createTerm(db: Db, actor: Actor, code: string, input: Term
     });
 
     await syncCitations(tx, 'term', term.id, input.definition);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'term',
@@ -380,7 +488,7 @@ export async function createTerm(db: Db, actor: Actor, code: string, input: Term
       entityHumanId: term.term,
       after: term,
     });
-    return term;
+    return { ...term, auditEventIds: [event] };
   });
 }
 
@@ -406,7 +514,7 @@ export async function updateTerm(db: Db, actor: Actor, id: string, input: TermUp
     });
 
     await syncCitations(tx, 'term', term.id, term.definition);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'term',
@@ -415,7 +523,7 @@ export async function updateTerm(db: Db, actor: Actor, id: string, input: TermUp
       before,
       after: term,
     });
-    return term;
+    return { ...term, auditEventIds: [event] };
   });
 }
 

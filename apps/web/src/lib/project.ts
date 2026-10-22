@@ -164,6 +164,21 @@ export function briefFor(code: string): Promise<Brief> {
   return pending;
 }
 
+const forgotten = new Set<(code: string) => void>();
+
+/**
+ * Hear that a project's cached brief was dropped — it is stale, so whatever shows it should read it
+ * again. Returns the unsubscribe. A mounted heading that read the brief once and was never told
+ * kept a renamed project's old name until a full reload (FRM-T-18.8).
+ */
+export function onBriefForgotten(listener: (code: string) => void): () => void {
+  forgotten.add(listener);
+  return () => {
+    forgotten.delete(listener);
+  };
+}
+
 export function forgetBrief(code: string): void {
   briefs.delete(code);
+  for (const listener of [...forgotten]) listener(code);
 }

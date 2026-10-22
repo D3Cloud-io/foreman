@@ -19,11 +19,13 @@ import {
   inbox,
   updateAudit,
   updateFinding,
+  WontFixReasonRefused,
 } from '../domain/findings.js';
 import { findProject } from '../domain/projects.js';
 import { resolveScope, scopeCodes } from '../domain/scope.js';
 import { recurrencesOf, regressionWatch } from '../domain/recurrence.js';
 import { actorOf, handler, param, parseBody, parseQuery } from './helpers.js';
+import { auditEventsHandler, undoabilityHandler } from './undo.js';
 
 /**
  * Findings over HTTP, and the one route that is deliberately cross-project.
@@ -37,6 +39,10 @@ export function findingRoutes(db: Db): Router {
   router.use(requireAuth);
   // Read-only: every write goes through a project, because a finding belongs to one.
   router.use(requireScope(db, 'read'));
+
+  // One record's history and what of it can be undone (FRM-T-18.3). Behind `read`, above.
+  router.get('/audit-events', auditEventsHandler(db));
+  router.get('/audit-events/:id/undoable', undoabilityHandler(db));
 
   // ─── The cross-project inbox (T-6.6) ─────────────────────────────────────
 
@@ -76,7 +82,10 @@ export function findingRoutes(db: Db): Router {
 
       // Narrowed to a group's projects when `?group=` names one (FRM-T-17.4); unknown is a 404.
       const scope = await resolveScope(db, query.group);
-      const items = await inbox(db, {
+      // `total` counts the whole matching set, not the page: the sidebar's badge reads it with
+      // `limit=1` (FRM-REQ-242). `counts` is the same set per severity, ignoring the severity
+      // filter, for the chips above the table.
+      const { items, total, counts } = await inbox(db, {
         project: query.project,
         codes: scopeCodes(scope),
         severity: query.severity,
@@ -84,7 +93,7 @@ export function findingRoutes(db: Db): Router {
         lens: query.lens,
         limit: query.limit,
       });
-      res.json({ items, nextCursor: null, total: items.length });
+      res.json({ items, nextCursor: null, total, counts });
     }),
   );
 
@@ -195,7 +204,14 @@ export function projectFindingRoutes(db: Db): Router {
     handler(async (req, res) => {
       const body = parseBody(FindingUpdate, req, res);
       if (body === null) return;
-      res.json(await updateFinding(db, actorOf(req), param(req, 'humanId'), body));
+      try {
+        res.json(await updateFinding(db, actorOf(req), param(req, 'humanId'), body));
+      } catch (error) {
+        // A reason the finding would not keep is a field refused by name — 400, as `parseBody`
+        // answers when the same body names another status (FRM-T-18.15).
+        if (!(error instanceof WontFixReasonRefused)) throw error;
+        res.status(400).json({ error: error.message, fields: error.fields });
+      }
     }),
   );
 

@@ -10,11 +10,12 @@ import {
   Page,
   Skeleton,
   Table,
-  type TableColumn,
 } from '@d3cloud/ui';
 import { foreman, type MatrixRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
+import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
+import { plural } from '../ui/status';
 
 /**
  * The Requirements Register, generated (T-3.9, FRM-REQ-057, FRM-REQ-055, ADR-006).
@@ -35,34 +36,53 @@ export function RegisterView({ code }: { code: string }) {
   const matrix = useAsync(() => foreman.matrix(code), [code]);
   const coverage = useAsync(() => foreman.coverage(code), [code]);
 
-  const columns: TableColumn<MatrixRow>[] = [
+  // Below 768px: the requirement is the title, headed by its ID as the row's link; the priority
+  // stays, and phase, proof and what satisfies it fold into the sub-line (FRM-REQ-249).
+  const matrixColumns: PriorityColumn<MatrixRow>[] = [
     {
       key: 'humanId',
       header: 'ID',
       width: '8.5rem',
+      phone: 'hide',
       cell: (row) => <Link href={`/requirements/${row.humanId}`}>{row.humanId}</Link>,
     },
     {
       key: 'priority',
       header: 'Priority',
       width: '5.5rem',
+      phoneWidth: '5rem',
       cell: (row) => (
         <Badge tone={row.priority === 'M' ? 'danger' : 'neutral'}>
           {PRIORITY_LABEL[row.priority] ?? row.priority}
         </Badge>
       ),
     },
-    { key: 'statement', header: 'Requirement', cell: (row) => row.statement },
+    {
+      key: 'statement',
+      header: 'Requirement',
+      phone: 'host',
+      phoneCell: (row) => (
+        <>
+          <Link className="fm-rowlink" href={`/requirements/${row.humanId}`}>
+            {row.humanId}
+          </Link>
+          <div>{row.statement}</div>
+        </>
+      ),
+      cell: (row) => row.statement,
+    },
     {
       key: 'phase',
       header: 'Phase',
       width: '7.5rem',
+      phone: 'fold',
       cell: (row) =>
         row.phase === null ? <span className="fm-muted">backlog</span> : row.phase.humanId,
     },
     {
       key: 'acceptanceTest',
       header: 'Proved by',
+      phone: 'fold',
       cell: (row) =>
         row.acceptanceTest === null || row.acceptanceTest.trim() === '' ? (
           <span className="fm-muted">nothing stated</span>
@@ -74,6 +94,7 @@ export function RegisterView({ code }: { code: string }) {
       key: 'satisfiedBy',
       header: 'Satisfied by',
       width: '12rem',
+      phone: 'fold',
       cell: (row) =>
         row.satisfiedBy.length === 0 ? (
           // An empty row, kept rather than omitted: a matrix that hides its holes is the matrix
@@ -84,6 +105,8 @@ export function RegisterView({ code }: { code: string }) {
         ),
     },
   ];
+
+  const columns = priorityColumns(matrixColumns, usePhone());
 
   return (
     <Page>
@@ -116,7 +139,7 @@ export function RegisterView({ code }: { code: string }) {
           {coverage.state.value.uncoveredMusts.length === 0 ? null : (
             <Alert
               tone="danger"
-              title={`${String(coverage.state.value.uncoveredMusts.length)} Musts nothing covers`}
+              title={`${plural(coverage.state.value.uncoveredMusts.length, 'Must', 'Musts')} nothing covers`}
             >
               {coverage.state.value.uncoveredMusts.map((r) => r.humanId).join(', ')}
             </Alert>

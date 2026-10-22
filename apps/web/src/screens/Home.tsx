@@ -9,12 +9,14 @@ import {
   Link,
   Page,
   PageHeader,
+  Section as Panel,
   Skeleton,
   Stack,
 } from '@d3cloud/ui';
 import { ArrowUpRight, ChevronDown, ChevronRight, UsersRound } from 'lucide-react';
+import { CI_ANCHOR_ID, ciDetail, figuresOf, Ledger, NeedsYouStrip, StatStrip } from '../components/Ledger';
 import { ScopeNotice, UnknownScope, useScopeView } from '../components/ScopeSwitcher';
-import { foreman, type PortfolioRow } from '../lib/api';
+import { api, foreman, type FindingsPage, type PortfolioRow } from '../lib/api';
 import { scopedHref, scopeOf } from '../lib/scope';
 import { useAsync } from '../lib/useAsync';
 import {
@@ -30,126 +32,220 @@ import {
 } from '../lib/groups';
 import { navigate } from '../lib/router';
 import { AccentDot } from '../ui/groups';
-import { Pill, StatCard } from '../ui/viz';
-import { ciTone, lifecycleTone } from '../ui/tone';
+import { SegmentBar, StatCard } from '../ui/viz';
+import { breakdown, CRITICAL_PLUS_HIGH, plural, readAcross, readValue } from '../ui/status';
+import { SERIES } from '../ui/tone';
+import { CATEGORIES } from './DriftView';
+import { FinishSettingUp, FirstRun as SetUp, labelSamples, realRows, sampleRows } from './FirstRun';
 
 /**
- * Home — the portfolio by family (17.01, FRM-REQ-224, FRM-REQ-228).
+ * Home — the portfolio ledger (17.01, FRM-REQ-224, FRM-REQ-228, FRM-REQ-245, FRM-T-18.6).
  *
- * One section per group, in the order set on the Groups screen, then Ungrouped last and quieter:
- * each with its name, its site, its line of description and its figures, and a grid of the
- * projects in it. A section collapses from its chevron by keyboard as well as by pointer, and the
+ * A compact strip of figures for the scope, one Needs-you strip across every group, then one
+ * section per group, in the order set on the Groups screen, then Ungrouped last and quieter:
+ * each with its name, its site, its line of description and its figures, and a ledger row per
+ * project in it (`components/Ledger.tsx`). A section collapses from its chevron by keyboard as well as by pointer, and the
  * console remembers it, per group, in this browser.
  *
- * The four figures above are the same ones the project cards add up to: one derivation, read
- * twice, so the summary can never disagree with the cards under it.
+ * The strip's figures and the stat cards on a group's page are one derivation (`figuresOf`), read
+ * twice, so the summary can never disagree with the rows under it.
  *
  * Membership and order come from `GET /api/groups`; the figures from the portfolio, joined by code.
  * With no group yet, the projects stand in one grid under a card offering to make one (17.14).
+ *
+ * Seeded samples (EXMP, NBR) are counted in none of the figures, the Needs-you strip or the work
+ * chart, and are labelled where they are listed. With no real project, Home is the setup checklist
+ * (`FirstRun.tsx`, FRM-T-18.9) rather than a dashboard of zeroes that reads as all clear.
  */
 
-function phaseLabel(row: PortfolioRow): string {
-  const total = row.tasks.open + row.tasks.blocked + row.tasks.done + row.tasks.cancelled;
-  if (row.phase !== null) return `P-${row.phase.number} · ${row.phase.name}`;
-  return total === 0 ? 'Not started' : 'No active phase';
+/**
+ * Open findings by severity for a scope, for the breakdown under Critical + high ("1 critical · 2
+ * high"). `limit=1` because the counts describe the whole open set, not the page. The figure itself
+ * comes from the portfolio, so it never waits on this.
+ */
+export function useOpenSeverities(scope: string | null): FindingsPage['counts'] | null {
+  const findings = useAsync(
+    () =>
+      api.get<FindingsPage>(
+        `/api/findings?limit=1&status=open${scope === null ? '' : `&group=${encodeURIComponent(scope)}`}`,
+      ),
+    [scope],
+  );
+  return findings.state.status === 'ready' ? findings.state.value.counts : null;
 }
 
-function ciLabel(row: PortfolioRow): string {
-  if (row.ci.unknown) return 'No CI';
-  if (row.ci.conclusion === 'success') return 'CI';
-  if (row.ci.conclusion === 'failure' || row.ci.conclusion === 'timed_out') return 'CI failing';
-  return `CI ${row.ci.conclusion ?? 'pending'}`;
-}
-
-/** One project, as the board draws it: code, name, CI, lifecycle, phase, progress, figures. */
-export function ProjectTile({ row }: { row: PortfolioRow }) {
-  const total = row.tasks.open + row.tasks.blocked + row.tasks.done + row.tasks.cancelled;
-  const closed = row.tasks.done + row.tasks.cancelled;
-  const width = total === 0 ? 0 : (closed / total) * 100;
-
+/** Task totals across rows, and the one bar that draws them. Task status as declared. */
+function WorkAcross({ rows }: { rows: readonly PortfolioRow[] }) {
+  const totals = rows.reduce(
+    (sum, row) => ({
+      done: sum.done + row.tasks.done,
+      cancelled: sum.cancelled + row.tasks.cancelled,
+      blocked: sum.blocked + row.tasks.blocked,
+      open: sum.open + row.tasks.open,
+    }),
+    { done: 0, cancelled: 0, blocked: 0, open: 0 },
+  );
+  const allTasks = totals.done + totals.cancelled + totals.blocked + totals.open;
   return (
-    <Card padding="md" href={`/projects/${row.code}`} interactive>
-      <Stack gap="8">
-        <div className="fm-tile__head">
-          <span className="fm-tile__name">
-            <code className="fm-code-chip">{row.code}</code>
-            <span className="fm-card__title fm-truncate">{row.name}</span>
-          </span>
-          <Pill tone={ciTone(row.ci.conclusion, row.ci.unknown)} dot>
-            {ciLabel(row)}
-          </Pill>
-        </div>
-        <Pill tone={lifecycleTone(row.lifecycle)}>{row.lifecycle}</Pill>
-        <span className="fm-muted fm-truncate">{phaseLabel(row)}</span>
-        {/* The figure below says it in words; the bar is how fast you see it. */}
-        <span className="fm-progress" aria-hidden="true">
-          <span className="fm-progress__fill" style={{ width: `${String(width)}%` }} />
+    <Stack gap="8">
+      <span>
+        <strong>
+          {totals.done + totals.cancelled} of {allTasks}
+        </strong>{' '}
+        <span className="fm-muted">
+          tasks closed: {totals.done} done, {totals.cancelled} cancelled. Task status as declared.
         </span>
-        <Cluster gap="8" align="center" justify="between">
-          <span className="fm-muted">
-            {total === 0 ? 'No tasks yet' : `${String(closed)} of ${String(total)} tasks`}
-          </span>
-          <span className="fm-muted">
-            {row.drift.total} drift · {row.openCriticals} critical{row.openCriticals === 1 ? '' : 's'}
-          </span>
-        </Cluster>
-      </Stack>
-    </Card>
+      </span>
+      <SegmentBar
+        segments={[
+          { label: 'Done', value: totals.done, color: SERIES.done },
+          { label: 'Open', value: totals.open, color: SERIES.active },
+          { label: 'Blocked', value: totals.blocked, color: SERIES.blocked },
+          { label: 'Cancelled', value: totals.cancelled, color: SERIES.quiet },
+        ]}
+      />
+    </Stack>
   );
 }
 
 /**
- * The four figures, for whatever rows are in view. `scope` is the one in the URL: the figures'
- * links keep it, so Open criticals in Dormice opens Dormice's findings.
+ * The figures, for whatever rows are in view. `scope` is the one in the URL: the figures' links
+ * keep it, so Critical + high in Dormice opens Dormice's findings.
+ *
+ * Each is one of three states (FRM-REQ-241): needs you, clean, or not measurable yet — and a zero
+ * over projects some of which could not be measured is never "clean". Each detail gives its
+ * breakdown, and each card opens the list it counts.
  */
 export function PortfolioStats({
   rows,
   projectsDetail,
   scope = null,
+  severities = null,
 }: {
   rows: readonly PortfolioRow[];
   projectsDetail: string;
   scope?: string | null;
+  /** Open findings by severity, when read — the breakdown under Critical + high. */
+  severities?: FindingsPage['counts'] | null;
 }) {
-  const building = rows.filter((row) => row.lifecycle === 'building');
-  const criticals = rows.reduce((sum, row) => sum + row.openCriticals, 0);
-  const drift = rows.reduce((sum, row) => sum + row.drift.total, 0);
+  // One derivation, read by this and by Home's strip: they cannot disagree.
+  const { building, criticals, drift, blockedIn, blocked, unplanned, noTasks, ci, blockedSignal, driftSignal, notes } =
+    figuresOf(rows);
+
+  const driftBreakdown = CATEGORIES.map((category) => ({
+    n: rows.reduce((sum, row) => sum + (row.drift.counts[category.key]), 0),
+    one: category.label.toLowerCase(),
+  }));
 
   return (
-    <Grid minItemWidth="sm">
-      <StatCard label="Projects" value={rows.length} detail={projectsDetail} />
-      <StatCard
-        label="Building"
-        value={building.length}
-        tone={building.length === 0 ? 'neutral' : 'accent'}
-        detail={building.length === 0 ? 'Nothing in progress' : building.map((row) => row.code).join(', ')}
-      />
-      <StatCard
-        label="Open criticals"
-        value={criticals}
-        tone={criticals === 0 ? 'success' : 'danger'}
-        detail={criticals === 0 ? 'Nothing on fire' : 'Across these projects'}
-        href={scopedHref('/findings', scope)}
-      />
-      <StatCard
-        label="Drift"
-        value={drift}
-        tone={drift === 0 ? 'neutral' : 'warning'}
-        detail="Plan and reality apart"
-        href={scopedHref('/drift', scope)}
-      />
-    </Grid>
+    <Stack gap="24">
+      <Grid minItemWidth="sm">
+        <StatCard
+          label="Projects"
+          value={rows.length}
+          detail={`${breakdown(
+            ['building', 'deployed', 'planned', 'scaffolded', 'parked', 'scrapped'].map((lifecycle) => ({
+              n: rows.filter((row) => row.lifecycle === lifecycle).length,
+              one: lifecycle,
+            })),
+            'None yet',
+          )} · ${projectsDetail}`}
+          href={scopedHref('/projects', scope)}
+          action="Open projects"
+        />
+        <StatCard
+          label="Building"
+          value={building.length}
+          detail={building.length === 0 ? 'Nothing in progress' : `${plural(building.length, 'project', 'projects')} building`}
+          href={scopedHref('/projects', scope)}
+          action="Open projects"
+        />
+        <StatCard
+          label={CRITICAL_PLUS_HIGH}
+          value={criticals}
+          signal={readAcross(criticals, { unmeasured: [], total: rows.length, severity: 'danger' })}
+          detail={
+            criticals === 0
+              ? 'No open critical or high findings'
+              : severities === null
+                ? `${String(criticals)} open, across these projects`
+                : breakdown(
+                    [
+                      { n: severities.critical, one: 'critical' },
+                      { n: severities.high, one: 'high' },
+                    ],
+                    `${String(criticals)} open, across these projects`,
+                  )
+          }
+          href={scopedHref('/findings', scope)}
+          action={criticals === 0 ? 'Open findings' : `Open ${plural(criticals, 'finding', 'findings')}`}
+        />
+        <StatCard
+          label="Blocked tasks"
+          value={readValue(blockedSignal, blocked)}
+          signal={blockedSignal}
+          detail={
+            blocked > 0
+              ? `${plural(blocked, 'task', 'tasks')} in ${plural(blockedIn.length, 'project', 'projects')}`
+              : blockedSignal.state === 'clean'
+                ? 'No task is waiting on another'
+                : `${plural(noTasks.length, 'project has', 'projects have')} no tasks yet, so this is not measured there`
+          }
+          href={
+            blockedIn.length === 1 && blockedIn[0] !== undefined
+              ? `/projects/${blockedIn[0].code}`
+              : scopedHref('/projects', scope)
+          }
+          action={blockedIn.length === 1 ? 'Open the project' : 'Open projects'}
+        />
+        <StatCard
+          label="Drift"
+          value={readValue(driftSignal, drift)}
+          signal={driftSignal}
+          detail={
+            drift > 0
+              ? breakdown(driftBreakdown, 'Plan and reality apart')
+              : unplanned.length === 0
+                ? 'Plan and reality agree'
+                : `${plural(unplanned.length, 'project has', 'projects have')} no plan yet, so drift is not measured there`
+          }
+          href={scopedHref('/drift', scope)}
+          action="Open drift"
+        />
+        <StatCard
+          label="CI · reporting"
+          value={ci.value}
+          signal={ci.signal}
+          detail={ciDetail(ci)}
+          href={scopedHref('/projects', scope)}
+          action={ci.silent.length > 0 ? `See the ${String(ci.silent.length)} not reporting` : 'Open projects'}
+        />
+      </Grid>
+      {notes.length > 0 && <p className="fm-muted fm-stat-notes">{notes.join(' · ')}</p>}
+
+      <Panel title="Work across the portfolio" surface="card">
+        <WorkAcross rows={rows} />
+      </Panel>
+    </Stack>
   );
+}
+
+/** The section the CI figure's anchor lands on: the first with a ledger to land on. */
+function firstWithRows(sections: readonly Section<PortfolioRow>[]): Section<PortfolioRow> | undefined {
+  return sections.find((section) => section.rows.length > 0);
 }
 
 function GroupSection({
   section,
   collapsed,
   onToggle,
+  anchor,
 }: {
   section: Section<PortfolioRow>;
   collapsed: boolean;
   onToggle: () => void;
+  /** An `id` for this section's ledger — the first one carries the CI figure's anchor. */
+  anchor?: string | undefined;
 }) {
   const { group } = section;
   const headingId = `fm-home-${section.key}`;
@@ -186,20 +282,33 @@ function GroupSection({
               : (group.description ?? '')}
           </span>
         </div>
-        <span className="fm-muted fm-gsection__counts">{sectionSummary(section.rows)}</span>
+        {/* Over the real projects: a sample is listed, labelled, and counted nowhere (FRM-T-18.9). */}
+        <span className="fm-muted fm-gsection__counts">{sectionSummary(realRows(section.rows))}</span>
       </div>
       <div id={bodyId} hidden={collapsed}>
         {section.rows.length === 0 ? (
           <p className="fm-muted fm-group-note">No projects yet — move some here from Projects.</p>
         ) : (
-          <div className="fm-tiles">
-            {section.rows.map((row) => (
-              <ProjectTile key={row.code} row={row} />
-            ))}
-          </div>
+          <Ledger rows={section.rows} {...(anchor === undefined ? {} : { anchor })} />
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * The work chart, after the ledger: the ledger is what Home is for, and this is the totals under it.
+ * A group, not a card section — an `h2` here would be the last heading on the page, and the last
+ * heading is Ungrouped.
+ */
+function WorkBelow({ rows }: { rows: readonly PortfolioRow[] }) {
+  return (
+    <div role="group" aria-labelledby="fm-home-work" className="fm-home-work">
+      <h3 id="fm-home-work" className="fm-subheading">
+        Work across the portfolio
+      </h3>
+      <WorkAcross rows={rows} />
+    </div>
   );
 }
 
@@ -229,10 +338,6 @@ function FirstRun({ onDismiss }: { onDismiss: () => void }) {
       </Cluster>
     </Card>
   );
-}
-
-function plural(n: number, one: string, other: string): string {
-  return `${String(n)} ${n === 1 ? one : other}`;
 }
 
 const WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
@@ -268,6 +373,7 @@ export function Home({ search }: { search: string }) {
   const { phrase } = useScopeView();
   const portfolio = useAsync(() => foreman.portfolio(scope), [scope]);
   const groups = useAsync(() => foreman.groups(), []);
+  const severities = useOpenSeverities(scope);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [introDismissed, setIntroDismissed] = useState(readIntroDismissed);
 
@@ -299,7 +405,8 @@ export function Home({ search }: { search: string }) {
   }
 
   const grouped = portfolio.state.value;
-  const rows = grouped.items;
+  // Every figure is over real projects: a sample was seeded, not planned (FRM-T-18.9).
+  const rows = realRows(grouped.items);
   // Only the descriptions come from here: the portfolio's sections carry none. Home renders
   // without them rather than waiting on a second read.
   const listing = groups.state.status === 'ready' ? groups.state.value : null;
@@ -310,23 +417,49 @@ export function Home({ search }: { search: string }) {
     setCollapsed((current) => ({ ...current, [key]: next }));
   };
 
+  const labelled = (sections: Section<PortfolioRow>[]) =>
+    sections.map((section) => ({ ...section, rows: labelSamples(section.rows) }));
+
+  if (scope === null && rows.length === 0) {
+    // First run: nothing real to measure yet, so the checklist, not a page of "clean" zeroes.
+    const samples = sampleRows(grouped.items);
+    return frame(
+      'Set Foreman up. Home shows where each project stands once there is something real to measure.',
+      <Stack gap="32">
+        <SetUp rows={grouped.items} onChanged={portfolio.refresh} />
+        {samples.length > 0 && (
+          <section aria-labelledby="fm-home-samples" className="fm-gsection fm-gsection--quiet">
+            <h2 id="fm-home-samples" className="fm-gsection__title">
+              Samples
+            </h2>
+            <Ledger rows={labelSamples(samples)} />
+          </section>
+        )}
+      </Stack>,
+    );
+  }
+
   if (scope !== null) {
     // Scoped (17.02): only that family's section — or the ungrouped — and the figures for it.
-    const sections = portfolioSections(grouped, descriptionsOf(listing));
+    const sections = labelled(portfolioSections(grouped, descriptionsOf(listing)));
     const shown = new Set(sections.map((section) => section.key));
     return frame(
       `${plural(rows.length, 'project', 'projects')}${phrase === null ? '' : ` in ${phrase}`}, and what needs looking at.`,
       <Stack gap="32">
-        <PortfolioStats rows={rows} projectsDetail={phrase === null ? 'In this scope' : `In ${phrase}`} scope={scope} />
+        {/* No Finish setting up here: setup is the whole Foreman's, and a scope sees one family. */}
+        <StatStrip rows={rows} projectsDetail={phrase === null ? 'In this scope' : `In ${phrase}`} scope={scope} severities={severities} />
+        <NeedsYouStrip rows={rows} />
         {sections.map((section) => (
           <GroupSection
             key={section.key}
+            anchor={section === firstWithRows(sections) ? CI_ANCHOR_ID : undefined}
             section={section}
             collapsed={isCollapsed(section.key)}
             onToggle={() => { toggle(section.key); }}
           />
         ))}
         <HiddenByScope shown={shown} />
+        <WorkBelow rows={rows} />
       </Stack>,
     );
   }
@@ -335,6 +468,7 @@ export function Home({ search }: { search: string }) {
     return frame(
       `${plural(rows.length, 'project', 'projects')}, and what needs looking at.`,
       <Stack gap="24">
+        <FinishSettingUp rows={grouped.items} />
         {!introDismissed && (
           <FirstRun
             onDismiss={() => {
@@ -343,25 +477,26 @@ export function Home({ search }: { search: string }) {
             }}
           />
         )}
-        <PortfolioStats rows={rows} projectsDetail="No groups yet" />
+        <StatStrip rows={rows} projectsDetail="No groups yet" scope={null} severities={severities} />
+        <NeedsYouStrip rows={rows} />
         {rows.length === 0 ? (
           <EmptyState kind="empty" heading="No projects yet">
-            Import the vault, or convert a project idea, to start.
+            Create a project, import one, or convert a project idea, to start.
           </EmptyState>
         ) : (
-          <div className="fm-tiles">
-            {[...rows]
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map((row) => (
-                <ProjectTile key={row.code} row={row} />
-              ))}
-          </div>
+          <>
+            <Ledger
+              rows={labelSamples([...grouped.items].sort((a, b) => a.name.localeCompare(b.name)))}
+              anchor={CI_ANCHOR_ID}
+            />
+            <WorkBelow rows={rows} />
+          </>
         )}
       </Stack>,
     );
   }
 
-  const sections = portfolioSections(grouped, descriptionsOf(listing)).filter(
+  const sections = labelled(portfolioSections(grouped, descriptionsOf(listing))).filter(
     // An empty Ungrouped says nothing worth a heading; an empty group is still a family.
     (section) => section.group !== null || section.rows.length > 0,
   );
@@ -372,15 +507,24 @@ export function Home({ search }: { search: string }) {
       n === 1 ? 'group' : 'groups'
     }, and what needs looking at.`,
     <Stack gap="32">
-      <PortfolioStats rows={rows} projectsDetail={groupsDetail(n, grouped.ungrouped?.projects.length ?? 0)} />
+      <FinishSettingUp rows={grouped.items} />
+      <StatStrip
+        rows={rows}
+        projectsDetail={groupsDetail(n, realRows(grouped.ungrouped?.projects ?? []).length)}
+        scope={null}
+        severities={severities}
+      />
+      <NeedsYouStrip rows={rows} />
       {sections.map((section) => (
         <GroupSection
           key={section.key}
+          anchor={section === firstWithRows(sections) ? CI_ANCHOR_ID : undefined}
           section={section}
           collapsed={isCollapsed(section.key)}
           onToggle={() => { toggle(section.key); }}
         />
       ))}
+      <WorkBelow rows={rows} />
     </Stack>,
   );
 }

@@ -4,6 +4,7 @@ import { createApp } from '../../src/app.js';
 import { setPassword } from '../../src/auth/native.js';
 import { loadConfig, type Config } from '../../src/config.js';
 import { createDb, type Db } from '../../src/db.js';
+import { approximateTokens } from '../../src/domain/brief.js';
 import type { PortfolioRow } from '../../src/domain/portfolio.js';
 import type { SearchHit } from '../../src/domain/search.js';
 
@@ -15,7 +16,13 @@ import type { SearchHit } from '../../src/domain/search.js';
 const url = process.env['DATABASE_URL'];
 const EMAIL = 'portfolio@example.com';
 const PASSWORD = 'a-password-for-the-portfolio-tests';
-const CODES = ['PFA', 'PFB', 'PFC'];
+/**
+ * What one project may cost in `foreman_portfolio`'s answer, in the brief's own approximation
+ * (characters / 4). Measured at ~145 with the ledger fields; the ceiling leaves room for a field but
+ * not for a second copy of anything. The guidelines list is shared, so it sits in the average too.
+ */
+const PORTFOLIO_TOKENS_PER_PROJECT = 200;
+const CODES = ['PFA', 'PFB', 'PFC', 'PFD', 'PFE'];
 
 describe.skipIf(url === undefined)('portfolio and search', () => {
   let db: Db;
@@ -122,6 +129,26 @@ describe.skipIf(url === undefined)('portfolio and search', () => {
       },
     });
 
+    // Main has moved one commit past the one that shipped (FRM-T-18.6).
+    await db.commit.create({
+      data: {
+        repoId: repo.id,
+        sha: 'c'.repeat(40),
+        message: 'Refuse the unsigned payload',
+        author: 'tester',
+        committedAt: new Date(Date.now() + 3_600_000),
+      },
+    });
+    await db.deployment.create({
+      data: {
+        projectId: a.id,
+        environment: 'production',
+        image: 'ghcr.io/test/alpha',
+        imageSha: 'b'.repeat(7),
+        deployedAt: new Date(),
+      },
+    });
+
     // PFB: planned, and nothing has ever been ingested for it.
     await db.project.create({
       data: { code: 'PFB', name: 'Beta', slug: 'beta', lifecycle: 'planned' },
@@ -149,6 +176,95 @@ describe.skipIf(url === undefined)('portfolio and search', () => {
         { projectId: c.id, phaseId: late.id, humanId: 'PFC-T-4.1', title: 'Landed', status: 'done' },
         { projectId: c.id, phaseId: late.id, humanId: 'PFC-T-4.2', title: 'Next', status: 'todo' },
       ],
+    });
+
+    // A deploy of a SHA Foreman never saw a commit for: how far main is ahead is unknown, not zero.
+    await db.deployment.create({
+      data: {
+        projectId: c.id,
+        environment: 'production',
+        image: 'ghcr.io/test/gamma',
+        imageSha: 'sha-' + 'e'.repeat(40),
+        deployedAt: new Date(),
+      },
+    });
+
+    // PFD: how far is "ahead" measured, and in what. Two live repos and one soft-deleted; the shipped
+    // commit is in the first. Production was deployed an hour ago; staging, newer, ships another SHA.
+    const shipped = new Date('2026-01-01T10:00:00.000Z');
+    const at = (seconds: number) => new Date(shipped.getTime() + seconds * 1000);
+    const d = await db.project.create({
+      data: { code: 'PFD', name: 'Delta', slug: 'delta', lifecycle: 'deployed' },
+    });
+    const [main, other, gone] = await Promise.all(
+      ['main', 'other', 'gone'].map((suffix) =>
+        db.repo.create({
+          data: {
+            projectId: d.id,
+            fullName: `test/delta-${suffix}`,
+            ...(suffix === 'gone' ? { deletedAt: new Date() } : {}),
+          },
+        }),
+      ),
+    );
+    if (main === undefined || other === undefined || gone === undefined) throw new Error('repos');
+    const commit = (repoId: string, sha: string, when: Date) =>
+      db.commit.create({ data: { repoId, sha, message: sha, author: 'tester', committedAt: when } });
+    await commit(main.id, '1'.repeat(40), at(-60)); // older than what shipped: not ahead
+    await commit(main.id, '2'.repeat(40), shipped); // the shipped commit
+    await commit(main.id, '3'.repeat(40), shipped); // same second: may be after it, so it counts
+    await commit(main.id, '4'.repeat(40), at(30));
+    await commit(main.id, '5'.repeat(40), at(90));
+    for (const n of ['6', '7', '8', '9']) await commit(other.id, n.repeat(40), at(300)); // another repo's
+    await commit(gone.id, 'a'.repeat(40), at(600)); // a deleted repo's
+    await commit(gone.id, 'b'.repeat(40), at(601));
+    await db.deployment.create({
+      data: {
+        projectId: d.id,
+        environment: 'production',
+        image: 'ghcr.io/test/delta',
+        imageSha: '2'.repeat(40),
+        deployedAt: new Date(Date.now() - 3_600_000),
+      },
+    });
+    await db.deployment.create({
+      data: {
+        projectId: d.id,
+        environment: 'staging',
+        image: 'ghcr.io/test/delta',
+        imageSha: '5'.repeat(40), // newer, and in a later commit than production's
+        deployedAt: new Date(),
+      },
+    });
+
+    // PFE: no production deployment at all, so the newest of whatever it has stands in; and a
+    // SHA that only a soft-deleted repo holds is not a commit Foreman can place.
+    const e = await db.project.create({
+      data: { code: 'PFE', name: 'Epsilon', slug: 'epsilon', lifecycle: 'deployed' },
+    });
+    const liveRepo = await db.repo.create({ data: { projectId: e.id, fullName: 'test/epsilon-live' } });
+    const goneRepo = await db.repo.create({
+      data: { projectId: e.id, fullName: 'test/epsilon-gone', deletedAt: new Date() },
+    });
+    await commit(liveRepo.id, 'c'.repeat(40), at(0));
+    await commit(goneRepo.id, 'd'.repeat(40), at(0));
+    await db.deployment.create({
+      data: {
+        projectId: e.id,
+        environment: 'staging',
+        image: 'ghcr.io/test/epsilon',
+        imageSha: 'd'.repeat(40),
+        deployedAt: new Date(Date.now() - 7_200_000),
+      },
+    });
+    await db.deployment.create({
+      data: {
+        projectId: e.id,
+        environment: 'preview',
+        image: 'ghcr.io/test/epsilon',
+        imageSha: 'c'.repeat(40),
+        deployedAt: new Date(),
+      },
     });
 
     server = await new Promise<Server>((resolve) => {
@@ -222,6 +338,93 @@ describe.skipIf(url === undefined)('portfolio and search', () => {
         const brief = await get<{ activePhase: { humanId: string } | null }>(`/brief/${code}`);
         const row = items.find((item) => item.code === code);
         expect(row?.phase?.humanId ?? null, code).toBe(brief.activePhase?.humanId ?? null);
+      }
+    });
+  });
+
+  describe('the ledger columns (FRM-REQ-245, FRM-T-18.6)', () => {
+    it('names the next task, the CI word and the deploy state on every row', async () => {
+      const { items } = await get<{ items: PortfolioRow[] }>('/portfolio');
+      const by = (code: string) => items.find((row) => row.code === code);
+
+      expect(by('PFA')?.nextTask).toEqual({ humanId: 'PFA-T-2.2', title: 'Verify the HMAC signature' });
+      expect(by('PFA')?.ciState).toBe('failing');
+      // Never reported is its own word: not passing, not failing.
+      expect(by('PFB')?.ciState).toBe('never');
+      expect(by('PFB')?.nextTask).toBeNull();
+      expect(by('PFB')?.deployed).toBeNull();
+      expect(by('PFC')?.nextTask?.humanId).toBe('PFC-T-4.2');
+    });
+
+    it('counts the commits on main since the deployed SHA, and says unknown when it is not a commit', async () => {
+      const { items } = await get<{ items: PortfolioRow[] }>('/portfolio');
+      const alpha = items.find((row) => row.code === 'PFA')?.deployed;
+      expect(alpha?.sha).toBe('b'.repeat(7));
+      expect(alpha?.ahead).toBe(1);
+      expect(typeof alpha?.at).toBe('string');
+      // Unknown is not zero: nothing says the project is up to date.
+      expect(items.find((row) => row.code === 'PFC')?.deployed?.ahead).toBeNull();
+    });
+
+    it('measures ahead within the repo that holds the shipped commit, from live repos, in commit order', async () => {
+      const { items } = await get<{ items: PortfolioRow[] }>('/portfolio');
+      const delta = items.find((row) => row.code === 'PFD')?.deployed;
+      // Production's SHA, not the newer staging one's.
+      expect(delta?.sha).toBe('2'.repeat(40));
+      // In the shipped commit's repo only: the same-second commit, +30s and +90s. Not the older one,
+      // not the four in the other repo, not the two in the deleted repo.
+      expect(delta?.ahead).toBe(3);
+    });
+
+    it('falls back to the newest deployment when there is no production one, and never places a SHA in a deleted repo', async () => {
+      const { items } = await get<{ items: PortfolioRow[] }>('/portfolio');
+      const epsilon = items.find((row) => row.code === 'PFE')?.deployed;
+      // The preview deploy is the newest; its commit is in the live repo, and nothing is after it.
+      expect(epsilon?.sha).toBe('c'.repeat(40));
+      expect(epsilon?.ahead).toBe(0);
+    });
+
+    it('says CI is "other", not passing, for a run that neither passed nor failed', async () => {
+      const repo = await db.repo.findFirstOrThrow({ where: { fullName: 'test/epsilon-live' } });
+      await db.checkRun.create({
+        data: { repoId: repo.id, commitSha: 'c'.repeat(40), name: 'ci', conclusion: 'cancelled', completedAt: new Date() },
+      });
+      const { items } = await get<{ items: PortfolioRow[] }>('/portfolio');
+      const epsilon = items.find((row) => row.code === 'PFE');
+      expect(epsilon?.ciState).toBe('other');
+      expect(epsilon?.ci).toEqual({ conclusion: 'cancelled', unknown: false });
+    });
+
+    it('keeps foreman_portfolio inside a stated size per project', async () => {
+      // `foreman_portfolio` returns this answer without `items` (packages/mcp/src/tools). A row grew by
+      // three fields in FRM-T-18.6, and the answer is read in every session, so its cost per project
+      // is pinned: a field added later has to fit, or say why it does not.
+      const answer = await get<Record<string, unknown> & { items: PortfolioRow[] }>('/portfolio');
+      const { items, ...mcp } = answer;
+      const perProject = approximateTokens(mcp) / Math.max(items.length, 1);
+      expect(perProject).toBeLessThan(PORTFOLIO_TOKENS_PER_PROJECT);
+    });
+
+    it('agrees with the brief about what is next, and never names a blocked task', async () => {
+      const { items } = await get<{ items: PortfolioRow[] }>('/portfolio');
+      for (const code of CODES) {
+        const brief = await get<{ nextTasks: { humanId: string; title: string }[] }>(`/brief/${code}`);
+        const row = items.find((item) => item.code === code);
+        expect(row?.nextTask?.humanId ?? null, code).toBe(brief.nextTasks[0]?.humanId ?? null);
+        expect(row?.nextTask?.humanId).not.toBe('PFA-T-2.3');
+      }
+    });
+
+    it('carries the new fields in the grouped sections too, one answer however it is read', async () => {
+      const grouped = await get<{
+        items: PortfolioRow[];
+        groups: { projects: PortfolioRow[] }[];
+        ungrouped: { projects: PortfolioRow[] } | null;
+      }>('/portfolio');
+      const sectioned = [...grouped.groups.flatMap((g) => g.projects), ...(grouped.ungrouped?.projects ?? [])];
+      for (const row of sectioned) {
+        expect(row.ciState).toBe(grouped.items.find((item) => item.code === row.code)?.ciState);
+        expect(row.nextTask).toEqual(grouped.items.find((item) => item.code === row.code)?.nextTask);
       }
     });
   });

@@ -13,12 +13,13 @@ import {
   Skeleton,
   Stack,
   Table,
-  type TableColumn,
 } from '@d3cloud/ui';
 import { foreman, ApiError, type MemberRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { Pill } from '../ui/viz';
 import { relativeDay } from '../ui/tone';
+import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
+import { formatDate } from '../lib/text';
 
 /**
  * Who is on the board (FRM-ADR-016, FRM-REQ-165).
@@ -39,11 +40,14 @@ export function Members() {
   const refresh = useCallback(() => { setNonce((n) => n + 1); }, []);
   const { state } = useAsync(() => foreman.members(), [nonce]);
 
-  const columns: TableColumn<MemberRow>[] = [
+  // Below 768px: the person is the title, and their role select and status stay; the suspend
+  // control folds into the sub-line under them (FRM-REQ-249).
+  const memberColumns: PriorityColumn<MemberRow>[] = [
     {
       key: 'name',
       header: 'Name',
       sortable: true,
+      phone: 'host',
       cell: (row) => (
         <Stack gap="2">
           <strong>{row.displayName}</strong>
@@ -55,12 +59,15 @@ export function Members() {
       key: 'role',
       header: 'Role',
       width: '12rem',
+      phoneWidth: '8.5rem',
       cell: (row) => <RoleControl member={row} onChanged={refresh} />,
     },
     {
       key: 'status',
       header: 'Status',
       width: '14rem',
+      // Kept on a phone: a table keeps its title, status and primary control (FRM-REQ-249).
+      phoneWidth: '6.5rem',
       cell: (row) => (
         <Stack gap="2">
           <Pill tone={row.status === 'active' ? 'success' : row.status === 'invited' ? 'warning' : 'danger'}>
@@ -72,13 +79,13 @@ export function Members() {
               different story, and Restore is how it is undone. */}
           {row.status === 'suspended' && (row.deleteAfter ?? null) !== null && (
             <span className="fm-muted">
-              deleting on {new Date(row.deleteAfter ?? '').toLocaleDateString(undefined, { dateStyle: 'medium' })} — Restore
+              deleting on {formatDate(row.deleteAfter ?? '')} — Restore
               cancels it
             </span>
           )}
           {row.status === 'invited' && row.invite !== null && (
             <span className="fm-muted">
-              invited, expires {new Date(row.invite.expiresAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}
+              invited, expires {formatDate(row.invite.expiresAt)}
             </span>
           )}
         </Stack>
@@ -88,9 +95,13 @@ export function Members() {
       key: 'actions',
       header: 'Access',
       width: '9rem',
+      phone: 'fold',
+      foldLabel: '',
       cell: (row) => <SuspendControl member={row} onChanged={refresh} />,
     },
   ];
+
+  const columns = priorityColumns(memberColumns, usePhone());
 
   return (
     <Page>

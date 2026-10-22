@@ -20,7 +20,9 @@ import {
 import { foreman, type CommitRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
-import { refreshSignals } from '../components/shellSignals';
+import { useMutate } from '../lib/mutate';
+import { daysAgo, formatDate, formatDateTime } from '../lib/text';
+import { plural } from '../ui/status';
 
 /**
  * S-24 — what actually happened: commits, their attribution proposals, CI and what is deployed.
@@ -43,16 +45,32 @@ export function Activity({ code }: { code: string }) {
   const ci = useAsync(() => foreman.ci(code), [code]);
   const cadence = useAsync(() => foreman.cadence(code), [code]);
   const deployments = useAsync(() => foreman.deployments(code), [code]);
+  // The cadence reads the whole project, not the filter: no last commit means nothing was ever ingested.
+  const nothingIngested = cadence.state.status === 'ready' && cadence.state.value.lastCommitAt === null;
   const [busy, setBusy] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const { mutate } = useMutate();
 
+  // One write, the one way (FRM-T-18.4): the button waits, the list re-reads in place — no
+  // skeleton, the scroll and the rest of the queue where they were — and a toast says what was
+  // decided. A failure is an Alert here (INT-08), not a toast that leaves.
   const act = (sha: string, task: string, confirm: boolean) => {
     setBusy(`${sha}:${task}`);
+    setFailure(null);
     const call = confirm ? foreman.confirmAttribution : foreman.rejectAttribution;
-    void call(code, sha, task)
-      .then(() => {
-        commits.reload();
-        // The sidebar's "Activity, N waiting for review" changed with this answer.
-        refreshSignals();
+    void mutate({
+      subject: `${sha.slice(0, 7)} → ${task}`,
+      run: () => call(code, sha, task),
+      message: () => `${sha.slice(0, 7)} ${confirm ? 'confirmed as' : 'rejected for'} ${task}`,
+      refresh: commits.refresh,
+      // The sidebar's "Activity, N waiting for review" changed with this answer.
+      signals: true,
+      // Undo puts the proposal back (FRM-T-18.14): the commit_task link and its confirmed flag.
+      undone: `${sha.slice(0, 7)} is waiting to be reviewed again`,
+      failure: 'inline',
+    })
+      .then((outcome) => {
+        if (!outcome.ok && outcome.inFlight !== true) setFailure(outcome.message);
       })
       .finally(() => { setBusy(null); });
   };
@@ -84,7 +102,7 @@ export function Activity({ code }: { code: string }) {
             <DescriptionItem term="Last commit">
               {cadence.state.status !== 'ready' || cadence.state.value.lastCommitAt === null
                 ? 'nothing ingested'
-                : `${String(cadence.state.value.dormantDays ?? 0)} days ago`}
+                : daysAgo(cadence.state.value.dormantDays ?? 0)}
             </DescriptionItem>
             <DescriptionItem term="Commits" numeric>
               {cadence.state.status !== 'ready'
@@ -99,7 +117,7 @@ export function Activity({ code }: { code: string }) {
             // A dormant project is visibly dormant (FRM-REQ-113). Across nineteen projects, the
             // ones that stopped are the ones worth noticing.
             <Alert tone="warning" title="Nothing has landed here in a month">
-              {cadence.state.value.dormantDays} days since the last commit.
+              {plural(cadence.state.value.dormantDays, 'day', 'days')} since the last commit.
             </Alert>
           ) : null}
         </Card>
@@ -125,7 +143,7 @@ export function Activity({ code }: { code: string }) {
                 <code>{deployments.state.value.items[0]?.schemaRevision ?? 'not reported'}</code>
               </DescriptionItem>
               <DescriptionItem term="When">
-                {new Date(deployments.state.value.items[0]?.deployedAt ?? '').toLocaleString()}
+                {formatDateTime(deployments.state.value.items[0]?.deployedAt ?? '')}
               </DescriptionItem>
             </DescriptionList>
           )}
@@ -136,7 +154,7 @@ export function Activity({ code }: { code: string }) {
         aria-label="Filter the commits"
         trailing={
           commits.state.status === 'ready' ? (
-            <span className="fm-muted">{commits.state.value.total} commits</span>
+            <span className="fm-muted">{plural(commits.state.value.total ?? 0, 'commit', 'commits')}</span>
           ) : null
         }
       >
@@ -154,6 +172,12 @@ export function Activity({ code }: { code: string }) {
         </FormField>
       </FilterBar>
 
+      {failure === null ? null : (
+        <Alert tone="danger" title="That was not recorded" dynamic>
+          {failure}
+        </Alert>
+      )}
+
       {commits.state.status === 'loading' ? (
         <Skeleton lines={10} />
       ) : commits.state.status === 'error' ? (
@@ -161,16 +185,23 @@ export function Activity({ code }: { code: string }) {
           {commits.state.message}
         </EmptyState>
       ) : commits.state.value.items.length === 0 ? (
-        <EmptyState
-          kind={filter === 'proposed' ? 'empty' : 'no-results'}
-          heading={filter === 'proposed' ? 'Nothing waiting' : 'No commits match'}
-        >
-          {filter === 'proposed'
-            ? 'Every proposal has been confirmed or rejected.'
-            : filter === 'none'
-              ? 'Every commit here is accounted for — which is rarer than it sounds.'
-              : 'Nothing has been ingested for this project yet.'}
-        </EmptyState>
+        nothingIngested ? (
+          // Nothing to review because nothing arrived: a different state from a queue that is empty.
+          <EmptyState kind="empty" heading="No commits ingested yet">
+            No commits ingested yet — connect a repository and they will appear here.
+          </EmptyState>
+        ) : (
+          <EmptyState
+            kind={filter === 'proposed' ? 'empty' : 'no-results'}
+            heading={filter === 'proposed' ? 'Nothing waiting' : 'No commits match'}
+          >
+            {filter === 'proposed'
+              ? 'Every proposal has been confirmed or rejected.'
+              : filter === 'none'
+                ? 'Every commit here is accounted for — which is rarer than it sounds.'
+                : 'No commits match this filter.'}
+          </EmptyState>
+        )
       ) : (
         <Stack gap="12" as="ul" aria-label={`Commits, ${filter}`}>
           {commits.state.value.items.map((commit) => (
@@ -214,7 +245,7 @@ function Commit({
             )}
           </div>
           <div className="fm-muted">
-            {commit.author} · {new Date(commit.committedAt).toLocaleDateString()} ·{' '}
+            {commit.author} · {formatDate(commit.committedAt)} ·{' '}
             {commit.repo.fullName}
           </div>
 

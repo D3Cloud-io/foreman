@@ -3,6 +3,7 @@ import { foreman } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { Donut, StatCard } from '../ui/viz';
 import { SERIES } from '../ui/tone';
+import { plural, readCount, readValue } from '../ui/status';
 
 /**
  * The state of a project's register, above its register.
@@ -18,6 +19,9 @@ import { SERIES } from '../ui/tone';
  */
 export function CoverageSummary({ code }: { code: string }) {
   const { state } = useAsync(() => foreman.coverage(code), [code]);
+  // Whether there are tasks at all: "tasks citing nothing: 0" over no tasks is not a clean result.
+  const project = useAsync(() => foreman.project(code), [code]);
+  const taskCount = project.state.status === 'ready' ? project.state.value.counts.tasks : null;
 
   if (state.status === 'loading') return <Skeleton lines={3} />;
   // Informational: the register below is usable whether or not this resolves, so a failure here
@@ -27,55 +31,84 @@ export function CoverageSummary({ code }: { code: string }) {
   const { requirements, earsWarnings, withoutAcceptanceTest, tasksWithoutRequirements } =
     state.value;
   const uncoveredMusts = requirements.musts - requirements.mustsCovered;
+  // With no Must there is no share to compute, and 100% would be a claim about nothing.
   const percent =
     requirements.musts === 0
-      ? 100
+      ? null
       : Math.round((requirements.mustsCovered / requirements.musts) * 100);
+  const register = `/projects/${code}/requirements`;
+  const citing = readCount(tasksWithoutRequirements.length, { measured: taskCount !== null && taskCount > 0 });
+  const noun = (n: number) => plural(n, 'requirement', 'requirements');
 
   return (
     <Section title="The register at a glance" surface="card">
       {requirements.total === 0 ? (
         <EmptyState kind="empty" size="inline" heading="No requirements yet">
-          Nothing to cover.
+          Nothing to cover, so coverage is not measurable yet.
         </EmptyState>
       ) : (
         <Cluster gap="24" align="center">
           <Donut
             size={112}
+            legend
             segments={[
               { label: 'Musts covered', value: requirements.mustsCovered, color: SERIES.done },
               { label: 'Musts uncovered', value: uncoveredMusts, color: SERIES.warning },
             ]}
-            label={`${String(percent)}%`}
-            caption="Musts covered"
+            label={percent === null ? '—' : `${String(percent)}%`}
+            caption={percent === null ? 'No Musts yet' : 'Musts covered'}
           />
           <Grid minItemWidth="sm" className="fm-glance">
             <StatCard
               label="Requirements"
               value={requirements.total}
-              detail={`${String(requirements.musts)} of them Must`}
+              detail={`${String(requirements.musts)} of them Must · ${String(requirements.covered)} covered`}
+              href={register}
+              action="Open the register"
             />
             <StatCard
               label="Uncovered Musts"
-              value={uncoveredMusts}
-              tone={uncoveredMusts === 0 ? 'success' : 'warning'}
-              detail={uncoveredMusts === 0 ? 'Every Must is cited' : 'No task cites them'}
+              value={requirements.musts === 0 ? '—' : uncoveredMusts}
+              signal={readCount(uncoveredMusts, { measured: requirements.musts > 0 })}
+              detail={
+                requirements.musts === 0
+                  ? 'No Must requirements recorded'
+                  : uncoveredMusts === 0
+                    ? `All ${plural(requirements.musts, 'Must is', 'Musts are')} cited by a task`
+                    : `${String(uncoveredMusts)} of ${String(requirements.musts)} Musts have no task citing them`
+              }
+              href={`${register}?uncovered=true&priority=M`}
+              action="Open the uncovered Musts"
             />
             <StatCard
               label="No acceptance test"
               value={withoutAcceptanceTest.length}
-              tone={withoutAcceptanceTest.length === 0 ? 'success' : 'neutral'}
-              detail="Nothing says what done means"
+              signal={readCount(withoutAcceptanceTest.length, { measured: true })}
+              detail={`Of ${noun(requirements.total)}, nothing says what done means`}
+              href={`/projects/${code}/register`}
+              action="Open the register"
             />
             <StatCard
               label="EARS warnings"
               value={earsWarnings.length}
-              tone={earsWarnings.length === 0 ? 'success' : 'neutral'}
+              signal={readCount(earsWarnings.length, { measured: true })}
+              detail={`Of ${noun(requirements.total)} do not read as EARS — the lint warns, never blocks`}
+              href={`${register}?earsLint=warned`}
+              action="Open the warned requirements"
+            />
+            <StatCard
+              label="Tasks citing nothing"
+              value={readValue(citing, tasksWithoutRequirements.length)}
+              signal={citing}
               detail={
-                tasksWithoutRequirements.length === 0
-                  ? 'The lint warns, never blocks'
-                  : `${String(tasksWithoutRequirements.length)} tasks cite nothing`
+                taskCount === 0
+                  ? 'No tasks recorded yet'
+                  : taskCount === null
+                    ? 'The number of tasks could not be read, so this is not measured'
+                    : `Of ${plural(taskCount, 'task', 'tasks')}, ${String(tasksWithoutRequirements.length)} satisfy no requirement`
               }
+              href={`/projects/${code}/drift`}
+              action="Open drift"
             />
           </Grid>
         </Cluster>

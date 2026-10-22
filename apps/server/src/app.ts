@@ -19,14 +19,15 @@ import { pushRoutes } from './routes/push.js';
 import { createVerifier, protectedResourceMetadata, type Verifier } from './auth/resource-server.js';
 import { authRoutes } from './routes/auth.js';
 import { oidcRoutes } from './routes/oidc.js';
-import { projectRoutes } from './routes/projects.js';
+import { projectRoutes, taskAcrossRoutes } from './routes/projects.js';
 import { briefRoutes } from './routes/brief.js';
 import { searchRoutes } from './routes/search.js';
 import { coverageRoutes } from './routes/coverage.js';
 import { recordRoutes } from './routes/record.js';
 import { findingRoutes, projectFindingRoutes } from './routes/findings.js';
 import { operationsRoutes } from './routes/operations.js';
-import { realityRoutes } from './routes/reality.js';
+import { attributionAcrossRoutes, realityRoutes } from './routes/reality.js';
+import { taskRealityRoutes } from './routes/taskReality.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { buildRegistry, type JobRegistry } from './jobs/index.js';
 import { linkRoutes } from './routes/links.js';
@@ -150,7 +151,12 @@ export function createApp({ config, db, oidc = null, registry, verifier: given }
   mount(app, '/api/projects', realityRoutes(db, jobs));
   mount(app, '/api/projects', projectFindingRoutes(db));
   mount(app, '/api/projects', screenRoutes(db, config));
+  // The reality behind one task or requirement — commits, CI, deploys (FRM-T-18.8).
+  mount(app, '/api', taskRealityRoutes(db));
   mount(app, '/api', findingRoutes(db));
+  // Cross-project triage reads (FRM-T-18.7): proposed attributions and blocked tasks in a scope.
+  mount(app, '/api', attributionAcrossRoutes(db));
+  mount(app, '/api', taskAcrossRoutes(db));
   mount(app, '/api', operationsRoutes(db, config));
 
   /** Liveness: the process is up. Deliberately touches nothing else. */

@@ -126,6 +126,9 @@ test.describe('every destination is reachable on a phone', () => {
  * Table's sort header, PageHeader's back link, Link, AppShellBrand — are reported to the design
  * system rather than overridden here by selecting its class names. A link inside a sentence is
  * exempt, as WCAG 2.5.8 exempts it: it cannot grow without breaking the line it sits in.
+ *
+ * This is the quick check over the controls Foreman's own classes name. `touch-targets.spec.ts`
+ * (FRM-REQ-249) is the gate over every screen and every interactive element, the library's included.
  */
 test.describe('a thumb, not a cursor', () => {
   test.use({ viewport: PHONE, hasTouch: true, isMobile: true });
@@ -201,6 +204,104 @@ test.describe('no sideways scroll at 390', () => {
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
       expect(overflow, `${path} scrolls sideways by ${String(overflow)}px`).toBeLessThanOrEqual(0);
+    });
+  }
+});
+
+/**
+ * FRM-REQ-249: below 768px a table keeps each row's title, status and primary control, folds the
+ * rest into a sub-line, and does not scroll sideways; a stat is one line; and the lifecycle badge
+ * is a pill on the phone's ground in both themes (MOB-01, MOB-03, MOB-05, MOB-07, MOB-11).
+ */
+test.describe('tables, stats and badges on a phone', () => {
+  test.use({ viewport: PHONE });
+
+  // Members is a board screen, absent on a solo Foreman (FRM-ADR-016), so it is not reachable here.
+  const TABLES = [
+    ...['requirements', 'register', 'risks', 'glossary', 'audits', 'documents', 'screens'].map((section) => `/projects/EXMP/${section}`),
+    '/system',
+  ];
+
+  async function phaseWithTasks(page: Page): Promise<string> {
+    const res = await page.request.get('/api/projects/EXMP/phases');
+    expect(res.ok(), await res.text()).toBe(true);
+    const items = ((await res.json()) as { items: { humanId: string; tasks: { total: number } }[] }).items;
+    const phase = items.find((p) => p.tasks.total > 0) ?? items[0];
+    expect(phase, 'the example project has a phase').toBeDefined();
+    return phase?.humanId ?? '';
+  }
+
+  for (const path of TABLES) {
+    test(`${path}: no table scrolls sideways`, async ({ page }) => {
+      await signIn(page);
+      await page.goto(path);
+      await page.waitForLoadState('networkidle');
+      const widths = await page.evaluate(() => [
+        document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        ...[...document.querySelectorAll('.d3-tbl-scroll')].map((el) => el.scrollWidth - el.clientWidth),
+      ]);
+      expect(widths.length, 'the screen draws a table').toBeGreaterThan(1);
+      expect(widths, `${path} scrolls sideways`).toEqual(widths.map(() => 0));
+    });
+  }
+
+  test('a phase keeps the task and its status select, and folds the rest under the title', async ({ page }) => {
+    await signIn(page);
+    await page.goto(`/projects/EXMP/phases/${await phaseWithTasks(page)}`);
+    await page.waitForLoadState('networkidle');
+
+    const table = page.getByRole('table', { name: /^Tasks in / });
+    await expect(table.getByRole('columnheader')).toHaveText([/^Task/, /^Status/]);
+    const select = table.getByRole('combobox', { name: /^Status of / }).first();
+    await expect(select).toBeVisible();
+    const box = await select.boundingBox();
+    expect(box, 'the status select has a box').not.toBeNull();
+    // On screen, not off the right edge of a box that scrolls.
+    if (box !== null) expect(box.x + box.width).toBeLessThanOrEqual(PHONE.width);
+    // What folded is still there, in the sub-line.
+    await expect(table.locator('.fm-subline').first()).toContainText('Satisfies');
+  });
+
+  test('a stat is one line: its label and its figure share a row', async ({ page }) => {
+    await signIn(page);
+    await page.goto('/projects/EXMP/requirements');
+    await page.waitForLoadState('networkidle');
+    const rows = await page.evaluate(() =>
+      [...document.querySelectorAll('.fm-stat')].map((card) => {
+        const label = card.querySelector('.fm-stat__label')?.getBoundingClientRect();
+        const value = card.querySelector('.fm-stat__value')?.getBoundingClientRect();
+        const box = card.getBoundingClientRect();
+        return {
+          height: box.height,
+          apart: label === undefined || value === undefined ? 999 : Math.abs(label.top + label.height / 2 - (value.top + value.height / 2)),
+        };
+      }),
+    );
+    expect(rows.length, 'the screen draws stat cards').toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.apart).toBeLessThanOrEqual(12);
+      expect(row.height).toBeLessThanOrEqual(72);
+    }
+  });
+
+  for (const theme of ['light', 'dark'] as const) {
+    test(`the lifecycle badge is not the page ground (${theme})`, async ({ page }) => {
+      await signIn(page);
+      await page.goto('/projects/EXMP');
+      await page.waitForLoadState('networkidle');
+      await page.evaluate((mode) => { document.documentElement.setAttribute('data-theme', mode); }, theme);
+
+      const badge = page.locator('.fm-badge').filter({ hasText: /^(planned|scaffolded|building|deployed|parked|scrapped)$/ }).first();
+      await expect(badge).toBeVisible();
+      const look = await badge.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const ground = getComputedStyle(document.querySelector('main') ?? document.body).backgroundColor;
+        return { background: style.backgroundColor, border: style.borderTopColor, borderWidth: style.borderTopWidth, ground };
+      });
+      expect(look.background, 'its fill is not the ground it sits on').not.toBe(look.ground);
+      // And an outline, so a fill that is close is still a pill.
+      expect(look.borderWidth).not.toBe('0px');
+      expect(look.border).not.toBe(look.ground);
     });
   }
 });

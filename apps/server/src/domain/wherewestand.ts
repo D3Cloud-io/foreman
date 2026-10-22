@@ -53,3 +53,42 @@ export async function phaseInFlight(db: Db, projectId: string) {
     orderBy: { sortOrder: 'asc' },
   });
 }
+
+/** One phase's task counts: closed as done, closed as cancelled, and every live task in it. */
+export interface PhaseProgress {
+  readonly done: number;
+  readonly cancelled: number;
+  readonly total: number;
+}
+
+/**
+ * Task counts for every phase of a project, from the whole set (FRM-REQ-242).
+ *
+ * One grouped count in the database, so a project of any size answers in one read. The browser
+ * used to count the tasks of a single page capped at 200 — Bindery has 212, and Phase 9 read as
+ * "No tasks" while the overview said 8 of 12. This is now the one implementation: the brief's
+ * active phase and the Phases list both read it, `only` narrowing it to a single phase. A phase
+ * with no tasks has no row in the grouping, so it is absent from the map; read it as zeros.
+ */
+export async function phaseProgress(
+  db: Db,
+  projectId: string,
+  only?: string,
+): Promise<Map<string, PhaseProgress>> {
+  const rows = await db.task.groupBy({
+    by: ['phaseId', 'status'],
+    where: { projectId, deletedAt: null, phaseId: only ?? { not: null } },
+    _count: { _all: true },
+  });
+
+  const progress = new Map<string, { done: number; cancelled: number; total: number }>();
+  for (const row of rows) {
+    if (row.phaseId === null) continue;
+    const entry = progress.get(row.phaseId) ?? { done: 0, cancelled: 0, total: 0 };
+    entry.total += row._count._all;
+    if (row.status === 'done') entry.done += row._count._all;
+    if (row.status === 'cancelled') entry.cancelled += row._count._all;
+    progress.set(row.phaseId, entry);
+  }
+  return progress;
+}

@@ -5,17 +5,25 @@
  * is no CORS, no token in `localStorage`, and nothing for a script on the page to steal.
  */
 
-import type {
-  Group,
-  GroupAccent,
-  GroupDetail,
-  GroupListing,
-  Screen,
-  ScreenDetail,
-  ScreenProposalCreate,
-  ScreenVerdict,
-  ScreenVerdictKind,
-  ScreenVersion,
+import {
+  AUDIT_EVENT_ID_HEADER,
+  AUDIT_EVENT_IDS_HEADER,
+  type AuditEventsResponse,
+  type AuditEventUndoability,
+  type BriefDeployed,
+  type BriefEvidence,
+  type Group,
+  type GroupAccent,
+  type GroupDetail,
+  type GroupListing,
+  type ProposedAttributionsResponse,
+  type Screen,
+  type ScreenDetail,
+  type ScreenProposalCreate,
+  type ScreenVerdict,
+  type ScreenVerdictKind,
+  type ScreenVersion,
+  type TasksAcrossResponse,
 } from '@foreman/shared';
 
 export class ApiError extends Error {
@@ -40,7 +48,11 @@ export class ApiError extends Error {
  * only in the return position is an unchecked cast wearing a signature.
  */
 async function requestWithEtag(path: string): Promise<{ body: unknown; etag: string | null }> {
-  const res = await fetch(path, { credentials: 'same-origin' });
+  // `no-store`: the version is the row's `updatedAt`, not a hash of the body, so a conditional read
+  // the browser makes on its own can be answered 304 with a body that is no longer what is stored —
+  // and the editor would then save that body back over the change (FRM-T-18.4). What this reads is
+  // what the next write is checked against, so it is always read whole.
+  const res = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
   const text = await res.text();
   const body: unknown = text.length > 0 ? JSON.parse(text) : undefined;
 
@@ -52,6 +64,20 @@ async function requestWithEtag(path: string): Promise<{ body: unknown; etag: str
     throw new ApiError(res.status, message, body);
   }
   return { body, etag: res.headers.get('etag') };
+}
+
+/**
+ * The audit events a DELETE recorded. A 204 has no body, so the server names them in
+ * `Audit-Event-Ids` (comma-separated, the record's own first), with the first alone in
+ * `Audit-Event-Id` for a client that reads only that (FRM-T-18.3).
+ */
+export function auditIdsFromHeaders(headers: Pick<Headers, 'get'>): string[] {
+  const all = headers.get(AUDIT_EVENT_IDS_HEADER);
+  if (all !== null && all.trim() !== '') {
+    return all.split(',').map((id) => id.trim()).filter((id) => id.length > 0);
+  }
+  const own = headers.get(AUDIT_EVENT_ID_HEADER);
+  return own === null || own.trim() === '' ? [] : [own.trim()];
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -71,8 +97,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     credentials: 'same-origin',
   });
 
-  // 204 has no body to parse, and every caller of a 204 route asks for `undefined`.
-  if (res.status === 204) return undefined as T;
+  // 204 has no body to parse. What it can carry is the audit events a DELETE recorded, in its
+  // headers — so every caller of a 204 route gets those, and nothing else.
+  if (res.status === 204) return { auditEventIds: auditIdsFromHeaders(res.headers) } as T;
 
   const text = await res.text();
   const body: unknown = text.length > 0 ? JSON.parse(text) : undefined;
@@ -105,7 +132,8 @@ export const api = {
       // "no body" from "a body that is undefined", and `RequestInit` accepts only the first.
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
-  del: (path: string) => request<undefined>(path, { method: 'DELETE' }),
+  /** A DELETE answers 204; what comes back is the audit events its headers named. */
+  del: (path: string) => request<Deleted>(path, { method: 'DELETE' }),
   /** One file as multipart, in the field the blob route reads (FRM-REQ-190). */
   upload: <T>(path: string, field: string, file: Blob) => {
     const form = new FormData();
@@ -184,6 +212,15 @@ export interface PortfolioRow {
   openCriticals: number;
   /** `unknown` is a third state, and renders grey rather than green (S-04). */
   ci: { conclusion: string | null; unknown: boolean };
+  /**
+   * CI in four words (`other` is any run that neither passed nor failed; `ci.conclusion` says which), served so Home and `foreman_portfolio` answer identically (FRM-T-18.6).
+   * Optional on the type only so a fixture that predates it still compiles; the server always sends it.
+   */
+  ciState?: 'passing' | 'failing' | 'other' | 'never';
+  /** The first thing to pick up in the active phase, or null (FRM-REQ-245). */
+  nextTask?: { humanId: string; title: string } | null;
+  /** What is running; `ahead` is the commits since it, or null when its SHA is not a known commit. */
+  deployed?: { sha: string; at: string; ahead: number | null } | null;
   /** Proposals awaiting review — not drift, so not inside it. */
   unconfirmedAttributions: number;
   /** `counts` is the drift engine's own breakdown and sums to `total`. */
@@ -191,6 +228,11 @@ export interface PortfolioRow {
   lastActivityAt: string | null;
   /** Its group, or null for Ungrouped (FRM-T-17.2). */
   group: ProjectGroupRef | null;
+  /**
+   * Seeded to show a full plan, not real work (FRM-T-18.9): labelled "Sample", left out of Home's
+   * figures, and removable. Optional on the type only so older fixtures compile; the server sends it.
+   */
+  sample?: boolean;
 }
 
 /** One section of the grouped portfolio: a group, and its projects' rows in the group's order. */
@@ -219,6 +261,25 @@ export interface ProjectDetail {
   /** The group it is in, or null for Ungrouped (FRM-REQ-223). */
   group: ProjectGroupRef | null;
   counts: { phases: number; requirements: number; tasks: number; openFindings: number };
+  /** A seeded sample, not real work (FRM-T-18.9). */
+  sample?: boolean;
+}
+
+/** What `POST /api/projects` takes from the console's New project (FRM-T-18.9). */
+export interface ProjectCreateInput {
+  /** Typed by the person, never derived from the name: immutable once created (ADR-008). */
+  code: string;
+  name: string;
+  pitch?: string;
+  /** `GRP-001` or a slug, or null for Ungrouped. */
+  group?: string | null;
+}
+
+/** What the create answers: the project row, and the events it recorded. */
+export interface CreatedProject {
+  code: string;
+  name: string;
+  auditEventIds: string[];
 }
 
 /** A project's group, as `GET /api/projects/:code` names it. */
@@ -240,6 +301,38 @@ export interface GroupInput {
 /** A write's answer with the audit events it recorded — what `POST /api/undo/:id` reverses. */
 export type Audited<T> = T & { auditEventIds: string[] };
 
+/** What a DELETE (204) gives back: the events it recorded, read from its headers. */
+export interface Deleted {
+  auditEventIds: string[];
+}
+
+/** One status that moved because something beneath it did (ADR-018, `RolledUp` on the server). */
+export interface RolledUp {
+  humanId: string;
+  kind: 'phase' | 'project';
+  from: string;
+  to: string;
+  /** Worked out and deliberately not made — a backfill holding a closed phase. Not a move. */
+  held?: true;
+}
+
+/** What a task or phase write answers with: the row, what rolled up, and the events for both. */
+export interface StatusWrite {
+  humanId: string;
+  status: string;
+  blockedReason?: string | null;
+  rolledUp?: RolledUp[];
+  auditEventIds: string[];
+}
+
+/** `confirm`/`reject` on an attribution (FRM-REQ-105): which commit and task, and the event. */
+export interface AttributionWrite {
+  commitSha: string;
+  taskHumanId: string;
+  confirmed: boolean;
+  auditEventIds: string[];
+}
+
 /** A write that moved or reordered: the listing after it, and the events that undo it. */
 export type GroupWrite = GroupListing & { auditEventIds: string[] };
 
@@ -260,6 +353,20 @@ export interface PhaseRow {
   status: string;
   exitDemo: string | null;
   size: string | null;
+}
+
+/** A phase with its task counts, from the whole set (FRM-REQ-242). */
+export interface PhaseProgressRow extends PhaseRow {
+  tasks: { done: number; cancelled: number; total: number };
+}
+
+/** `GET /api/findings`: `total` counts the matching set, `counts` it by severity (FRM-REQ-242). */
+export interface FindingsPage {
+  items: FindingRow[];
+  nextCursor: string | null;
+  total: number;
+  /** The set ignoring the severity filter, so the chips keep their numbers when one is chosen. */
+  counts: { critical: number; high: number; medium: number; low: number };
 }
 
 export interface TaskRow {
@@ -313,13 +420,84 @@ export interface Brief {
     exitDemo: string | null;
     tasks: { done: number; cancelled: number; total: number };
   } | null;
-  nextTasks: { humanId: string; title: string; status: string; size: string | null }[];
+  nextTasks: {
+    humanId: string;
+    title: string;
+    status: string;
+    size: string | null;
+    /** The requirements it satisfies, by human ID. */
+    requirements?: string[];
+  }[];
   blocked: { humanId: string; title: string; reason: string | null }[];
+  /** Every open critical and high finding; `openCriticals` lists at most five of them. */
+  openCriticalTotal?: number;
   openCriticals: { humanId: string; severity: string; title: string; location: string | null }[];
   ci: { conclusion: string | null; commitSha: string | null; at: string | null; unknown: boolean };
   unconfirmedAttributions: number;
+  /**
+   * How much of the active phase's done work has a confirmed commit (FRM-REQ-247). Optional on the
+   * type only so a fixture that predates it still compiles; the server always sends it.
+   */
+  evidence?: BriefEvidence;
+  /** What is running, and how far main is ahead of it; null when nothing is recorded as deployed. */
+  deployed?: BriefDeployed | null;
   drift: { counts: Record<DriftItem['category'], number>; total: number };
   recentCommits: { sha: string; message: string; at: string }[];
+}
+
+/** One requirement of the exit gate that is not met, exactly as `GET …/phases/:id/gate` words it. */
+export interface GateFailure {
+  kind:
+    | 'no-exit-demo'
+    | 'uncovered-must'
+    | 'no-acceptance-test'
+    | 'unfinished-task'
+    | 'open-critical'
+    | 'screen-unreviewed'
+    | 'screen-drifted';
+  humanId: string;
+  detail: string;
+}
+
+/** What bears on a task, or on every task satisfying a requirement (FRM-REQ-247). */
+export interface Reality {
+  humanId: string;
+  commits: {
+    sha: string;
+    message: string;
+    committedAt: string;
+    repo: string;
+    task: string;
+    source: string;
+    confidence: number;
+    confirmed: boolean;
+    evidence: unknown;
+    /** The deployment that shipped it, or null. */
+    shippedIn: string | null;
+  }[];
+  checks: {
+    commitSha: string;
+    name: string;
+    conclusion: string | null;
+    completedAt: string | null;
+    detailsUrl: string | null;
+  }[];
+  deployments: {
+    id: string;
+    environment: string;
+    image: string;
+    imageSha: string;
+    deployedAt: string;
+    via: 'declared' | 'image';
+  }[];
+  drift: { category: DriftItem['category']; detail: string }[];
+}
+
+/** What a requirement write answers with: the row, and the events that undo it. */
+export interface RequirementWrite {
+  humanId: string;
+  priority: string;
+  auditEventIds: string[];
 }
 
 export interface EntityResult {
@@ -380,10 +558,11 @@ export interface ScopeOfWork {
   generatedAt: string;
 }
 
+/** The server's exit gate for a phase: the one `exitGate()` the rollup and the drift engine ask. */
 export interface GateResult {
   phase: string;
   passed: boolean;
-  failures: { kind: string; humanId: string; detail: string }[];
+  failures: GateFailure[];
 }
 
 export interface DocumentSection {
@@ -635,6 +814,12 @@ export interface DecisionRow {
   lockedAt: string | null;
 }
 
+/** A decision accepting drift, linked to what it accepts by the record and the category (FRM-T-18.15). */
+export interface DriftAcceptanceRow extends DecisionRow {
+  acceptsDriftSubject: string;
+  acceptsDriftCategory: string;
+}
+
 export interface TermRow {
   id: string;
   term: string;
@@ -764,6 +949,8 @@ export interface FindingRow {
   foundIn: string | null;
   locations: { path: string; lines: string | null }[];
   fixedCommitSha: string | null;
+  /** Why it will not be fixed — set only while the status is `wont_fix` (FRM-T-18.15). */
+  wontFixReason: string | null;
 }
 
 export interface FindingDetail {
@@ -782,6 +969,8 @@ export interface FindingDetail {
   observedMd: string | null;
   recommendationMd: string | null;
   fixedCommitSha: string | null;
+  /** Why it will not be fixed — its own field, never a line in the recommendation (FRM-T-18.15). */
+  wontFixReason: string | null;
   project: { code: string; name: string };
   audit: { humanId: string; kind: string; runDate: string; verdict: string | null } | null;
   locations: { path: string; lines: string | null; note: string | null }[];
@@ -880,7 +1069,8 @@ export interface HealthReport {
   problems: string[];
 }
 
-interface Page<T> {
+/** One page of a listing — every list route's shape. */
+export interface Page<T> {
   items: T[];
   nextCursor: string | null;
   total: number | null;
@@ -893,7 +1083,27 @@ export const foreman = {
       group === null ? '/api/portfolio' : `/api/portfolio?${new URLSearchParams({ group }).toString()}`,
     ),
   project: (code: string) => api.get<ProjectDetail>(`/api/projects/${code}`),
-  phases: (code: string) => api.get<Page<PhaseRow>>(`/api/projects/${code}/phases`),
+  /** New project (FRM-T-18.9). The code is the person's, checked against `ProjectCode` first. */
+  createProject: (body: ProjectCreateInput) => api.post<CreatedProject>('/api/projects', body),
+  /**
+   * Every project's code and name, unscoped — what a new code must not repeat (FRM-T-18.9). Paged
+   * through to the end: the portfolio a screen holds may be narrowed to one group.
+   */
+  projectCodes: async (): Promise<{ code: string; name: string }[]> => {
+    const codes: { code: string; name: string }[] = [];
+    let cursor: string | null = null;
+    do {
+      const page: Page<{ code: string; name: string }> = await api.get(
+        `/api/projects?limit=200${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`,
+      );
+      codes.push(...page.items.map(({ code, name }) => ({ code, name })));
+      cursor = page.nextCursor;
+    } while (cursor !== null && codes.length < 10_000);
+    return codes;
+  },
+  /** Remove a sample project — a soft delete; the server refuses a real one (FRM-T-18.9). */
+  removeSampleProject: (code: string) => api.del(`/api/projects/${encodeURIComponent(code)}`),
+  phases: (code: string) => api.get<Page<PhaseProgressRow>>(`/api/projects/${code}/phases`),
   tasks: (code: string, phaseHumanId?: string) =>
     api.get<Page<TaskRow>>(
       `/api/projects/${code}/tasks?limit=200${phaseHumanId === undefined ? '' : `&phase=${phaseHumanId}`}`,
@@ -925,7 +1135,7 @@ export const foreman = {
     body: { bodyMd: string; heading?: string; note?: string },
     etag: string | null,
   ) =>
-    api.put<DocumentSection>(
+    api.put<Audited<DocumentSection>>(
       `/api/projects/${code}/documents/${id}/sections/${key}`,
       body,
       etag,
@@ -947,12 +1157,12 @@ export const foreman = {
   allIdeas: (status?: string) =>
     api.get<Page<IdeaRow>>(`/api/ideas${status === undefined ? '' : `?status=${status}`}`),
   createIdea: (code: string, body: { title: string; body?: string }) =>
-    api.post<IdeaRow>(`/api/projects/${code}/ideas`, body),
+    api.post<Audited<IdeaRow>>(`/api/projects/${code}/ideas`, body),
   updateIdea: (
     code: string,
     humanId: string,
     body: { title?: string; body?: string; status?: string; reason?: string },
-  ) => api.patch<IdeaRow>(`/api/projects/${code}/ideas/${humanId}`, body),
+  ) => api.patch<Audited<IdeaRow>>(`/api/projects/${code}/ideas/${humanId}`, body),
   deleteIdea: (code: string, humanId: string) =>
     api.del(`/api/projects/${code}/ideas/${humanId}`),
 
@@ -987,11 +1197,11 @@ export const foreman = {
   // No project in any of these paths, because a project idea has none. That is the feature.
   guidelines: () => api.get<Page<GuidelineRow>>('/api/guidelines'),
   createGuideline: (body: GuidelineInput & Partial<GuidelineScopeInput>) =>
-    api.post<GuidelineRow>('/api/guidelines', body),
+    api.post<Audited<GuidelineRow>>('/api/guidelines', body),
   updateGuideline: (
     humanId: string,
     body: Partial<GuidelineInput> & { status?: GuidelineRow['status'] } & Partial<GuidelineScopeInput>,
-  ) => api.patch<GuidelineRow>(`/api/guidelines/${humanId}`, body),
+  ) => api.patch<Audited<GuidelineRow>>(`/api/guidelines/${humanId}`, body),
   deleteGuideline: (humanId: string) => api.del(`/api/guidelines/${humanId}`),
   projectIdeas: (status?: string) =>
     api.get<Page<ProjectIdeaRow>>(
@@ -1001,7 +1211,7 @@ export const foreman = {
     api.post<ProjectIdeaRow>('/api/project-ideas', body),
   projectIdea: (humanId: string) => api.get<ProjectIdeaDetail>(`/api/project-ideas/${humanId}`),
   updateProjectIdea: (humanId: string, body: ProjectIdeaPatch) =>
-    api.patch<ProjectIdeaDetail>(`/api/project-ideas/${humanId}`, body),
+    api.patch<Audited<ProjectIdeaDetail>>(`/api/project-ideas/${humanId}`, body),
   deleteProjectIdea: (humanId: string) => api.del(`/api/project-ideas/${humanId}`),
   convertProjectIdea: (humanId: string, body: { code: string; name?: string }) =>
     api.post<{
@@ -1032,6 +1242,30 @@ export const foreman = {
     api.patch<unknown>(`/api/projects/${code}`, { group }),
   /** Reverses one audited mutation (409 when the state has moved on since). */
   undo: (auditEventId: string) => api.post<unknown>(`/api/undo/${auditEventId}`),
+  /** One record's audit events, newest first, each saying whether it can be undone (FRM-REQ-243). */
+  auditEvents: (entity: string, limit = 50) =>
+    api.get<AuditEventsResponse>(
+      `/api/audit-events?${new URLSearchParams({ entity, limit: String(limit) }).toString()}`,
+    ),
+  /** The verdict on one event — for those beyond the newest ten, which a history leaves unchecked. */
+  auditEventUndoable: (id: string) =>
+    api.get<AuditEventUndoability>(`/api/audit-events/${encodeURIComponent(id)}/undoable`),
+  /** A task's own fields, by its human ID — status included, with what rolled up (ADR-018). */
+  updateTask: (
+    code: string,
+    humanId: string,
+    body: { status?: string; blockedReason?: string; size?: string; phaseId?: string | null },
+  ) => api.patch<StatusWrite>(`/api/projects/${code}/tasks/${humanId}`, body),
+  /** A requirement's priority or phase, in place (FRM-REQ-247). */
+  updateRequirement: (
+    code: string,
+    humanId: string,
+    body: { priority?: string; phaseId?: string | null },
+  ) => api.patch<RequirementWrite>(`/api/projects/${code}/requirements/${humanId}`, body),
+  /** The commits, CI results and deployments behind a task. */
+  taskReality: (humanId: string) => api.get<Reality>(`/api/tasks/${humanId}/reality`),
+  /** The same for a requirement, over every task that satisfies it. */
+  requirementReality: (humanId: string) => api.get<Reality>(`/api/requirements/${humanId}/reality`),
   search: (q: string, types: string[], project: string | null, group: string | null = null) => {
     const query = new URLSearchParams({ q, limit: '50' });
     if (types.length > 0) query.set('types', types.join(','));
@@ -1042,9 +1276,49 @@ export const foreman = {
   commits: (code: string, attributed: 'none' | 'proposed' | 'confirmed' | 'any' = 'any') =>
     api.get<Page<CommitRow>>(`/api/projects/${code}/commits?attributed=${attributed}&limit=100`),
   confirmAttribution: (code: string, sha: string, task: string) =>
-    api.post<{ confirmed: boolean }>(`/api/projects/${code}/attributions/${sha}/confirm`, { task }),
+    api.post<AttributionWrite>(`/api/projects/${code}/attributions/${sha}/confirm`, { task }),
   rejectAttribution: (code: string, sha: string, task: string) =>
-    api.post<{ confirmed: boolean }>(`/api/projects/${code}/attributions/${sha}/reject`, { task }),
+    api.post<AttributionWrite>(`/api/projects/${code}/attributions/${sha}/reject`, { task }),
+  /** Attributions nobody has ruled on, across a scope, newest first (FRM-T-18.7). */
+  attributionsAcross: (group: string | null = null, project: string | null = null) =>
+    api.get<ProposedAttributionsResponse>(
+      `/api/attributions?${new URLSearchParams({
+        status: 'proposed',
+        limit: '200',
+        ...(group === null ? {} : { group }),
+        ...(project === null ? {} : { project }),
+      }).toString()}`,
+    ),
+  /** Tasks in one status across a scope — blocked unless asked otherwise (FRM-T-18.7). */
+  tasksAcross: (status = 'blocked', group: string | null = null, project: string | null = null) =>
+    api.get<TasksAcrossResponse>(
+      `/api/tasks?${new URLSearchParams({
+        status,
+        limit: '200',
+        ...(group === null ? {} : { group }),
+        ...(project === null ? {} : { project }),
+      }).toString()}`,
+    ),
+  /** A project's decisions, for the drift a decision accepted (FRM-T-18.7). */
+  decisionsUpTo: (code: string, limit = 200) =>
+    api.get<Page<DecisionRow>>(`/api/projects/${code}/decisions?limit=${String(limit)}`),
+  /**
+   * Every decision in a project that accepts drift, read by its link and followed page by page to
+   * the end — no cap (FRM-T-18.15).
+   */
+  driftAcceptances: async (code: string): Promise<DriftAcceptanceRow[]> => {
+    const all: DriftAcceptanceRow[] = [];
+    let cursor: string | null = null;
+    do {
+      const query = new URLSearchParams({ acceptsDrift: '1', limit: '200', ...(cursor === null ? {} : { cursor }) });
+      const page: Page<DriftAcceptanceRow> = await api.get<Page<DriftAcceptanceRow>>(
+        `/api/projects/${code}/decisions?${query.toString()}`,
+      );
+      all.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+    return all;
+  },
   ci: (code: string) => api.get<CiState>(`/api/projects/${code}/ci`),
   cadence: (code: string) => api.get<Cadence>(`/api/projects/${code}/cadence`),
   deployments: (code: string) => api.get<Page<DeploymentRow>>(`/api/projects/${code}/deployments`),
@@ -1072,19 +1346,7 @@ export const foreman = {
     for (const [key, value] of Object.entries(params)) {
       if (value !== '') query.set(key, value);
     }
-    return api.get<Page<FindingRow>>(`/api/findings?${query.toString()}`);
-  },
-  /**
-   * Open critical findings across every project — the sidebar's needs-you count (FRM-T-16.4).
-   *
-   * Read from the page's `total`, but not with `limit=1`: `/api/findings` answers `total` as the
-   * number of rows it returned after the limit, so a one-row page always says 0 or 1. The API's
-   * ceiling, 200, is past the badge's own (99+), so the count is exact wherever it is shown. A
-   * true count needs the route to count before it limits — a server change, not made here.
-   */
-  openCriticalCount: async () => {
-    const page = await api.get<Page<{ humanId: string }>>('/api/findings?severity=critical&status=open&limit=200');
-    return page.total ?? page.items.length;
+    return api.get<FindingsPage>(`/api/findings?${query.toString()}`);
   },
   finding: (humanId: string) => api.get<FindingDetail>(`/api/findings/${humanId}`),
   recurrences: (humanId: string) =>

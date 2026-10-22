@@ -221,7 +221,7 @@ export async function createGuideline(db: Db, actor: Actor, input: GuidelineCrea
       await writeScope(tx, guideline.id, input.appliesTo, input.groups);
     }
     const created = await readView(tx, guideline.id);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'guideline',
@@ -229,7 +229,7 @@ export async function createGuideline(db: Db, actor: Actor, input: GuidelineCrea
       entityHumanId: created.humanId,
       after: created,
     });
-    return created;
+    return { ...created, auditEventIds: [event] };
   });
 }
 
@@ -261,7 +261,7 @@ export async function updateGuideline(
       await writeScope(tx, before.id, input.appliesTo, input.groups);
     }
     const after = await readView(tx, before.id);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'guideline',
@@ -270,7 +270,7 @@ export async function updateGuideline(
       before,
       after,
     });
-    return after;
+    return { ...after, auditEventIds: [event] };
   });
 }
 

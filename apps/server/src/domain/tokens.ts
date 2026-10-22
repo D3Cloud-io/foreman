@@ -16,6 +16,11 @@ import { NotFound } from './errors.js';
 
 export interface IssuedToken {
   readonly id: string;
+  /**
+   * The audit event that issued it (FRM-REQ-243). A token is not undoable — `api_token` is not in
+   * `UNDOABLE` — so its history says why; revoking it is the way back.
+   */
+  readonly auditEventIds: string[];
   readonly name: string;
   readonly prefix: string;
   readonly scopes: readonly string[];
@@ -46,7 +51,7 @@ export async function issueToken(
       },
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'api_token',
@@ -56,17 +61,28 @@ export async function issueToken(
       after: { name: created.name, scopes: created.scopes, prefix },
     });
 
-    return { id: created.id, name: created.name, prefix, scopes: created.scopes, token };
+    return {
+      id: created.id,
+      auditEventIds: [event],
+      name: created.name,
+      prefix,
+      scopes: created.scopes,
+      token,
+    };
   });
 }
 
-export async function revokeToken(db: Db, actor: Actor, id: string): Promise<void> {
+export async function revokeToken(
+  db: Db,
+  actor: Actor,
+  id: string,
+): Promise<{ auditEventIds: string[] }> {
   const before = await db.apiToken.findUnique({ where: { id } });
   if (before === null || before.revokedAt !== null) throw new NotFound(`token ${id}`);
 
-  await db.$transaction(async (tx) => {
+  return db.$transaction(async (tx) => {
     const revoked = await tx.apiToken.update({ where: { id }, data: { revokedAt: new Date() } });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'delete',
       entityType: 'api_token',
@@ -75,6 +91,7 @@ export async function revokeToken(db: Db, actor: Actor, id: string): Promise<voi
       before,
       after: { revokedAt: revoked.revokedAt },
     });
+    return { auditEventIds: [event] };
   });
 }
 

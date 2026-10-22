@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type SyntheticEvent } from 'react';
+import { useMemo, useState, type SyntheticEvent } from 'react';
 import {
   Alert,
   Button,
@@ -20,8 +20,9 @@ import {
   useToast,
 } from '@d3cloud/ui';
 import type { GroupListing } from '@foreman/shared';
-import { foreman, ApiError, type GuidelineRow, type ProjectIdeaRow } from '../lib/api';
+import { foreman, type GuidelineRow, type ProjectIdeaRow } from '../lib/api';
 import { applicableGuidelines } from '../lib/groups';
+import { draftSize, eventIdsOf, useDraftGuard, useMutate } from '../lib/mutate';
 import { navigate } from '../lib/router';
 import { useAsync } from '../lib/useAsync';
 import { useMode, useMoney, useReviews } from '../lib/session';
@@ -145,19 +146,18 @@ export function ProjectIdeas() {
   const mode = useMode();
   const board = mode === 'board';
   const reviews = useReviews();
-  const [nonce, setNonce] = useState(0);
   const [filter, setFilter] = useState<Status | null>(null);
   const [tag, setTag] = useState<string | null>(null);
   const [view, setView] = useState<View>('cards');
   const [sort, setSort] = useState<Sort>('recent');
-  const refresh = useCallback(() => { setNonce((n) => n + 1); }, []);
 
   const statuses = useMemo(
     () => ALL.filter((s) => FOR_MODE[mode].includes(s.value)),
     [mode],
   );
 
-  const { state } = useAsync(() => foreman.projectIdeas(), [nonce]);
+  // Read again in place after a write: the filters, the sort and the scroll stay where they were.
+  const { state, refresh } = useAsync(() => foreman.projectIdeas(), []);
   const items = useMemo(() => (state.status === 'ready' ? state.value.items : []), [state]);
 
   const counts = useMemo(() => {
@@ -387,6 +387,12 @@ function ProjectIdeaCard({ idea }: { idea: ProjectIdeaRow }) {
   );
 }
 
+/** Which of the idea's fields a save changed, in the words a toast uses. */
+function changedWords(names: readonly string[]): string {
+  const words: Record<string, string> = { title: 'title', pitch: 'pitch', status: 'status', reason: 'reason' };
+  return names.map((name) => words[name] ?? name).join(', ');
+}
+
 export function ProjectIdeaForm({ idea, onSaved }: { idea?: ProjectIdeaRow; onSaved: () => void }) {
   const mode = useMode();
   const reviews = useReviews();
@@ -403,15 +409,27 @@ export function ProjectIdeaForm({ idea, onSaved }: { idea?: ProjectIdeaRow; onSa
   const [status, setStatus] = useState<string>(idea?.status ?? 'new');
   const [reason, setReason] = useState(idea?.reason ?? '');
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { mutate, pending } = useMutate();
 
   const needsReason = canDecide && NEEDS_REASON.includes(status);
 
+  const stored = {
+    title: idea?.title ?? '',
+    pitch: idea?.pitch ?? '',
+    status: idea?.status ?? 'new',
+    reason: idea?.reason ?? '',
+  };
+  // Unsaved characters (INT-10): closing by Escape or the scrim asks first; Cancel is the answer.
+  const allowClose = useDraftGuard(
+    open ? draftSize(stored, { title, pitch, status, reason }) : 0,
+    editing ? idea.humanId : 'the new project idea',
+  );
+
   const reset = () => {
-    setTitle(idea?.title ?? '');
-    setPitch(idea?.pitch ?? '');
-    setStatus(idea?.status ?? 'new');
-    setReason(idea?.reason ?? '');
+    setTitle(stored.title);
+    setPitch(stored.pitch);
+    setStatus(stored.status);
+    setReason(stored.reason);
     setError(null);
   };
 
@@ -421,43 +439,69 @@ export function ProjectIdeaForm({ idea, onSaved }: { idea?: ProjectIdeaRow; onSa
       setError(`A project idea that is ${status} has to say why.`);
       return;
     }
-    setBusy(true);
     setError(null);
 
-    const request = editing
-      ? foreman.updateProjectIdea(idea.humanId, {
-          title,
-          pitch,
-          // Sent only when this person may set it. A field the server would refuse is a field the
-          // form should not have offered.
-          ...(canDecide ? { status } : {}),
-          ...(canDecide && reason.trim().length > 0 ? { reason } : {}),
-        })
-      : foreman.createProjectIdea({
-          title,
-          ...(pitch.trim().length === 0 ? {} : { pitch }),
-        });
-
-    void request
-      .then((saved) => {
-        setOpen(false);
-        onSaved();
-        // A new idea opens on its own page. Writing one down is the moment somebody is thinking
-        // about it, and landing back on the list would ask them to go and find it again.
-        if (!editing) window.location.assign(`/project-ideas/${saved.humanId}`);
-      })
-      .catch((caught: unknown) => {
-        setError(caught instanceof ApiError ? caught.message : 'That did not save.');
-      })
-      .finally(() => {
-        setBusy(false);
+    if (!editing) {
+      void mutate({
+        subject: 'the new project idea',
+        run: () =>
+          foreman.createProjectIdea({
+            title,
+            ...(pitch.trim().length === 0 ? {} : { pitch }),
+          }),
+        message: (saved) => `${saved.humanId} written down`,
+        refresh: onSaved,
+        undone: 'Undone — the project idea is gone again',
+        onUndone: (report) => {
+          // Undone from the page it opened on: back to the list, which no longer has it.
+          if (report.refused.length === 0 && window.location.pathname !== '/project-ideas') navigate('/project-ideas');
+        },
+        failure: 'inline',
+      }).then((outcome) => {
+        if (outcome.ok) {
+          setOpen(false);
+          // A new idea opens on its own page. Writing one down is the moment somebody is thinking
+          // about it, and landing back on the list would ask them to go and find it again.
+          navigate(`/project-ideas/${outcome.value.humanId}`);
+        } else if (outcome.inFlight !== true) {
+          setError(outcome.message);
+        }
       });
+      return;
+    }
+
+    // Only what changed: sending the whole form would overwrite what somebody else edited since.
+    const changed: Record<string, string> = {};
+    if (title !== stored.title) changed['title'] = title;
+    if (pitch !== stored.pitch) changed['pitch'] = pitch;
+    // Sent only when this person may set it. A field the server would refuse is a field the form
+    // should not have offered.
+    if (canDecide && status !== stored.status) changed['status'] = status;
+    if (canDecide && reason.trim().length > 0 && reason !== stored.reason) changed['reason'] = reason;
+    if (Object.keys(changed).length === 0) {
+      setOpen(false);
+      return;
+    }
+
+    void mutate({
+      subject: idea.humanId,
+      run: () => foreman.updateProjectIdea(idea.humanId, changed),
+      message: () => `Saved ${idea.humanId} — ${changedWords(Object.keys(changed))}`,
+      refresh: onSaved,
+      undone: `Undone — ${idea.humanId} is as it was`,
+      onUndone: onSaved,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (outcome.ok) setOpen(false);
+      else if (outcome.inFlight !== true) setError(outcome.message);
+    });
   };
 
   return (
     <Modal
       open={open}
       onOpenChange={(next) => {
+        if (!next && !allowClose()) return;
         setOpen(next);
         if (next) reset();
       }}
@@ -535,8 +579,8 @@ export function ProjectIdeaForm({ idea, onSaved }: { idea?: ProjectIdeaRow; onSa
             <Button type="button" onClick={() => { setOpen(false); }}>
               Cancel
             </Button>
-            <Button type="submit" variant="primary" disabled={busy || title.trim().length === 0}>
-              {busy ? 'Saving…' : 'Save'}
+            <Button type="submit" variant="primary" disabled={pending || title.trim().length === 0}>
+              {pending ? 'Saving…' : 'Save'}
             </Button>
           </FormActions>
         </Stack>
@@ -572,62 +616,74 @@ export function ConvertIdea({ idea, onConverted }: { idea: ProjectIdeaRow; onCon
   const [listing, setListing] = useState<GroupListing | null>(null);
   const [guidelines, setGuidelines] = useState<readonly GuidelineRow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { mutate, pending } = useMutate();
   const toast = useToast();
+  // Unsaved characters: the code typed and any change to the name (INT-10).
+  const allowClose = useDraftGuard(
+    open ? draftSize({ code: '', name: idea.title }, { code, name }) : 0,
+    `converting ${idea.humanId}`,
+  );
 
   const submit = (event: SyntheticEvent) => {
     event.preventDefault();
-    setBusy(true);
     setError(null);
     const projectCode = code.toUpperCase();
     // The convert endpoint takes no group (it creates the project from the idea's fields alone),
     // so the group is set on the new project straight after, with the same write Projects uses.
     const groupName = listing?.items.find((item) => item.humanId === group)?.name ?? group;
-    void foreman
-      .convertProjectIdea(idea.humanId, { code: projectCode, name })
-      .then(async (result) => {
-        if (group === NO_GROUP) return { result, joinError: null };
-        try {
-          await foreman.setProjectGroup(result.project.code, group);
-          return { result, joinError: null };
-        } catch (caught) {
-          return { result, joinError: caught instanceof Error ? caught.message : String(caught) };
+    void mutate({
+      subject: idea.humanId,
+      run: async () => {
+        const result = await foreman.convertProjectIdea(idea.humanId, { code: projectCode, name });
+        const events = [...eventIdsOf(result)];
+        let joinError: string | null = null;
+        if (group !== NO_GROUP) {
+          try {
+            // Its event joins the rest, so one Undo takes the project back out of the family too.
+            events.push(...eventIdsOf(await foreman.setProjectGroup(result.project.code, group)));
+          } catch (caught) {
+            joinError = caught instanceof Error ? caught.message : String(caught);
+          }
         }
-      })
-      .then(({ result, joinError }) => {
-        setOpen(false);
+        return { ...result, auditEventIds: events, joinError };
+      },
+      message: (result) => `${idea.humanId} converted — ${result.project.code} created`,
+      refresh: onConverted,
+      undone: `Undone — ${idea.humanId} is an idea again`,
+      onUndone: (report) => {
         onConverted();
-        const created = result.project.code;
-        if (joinError === null) {
-          // Straight to the thing that now exists. Converting and then having to go and find it
-          // is the sort of small friction that makes a feature feel unfinished.
-          window.location.assign(`/projects/${created}`);
-          return;
-        }
-        // The project exists, but the family the person chose did not stick. Never silently: land
-        // on it, say so in a toast that stays until it is read, and offer the way to finish it.
-        navigate(`/projects/${created}`);
+        if (report.refused.length === 0) navigate(`/project-ideas/${idea.humanId}`);
+      },
+      failure: 'inline',
+    }).then((outcome) => {
+      if (!outcome.ok) {
+        if (outcome.inFlight !== true) setError(outcome.message);
+        return;
+      }
+      setOpen(false);
+      const created = outcome.value.project.code;
+      // Straight to the thing that now exists, in the app, so the toast with Undo stays.
+      navigate(`/projects/${created}`);
+      if (outcome.value.joinError !== null) {
+        // The project exists, but the family the person chose did not stick. Never silently: say so
+        // in a toast that stays until it is read, and offer the way to finish it.
         toast.show({
-          message: `${created} was created, but it did not join ${groupName}: ${joinError}`,
+          message: `${created} was created, but it did not join ${groupName}: ${outcome.value.joinError}`,
           duration: 0,
           action: {
             label: 'Move to group…',
             onAction: () => { navigate(`/projects/${created}?move=1`); },
           },
         });
-      })
-      .catch((caught: unknown) => {
-        setError(caught instanceof ApiError ? caught.message : 'That did not convert.');
-      })
-      .finally(() => {
-        setBusy(false);
-      });
+      }
+    });
   };
 
   return (
     <Modal
       open={open}
       onOpenChange={(next) => {
+        if (!next && !allowClose()) return;
         setOpen(next);
         if (next) {
           setCode('');
@@ -700,9 +756,9 @@ export function ConvertIdea({ idea, onConverted }: { idea: ProjectIdeaRow; onCon
             <Button
               type="submit"
               variant="primary"
-              disabled={busy || code.trim().length < 2 || name.trim().length === 0}
+              disabled={pending || code.trim().length < 2 || name.trim().length === 0}
             >
-              {busy ? 'Converting…' : 'Convert to project'}
+              {pending ? 'Converting…' : 'Convert to project'}
             </Button>
           </FormActions>
         </Stack>
@@ -727,6 +783,11 @@ function joinsHelp(
   return `Defaults to the scope you were viewing. The ${rules} ${count === 1 ? 'goes' : 'go'} into ${subject} first brief.`;
 }
 
+/**
+ * Delete acts at once and offers Undo (FRM-REQ-243): hidden, not destroyed, and the number is never
+ * reused — so there is nothing to ask first. If it was considered and turned down, the better ending
+ * is `rejected` with a reason, which is what stops it coming back.
+ */
 export function DeleteProjectIdea({
   idea,
   onDeleted,
@@ -734,54 +795,23 @@ export function DeleteProjectIdea({
   idea: ProjectIdeaRow;
   onDeleted: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { mutate, pending } = useMutate();
 
   const remove = () => {
-    setBusy(true);
-    setError(null);
-    void foreman
-      .deleteProjectIdea(idea.humanId)
-      .then(() => {
-        setOpen(false);
-        onDeleted();
-      })
-      .catch((caught: unknown) => {
-        setError(caught instanceof ApiError ? caught.message : 'That did not delete.');
-      })
-      .finally(() => {
-        setBusy(false);
-      });
+    void mutate({
+      subject: idea.humanId,
+      run: () => foreman.deleteProjectIdea(idea.humanId),
+      message: () => `${idea.humanId} deleted`,
+      apply: onDeleted,
+      refresh: onDeleted,
+      undone: `Undone — ${idea.humanId} is back`,
+      onUndone: onDeleted,
+    });
   };
 
   return (
-    <Modal
-      open={open}
-      onOpenChange={setOpen}
-      trigger={<Button>Delete</Button>}
-      title={`Delete ${idea.humanId}?`}
-      description="Hidden, not destroyed — the audit event can undo it, and the number is never reused."
-    >
-      <Stack gap="16">
-        {error !== null && (
-          <Alert tone="danger" title="That did not delete" dynamic>
-            {error}
-          </Alert>
-        )}
-        <p>
-          If this was considered and turned down, mark it <strong>rejected</strong> with a reason
-          instead — that is what stops it coming back.
-        </p>
-        <FormActions>
-          <Button type="button" onClick={() => { setOpen(false); }}>
-            Cancel
-          </Button>
-          <Button type="button" variant="danger" disabled={busy} onClick={remove}>
-            {busy ? 'Deleting…' : 'Delete'}
-          </Button>
-        </FormActions>
-      </Stack>
-    </Modal>
+    <Button disabled={pending} aria-label={`Delete ${idea.humanId}`} onClick={remove}>
+      {pending ? 'Deleting…' : 'Delete'}
+    </Button>
   );
 }

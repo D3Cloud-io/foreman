@@ -1,0 +1,484 @@
+/* Home's portfolio ledger (FRM-T-18.6, board D-06): the stat strip, the Needs-you strip and one
+   ledger per group. Tokens only (d3-check-usage). Nothing here is green; a state is a word first. */
+
+/* ─── Stat strip ──────────────────────────────────────────────────────── */
+
+.fm-sstrip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+.fm-sstrip__cells {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.fm-sstat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-12) var(--space-16);
+  border-left: var(--border-width) solid var(--color-border);
+  color: var(--color-fg);
+  text-decoration: none;
+}
+.fm-sstat:first-child {
+  border-left: 0;
+}
+a.fm-sstat:hover {
+  background: var(--color-surface-hover);
+}
+.fm-sstat__label {
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  color: var(--color-fg-muted);
+}
+.fm-sstat__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4) var(--space-8);
+}
+.fm-sstat__value {
+  font-size: var(--text-20);
+  line-height: var(--leading-20);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.fm-sstat__foot {
+  font-size: var(--text-12);
+  color: var(--color-fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fm-sstrip__notes {
+  margin: 0;
+}
+
+/* ─── Needs you ───────────────────────────────────────────────────────── */
+
+.fm-needsyou {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  padding: var(--space-16) 0 var(--space-4);
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+}
+.fm-needsyou__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4) var(--space-8);
+  padding: 0 var(--space-16);
+}
+.fm-needsyou__title {
+  margin: 0;
+  font-size: var(--text-14);
+  font-weight: var(--weight-semibold);
+}
+.fm-needsyou__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: var(--border-width) solid var(--color-border);
+}
+.fm-ny {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+  padding: var(--space-12) var(--space-16);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+.fm-ny__top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+}
+.fm-ny__project {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+  min-height: 1.75rem;
+  color: var(--color-fg);
+  font-size: var(--text-13);
+  font-weight: var(--weight-semibold);
+  text-decoration: none;
+}
+.fm-ny__group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-6);
+  min-width: 0;
+  margin-left: auto;
+  font-size: var(--text-12);
+  color: var(--color-fg-muted);
+}
+.fm-ny__ctx {
+  display: block;
+  font-size: var(--text-12);
+  color: var(--color-fg-faint);
+}
+.fm-needsyou__more {
+  align-self: flex-start;
+  min-height: 2.25rem;
+  margin: 0 var(--space-12) var(--space-8);
+  padding: 0 var(--space-8);
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: var(--text-13);
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
+  text-underline-offset: 0.125rem;
+  cursor: pointer;
+}
+
+/* The chips that say why, each a link to the list that shows it. */
+.fm-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fm-reasons__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  text-decoration: none;
+}
+
+/* ─── The ledger ──────────────────────────────────────────────────────── */
+
+.fm-ledger {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.fm-gsection--quiet .fm-ledger {
+  background: transparent;
+  box-shadow: inset 0 0 0 var(--border-width) var(--color-border);
+}
+.fm-ledger__head,
+.fm-lrow {
+  display: grid;
+  grid-template-columns:
+    2.25rem
+    minmax(10rem, 14rem)
+    minmax(9rem, 15rem)
+    minmax(0, 1fr)
+    4.5rem
+    minmax(7rem, 11rem)
+    5.5rem;
+  column-gap: var(--space-12);
+  align-items: center;
+  padding: 0 var(--space-16);
+}
+.fm-ledger__head {
+  min-height: 1.875rem;
+  font-size: var(--text-12);
+  font-weight: var(--weight-semibold);
+  color: var(--color-fg-muted);
+}
+.fm-ledger__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fm-lrow {
+  min-height: 3.5rem;
+  padding-top: var(--space-8);
+  padding-bottom: var(--space-8);
+  border-top: var(--border-width) solid var(--color-border);
+}
+.fm-lrow--open {
+  background: var(--color-surface-hover);
+}
+.fm-lrow > * {
+  min-width: 0;
+}
+.fm-lrow__drift,
+.fm-ledger__head .fm-lrow__drift {
+  text-align: right;
+}
+
+.fm-lrow__l1 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  min-width: 0;
+  font-size: var(--text-13);
+  color: var(--color-fg);
+}
+.fm-lrow__l2 {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: var(--text-12);
+  color: var(--color-fg-muted);
+}
+.fm-lrow__link {
+  color: inherit;
+  text-decoration: none;
+}
+.fm-lrow__link:hover .fm-truncate {
+  text-decoration: underline;
+}
+.fm-lrow__name {
+  font-weight: var(--weight-semibold);
+}
+.fm-lrow__id {
+  flex: none;
+  font-size: var(--text-11);
+  color: var(--color-fg-faint);
+}
+.fm-lrow__next .fm-lrow__link {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.fm-lrow__title {
+  font-size: var(--text-13);
+  color: var(--color-fg);
+}
+.fm-lrow__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+.fm-lrow__bar .fm-lrow__l2 {
+  margin-top: 0;
+  white-space: nowrap;
+}
+/* Progress is not a mood: a neutral ink on a neutral track, whatever the figure. */
+.fm-bar {
+  display: inline-flex;
+  flex: none;
+  width: 3.5rem;
+  height: 0.375rem;
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+  box-shadow: inset 0 0 0 var(--border-width) var(--color-border);
+  overflow: hidden;
+}
+.fm-bar__fill {
+  height: 100%;
+  background: var(--color-fg-muted);
+}
+.fm-lrow__driftlink {
+  font-size: var(--text-13);
+  color: var(--color-fg-muted);
+  text-decoration: none;
+}
+.fm-lrow__driftlink--some {
+  font-weight: var(--weight-semibold);
+  color: var(--color-warning);
+  text-decoration: underline;
+  text-underline-offset: 0.1875rem;
+}
+.fm-lrow__unit {
+  font-weight: var(--weight-regular);
+}
+.fm-lrow__cilink {
+  display: inline-flex;
+  text-decoration: none;
+}
+
+/* The disclosure: deployed vs main and last activity live here, not in columns (FRM-DA-006). */
+.fm-lrow__more {
+  grid-column: 1 / -1;
+  padding: var(--space-4) 0 var(--space-8) calc(2.25rem + var(--space-12));
+}
+.fm-lrow__more[hidden] {
+  display: none;
+}
+.fm-lrow__dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-16);
+  margin: 0;
+  padding: var(--space-12) var(--space-16);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.fm-lrow__dl dt {
+  margin-bottom: var(--space-4);
+  font-size: var(--text-12);
+  font-weight: var(--weight-semibold);
+  color: var(--color-fg-muted);
+}
+.fm-lrow__dl dd {
+  margin: 0;
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+}
+.fm-lrow__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-16);
+  margin: var(--space-8) 0 0;
+}
+.fm-lrow__act {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.75rem;
+  color: var(--color-accent);
+  font-size: var(--text-13);
+  font-weight: var(--weight-medium);
+}
+
+/* A phone's break between lines; nothing anywhere else. */
+.fm-lrow__br {
+  display: none;
+}
+.fm-reasons__more {
+  display: none;
+}
+
+/* A thumb, not a cursor (FRM-REQ-219): every link and button the ledger draws is 44 by 44 or more
+   under a coarse pointer — the drift figure and the "Show all" button included. */
+@media (pointer: coarse) {
+  .fm-ny__project,
+  .fm-reasons__link,
+  .fm-lrow__link,
+  .fm-lrow__driftlink,
+  .fm-lrow__cilink,
+  .fm-lrow__act,
+  .fm-needsyou__more {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .fm-lrow__driftlink,
+  .fm-lrow__cilink,
+  .fm-reasons__link,
+  .fm-lrow__act,
+  .fm-needsyou__more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .fm-lrow__driftlink {
+    justify-content: flex-end;
+  }
+}
+
+/* ─── Phone: two-line items ─────────────────────────────────────────────
+   Line one: the project (code and name), the single most urgent chip with "+N more" as text, and the
+   disclosure. Line two: the phase, then the next task — which takes whatever is left, truncated with
+   its full title on hover, never squeezed to nothing — then drift when there is some, and CI. It is a
+   wrapping flex row, not a grid: a grid shares column widths between the two lines, and a wide chip
+   on line one would take the next task's room on line two. */
+@media (max-width: 48rem) {
+  .fm-ledger__head {
+    display: none;
+  }
+  .fm-sstat__foot {
+    display: none;
+  }
+  .fm-sstat {
+    padding: var(--space-8) var(--space-12);
+  }
+  .fm-lrow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-8);
+    min-height: 0;
+    padding: var(--space-8) var(--space-12);
+  }
+  /* Line 1 */
+  .fm-lrow__project {
+    order: 1;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .fm-lrow__need {
+    order: 2;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 55%;
+  }
+  .fm-lrow > .fm-lrow__x {
+    order: 3;
+    flex: none;
+  }
+  .fm-lrow__br {
+    display: block;
+    order: 4;
+    flex: 0 0 100%;
+    height: 0;
+  }
+  /* Line 2 */
+  .fm-lrow__phase {
+    order: 5;
+    flex: 0 1 auto;
+    max-width: 7rem;
+    min-width: 0;
+  }
+  .fm-lrow__next {
+    order: 6;
+    flex: 1 1 0;
+    min-width: 4rem;
+  }
+  .fm-lrow__drift {
+    order: 7;
+    flex: none;
+  }
+  .fm-lrow__ci {
+    order: 8;
+    flex: none;
+  }
+  .fm-lrow__drift--quiet {
+    display: none;
+  }
+  .fm-lrow__life,
+  .fm-lrow__bar,
+  .fm-lrow__phase .fm-lrow__l2,
+  .fm-lrow__id,
+  .fm-lrow__project .fm-lrow__l2 {
+    display: none;
+  }
+  .fm-lrow__phase .fm-lrow__l1 {
+    font-size: var(--text-12);
+    color: var(--color-fg-muted);
+  }
+  .fm-lrow__title {
+    font-size: var(--text-12);
+    color: var(--color-fg-muted);
+  }
+  /* One chip, then the count of the rest in words. */
+  .fm-reasons--compact {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+  .fm-reasons--compact > li:nth-child(n + 2):not(.fm-reasons__more) {
+    display: none;
+  }
+  .fm-reasons--compact .fm-reasons__more {
+    display: list-item;
+    flex: none;
+    font-size: var(--text-11);
+    color: var(--color-fg-muted);
+    white-space: nowrap;
+  }
+  .fm-lrow__more {
+    order: 9;
+    flex: 0 0 100%;
+    padding-left: 0;
+  }
+  .fm-ny__group {
+    display: none;
+  }
+}

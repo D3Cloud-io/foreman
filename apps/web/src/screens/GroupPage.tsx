@@ -18,9 +18,9 @@ import { ApiError, foreman, type GuidelineRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { accentLabel, listJoin, moveBy, siteLabel } from '../lib/groups';
 import { AccentDot, MoveToGroupDialog, useMoveToast, type MovingProject } from '../ui/groups';
-import { useUndoToast } from '../lib/undo';
+import { undoReportWords, useMutate } from '../lib/mutate';
 import { GroupEditor, useGroupListing, useReorderFocus } from './Groups';
-import { PortfolioStats } from './Home';
+import { PortfolioStats, useOpenSeverities } from './Home';
 
 /**
  * One group's page (17.10): what it is, how its projects are doing, the order they sit in inside
@@ -53,6 +53,7 @@ export function GroupPage({ slug }: { slug: string }) {
   const { listing, refresh: refreshListing } = useGroupListing();
   const portfolio = useAsync(() => foreman.portfolio(), []);
   const guidelines = useAsync(() => foreman.guidelines(), []);
+  const severities = useOpenSeverities(slug);
   const [editing, setEditing] = useState(false);
   const [moving, setMoving] = useState<MovingProject | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -80,7 +81,7 @@ export function GroupPage({ slug }: { slug: string }) {
     portfolio.reload();
   };
   const toastMove = useMoveToast(refresh);
-  const toastUndoable = useUndoToast();
+  const { mutate, pending } = useMutate();
 
   const back = <a href="/groups">Groups</a>;
 
@@ -129,26 +130,26 @@ export function GroupPage({ slug }: { slug: string }) {
 
   const reorder = (index: number, delta: -1 | 1) => {
     const project = projects[index];
-    if (project === undefined) return;
+    // One write at a time: see Groups.tsx.
+    if (project === undefined || pending) return;
     const next = moveBy(projects, index, delta);
     setDetail({ ...detail, projects: next.map((p, position) => ({ ...p, position })) });
     focusAfter({ id: project.code, dir: delta < 0 ? 'up' : 'down' });
     setFailure(null);
-    foreman
-      .orderGroupProjects(detail.humanId, next.map((p) => p.code))
-      .then((result) => {
-        load();
-        toastUndoable({
-          message: `Moved ${project.name} ${delta < 0 ? 'up' : 'down'}`,
-          auditEventIds: result.auditEventIds,
-          undone: 'Put the order back',
-          reload: refresh,
-        });
-      })
-      .catch((caught: unknown) => {
-        setFailure(caught instanceof Error ? caught.message : String(caught));
-        load();
-      });
+    void mutate({
+      subject: project.name,
+      run: () => foreman.orderGroupProjects(detail.humanId, next.map((p) => p.code)),
+      message: () => `Moved ${project.name} ${delta < 0 ? 'up' : 'down'}`,
+      apply: load,
+      undone: 'Put the order back',
+      undoWords: undoReportWords('Put the order back'),
+      onUndone: refresh,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (outcome.ok) return;
+      if (outcome.inFlight !== true) setFailure(outcome.message);
+      load();
+    });
   };
 
   return (
@@ -185,9 +186,10 @@ export function GroupPage({ slug }: { slug: string }) {
         {portfolio.state.status === 'ready' && (
           <PortfolioStats
             rows={rows}
-            projectsDetail={rows.length === 0 ? 'None yet' : rows.map((row) => row.code).join(', ')}
+            projectsDetail={rows.length === 0 ? 'None yet' : `In ${detail.name}`}
             // Its criticals and drift open scoped to this group (FRM-T-17.4).
             scope={detail.slug}
+            severities={severities}
           />
         )}
 
@@ -299,16 +301,11 @@ export function GroupPage({ slug }: { slug: string }) {
             listing={listing}
             guidelines={allGuidelines}
             onClose={() => { setEditing(false); }}
-            onSaved={(saved) => {
+            onSaved={() => {
               setEditing(false);
               refresh();
-              toastUndoable({
-                message: `Saved ${saved.name}`,
-                auditEventIds: saved.auditEventIds,
-                undone: `Put ${saved.name} back as it was`,
-                reload: refresh,
-              });
             }}
+            onUndone={refresh}
           />
           <MoveToGroupDialog
             open={moving !== null}

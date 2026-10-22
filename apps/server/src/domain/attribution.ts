@@ -1,8 +1,9 @@
-import { parseHumanId } from '@foreman/shared';
+import { parseHumanId, type ProposedAttribution } from '@foreman/shared';
 import { type Db, type Prisma } from '../db.js';
 import type { AttributionSource } from '../generated/prisma/enums.js';
 import { record, type Actor } from './audit.js';
 import { NotFound } from './errors.js';
+import { codeFilter } from './scope.js';
 
 /**
  * Attributing a commit to the work it was done for (T-5.7, FRM-REQ-106, FRM-REQ-107).
@@ -256,6 +257,8 @@ export interface ConfirmResult {
   readonly commitSha: string;
   readonly taskHumanId: string;
   readonly confirmed: boolean;
+  /** The audit event the decision wrote (FRM-REQ-243). */
+  readonly auditEventIds: string[];
 }
 
 /**
@@ -284,6 +287,9 @@ export async function confirmAttribution(
   if (task === null) throw new NotFound(taskHumanId);
 
   return db.$transaction(async (tx) => {
+    // Held while the row is read and written, so a concurrent undo of an earlier decision (or a
+    // second decision) sees this one whole (FRM-T-18.14).
+    await tx.$queryRaw`SELECT 1 FROM commit_task WHERE commit_id = ${commit.id}::uuid AND task_id = ${task.id}::uuid FOR UPDATE`;
     const before = await tx.commitTask.findUnique({
       where: { commitId_taskId: { commitId: commit.id, taskId: task.id } },
     });
@@ -312,7 +318,7 @@ export async function confirmAttribution(
       },
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'commit',
@@ -322,7 +328,7 @@ export async function confirmAttribution(
       after: row,
     });
 
-    return { commitSha: commit.sha, taskHumanId: task.humanId, confirmed: true };
+    return { commitSha: commit.sha, taskHumanId: task.humanId, confirmed: true, auditEventIds: [event] };
   });
 }
 
@@ -345,6 +351,9 @@ export async function rejectAttribution(
   if (task === null) throw new NotFound(taskHumanId);
 
   return db.$transaction(async (tx) => {
+    // Held while the row is read and written, so a concurrent undo of an earlier decision (or a
+    // second decision) sees this one whole (FRM-T-18.14).
+    await tx.$queryRaw`SELECT 1 FROM commit_task WHERE commit_id = ${commit.id}::uuid AND task_id = ${task.id}::uuid FOR UPDATE`;
     const before = await tx.commitTask.findUnique({
       where: { commitId_taskId: { commitId: commit.id, taskId: task.id } },
     });
@@ -357,7 +366,7 @@ export async function rejectAttribution(
       data: { confirmed: false, rejectedAt: new Date(), confirmedAt: null, confirmedBy: null },
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'commit',
@@ -367,6 +376,103 @@ export async function rejectAttribution(
       after: row,
     });
 
-    return { commitSha: commit.sha, taskHumanId: task.humanId, confirmed: false };
+    return { commitSha: commit.sha, taskHumanId: task.humanId, confirmed: false, auditEventIds: [event] };
   });
+}
+
+// ─── The review queue across a scope (FRM-T-18.7) ──────────────────────────
+
+/**
+ * Every attribution nobody has confirmed or rejected, across the projects a scope admits, newest
+ * commit first — what the Review tab of `/findings` rules on.
+ *
+ * **Counted the way the brief counts it**: by the project of the task it claims, a live task, and
+ * nothing confirmed or rejected. The sidebar's "N waiting for review" reads the brief, so the queue
+ * that empties it must hold exactly those rows, or the count and the list disagree.
+ */
+export async function proposedAcross(
+  db: Db,
+  options: { codes?: readonly string[] | undefined; project?: string | undefined; limit: number },
+): Promise<{ items: ProposedAttribution[]; total: number }> {
+  const where = {
+    confirmed: false,
+    rejectedAt: null,
+    task: { deletedAt: null, project: { deletedAt: null, ...codeFilter(options.codes, options.project) } },
+  };
+
+  const [rows, total] = await Promise.all([
+    db.commitTask.findMany({
+      where,
+      orderBy: [{ commit: { committedAt: 'desc' } }, { createdAt: 'desc' }],
+      take: options.limit,
+      include: {
+        commit: {
+          select: {
+            sha: true,
+            message: true,
+            author: true,
+            committedAt: true,
+            orphanedAt: true,
+            repoId: true,
+            repo: { select: { fullName: true } },
+            files: { select: { path: true }, orderBy: { path: 'asc' } },
+          },
+        },
+        task: {
+          select: {
+            humanId: true,
+            title: true,
+            status: true,
+            doneWhen: true,
+            phase: { select: { humanId: true, name: true } },
+            project: { select: { code: true, name: true } },
+          },
+        },
+      },
+    }),
+    db.commitTask.count({ where }),
+  ]);
+
+  // One read for every commit's checks, rather than one per row.
+  const checks =
+    rows.length === 0
+      ? []
+      : await db.checkRun.findMany({
+          where: { OR: rows.map((row) => ({ repoId: row.commit.repoId, commitSha: row.commit.sha })) },
+          orderBy: [{ name: 'asc' }, { createdAt: 'desc' }],
+          select: { repoId: true, commitSha: true, name: true, conclusion: true },
+        });
+
+  const items = rows.map((row): ProposedAttribution => {
+    const mine = checks.filter((c) => c.repoId === row.commit.repoId && c.commitSha === row.commit.sha);
+    // The newest result per check name: a re-run supersedes the run before it.
+    const latest = new Map<string, string | null>();
+    for (const check of mine) if (!latest.has(check.name)) latest.set(check.name, check.conclusion);
+    return {
+      project: row.task.project,
+      commit: {
+        sha: row.commit.sha,
+        message: row.commit.message,
+        author: row.commit.author,
+        committedAt: row.commit.committedAt.toISOString(),
+        repo: row.commit.repo.fullName,
+        files: row.commit.files.map((f) => f.path),
+        orphaned: row.commit.orphanedAt !== null,
+        checks: [...latest].map(([name, conclusion]) => ({ name, conclusion })),
+      },
+      task: {
+        humanId: row.task.humanId,
+        title: row.task.title,
+        status: row.task.status,
+        doneWhen: row.task.doneWhen,
+        phase: row.task.phase,
+      },
+      source: row.source,
+      confidence: Number(row.confidence),
+      evidence: row.evidence,
+      proposedAt: row.createdAt.toISOString(),
+    };
+  });
+
+  return { items, total };
 }

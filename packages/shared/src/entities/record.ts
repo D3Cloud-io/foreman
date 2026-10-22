@@ -13,7 +13,7 @@ import {
   IdeaStatus,
   RiskStatus,
 } from '../enums.js';
-import { AnyId, ProjectCode } from '../ids.js';
+import { AnyId, HumanId, ProjectCode } from '../ids.js';
 import { Instant, Timestamps, Uuid } from './common.js';
 
 /**
@@ -171,18 +171,58 @@ export type AdrUpdate = z.infer<typeof AdrUpdate>;
 
 // ─── Decision ──────────────────────────────────────────────────────────────
 
-/** A locked discovery decision — `D-13`. Smaller than an ADR: a question, its answer, and why. */
-export const DecisionCreate = z.object({
+/** The drift engine's categories — what `GET /api/drift` reports an item as. */
+export const DriftCategory = z.enum([
+  'coverage-hole',
+  'stale-task',
+  'fired-tripwire',
+  'failed-exit-gate',
+  'orphan-adr',
+  'screen-drift',
+]);
+export type DriftCategory = z.infer<typeof DriftCategory>;
+
+const DecisionFields = z.object({
   statement: z.string().min(1).max(1000),
   value: z.string().min(1).max(2000),
   rationale: z.string().max(4000).optional(),
   /** When it stopped being up for debate. Null means it is still open. */
   lockedAt: Instant.optional(),
 });
+
+/**
+ * A locked discovery decision — `D-13`. Smaller than an ADR: a question, its answer, and why.
+ *
+ * A decision may **accept drift** (FRM-T-18.15): `acceptsDriftSubject` names the drifting record and
+ * `acceptsDriftCategory` the way it drifts, both or neither. That is the link the triage Drift tab
+ * reads an acceptance back by — `GET …/decisions?acceptsDrift=1` — not the statement's wording.
+ * Set when the decision is made and not afterwards: `DecisionUpdate` refuses both by name.
+ */
+export const DecisionCreate = DecisionFields.extend({
+  acceptsDriftSubject: HumanId.optional(),
+  acceptsDriftCategory: DriftCategory.optional(),
+}).superRefine((value, ctx) => {
+  const subject = value.acceptsDriftSubject !== undefined;
+  const category = value.acceptsDriftCategory !== undefined;
+  if (subject === category) return;
+  ctx.addIssue({
+    code: 'custom',
+    path: [subject ? 'acceptsDriftCategory' : 'acceptsDriftSubject'],
+    message: 'a decision accepting drift names both the record (acceptsDriftSubject) and the category (acceptsDriftCategory)',
+  });
+});
 export type DecisionCreate = z.infer<typeof DecisionCreate>;
 
-export const DecisionUpdate = DecisionCreate.partial();
+export const DecisionUpdate = DecisionFields.partial();
 export type DecisionUpdate = z.infer<typeof DecisionUpdate>;
+
+/** `GET /api/projects/:code/decisions` — `acceptsDrift=1` narrows to the ones accepting drift, keyset-paged. */
+export const DecisionsQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  cursor: z.string().max(512).optional(),
+  acceptsDrift: z.enum(['1', 'true']).optional(),
+});
+export type DecisionsQuery = z.infer<typeof DecisionsQuery>;
 
 // ─── Risk ──────────────────────────────────────────────────────────────────
 
@@ -593,6 +633,30 @@ export interface GuidelineSummary {
  */
 export interface BriefGuideline extends GuidelineSummary {
   readonly appliesTo?: 'groups';
+}
+
+/**
+ * How much of the done work the repo bears out (FRM-REQ-247, FRM-DA-008). A neutral fraction, never
+ * a second progress bar: `doneWithCommit` of `done` tasks in the active phase have a **confirmed**
+ * commit (ADR-005 — a proposal is not evidence). Work that predates attribution is left out of
+ * both numbers, because it could not have had a commit attributed to it; `since` is the date the
+ * project's first confirmed attributed commit was made, or null when there is none yet.
+ */
+export interface BriefEvidence {
+  readonly doneWithCommit: number;
+  readonly done: number;
+  readonly since: string | null;
+}
+
+/**
+ * What is running, and how far main has moved on (FRM-REQ-245). `ahead` is the commits made after
+ * the deployed one, or null when the deployed SHA is not a commit Foreman knows — unknown, which is
+ * not zero.
+ */
+export interface BriefDeployed {
+  readonly sha: string;
+  readonly at: string;
+  readonly ahead: number | null;
 }
 
 /**

@@ -23,6 +23,7 @@ import {
 } from '../domain/screens.js';
 import { softDelete } from '../domain/undo.js';
 import { actorOf, handler, param, parseBody } from './helpers.js';
+import { noContentWithEvents } from './undo.js';
 
 /**
  * Screens over HTTP (FRM-REQ-189 … FRM-REQ-199), under `/api/projects/:code/screens`.
@@ -79,8 +80,8 @@ export function screenRoutes(db: Db, config: Config): Router {
     handler(async (req, res) => {
       // Checked against the path first, so another project's screen is a 404 here too.
       await getScreen(db, param(req, 'code'), param(req, 'humanId'));
-      await softDelete(db, actorOf(req), 'screen', param(req, 'humanId'));
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'screen', param(req, 'humanId'));
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 
@@ -100,14 +101,14 @@ export function screenRoutes(db: Db, config: Config): Router {
     handler(async (req, res) => {
       const body = parseBody(ScreenProposalCreate, req, res);
       if (body === null) return;
-      const { value, created } = await addProposal(
+      const { value, created, auditEventIds } = await addProposal(
         db,
         actorOf(req),
         param(req, 'code'),
         param(req, 'humanId'),
         body,
       );
-      res.status(created ? 201 : 200).json(value);
+      res.status(created ? 201 : 200).json({ ...value, auditEventIds });
     }),
   );
 
@@ -117,14 +118,14 @@ export function screenRoutes(db: Db, config: Config): Router {
     handler(async (req, res) => {
       const body = parseBody(ScreenCaptureCreate, req, res);
       if (body === null) return;
-      const { value, created } = await addCapture(
+      const { value, created, auditEventIds } = await addCapture(
         db,
         actorOf(req),
         param(req, 'code'),
         param(req, 'humanId'),
         body,
       );
-      res.status(created ? 201 : 200).json(value);
+      res.status(created ? 201 : 200).json({ ...value, auditEventIds });
     }),
   );
 
@@ -152,14 +153,14 @@ export function screenRoutes(db: Db, config: Config): Router {
     handler(async (req, res) => {
       const body = parseBody(ScreenComponentCreate, req, res);
       if (body === null) return;
-      const { value, created } = await addComponent(
+      const { value, created, auditEventIds } = await addComponent(
         db,
         actorOf(req),
         param(req, 'code'),
         param(req, 'humanId'),
         body,
       );
-      res.status(created ? 201 : 200).json(value);
+      res.status(created ? 201 : 200).json({ ...value, auditEventIds });
     }),
   );
 

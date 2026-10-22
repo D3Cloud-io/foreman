@@ -11,6 +11,8 @@ import {
   Textarea,
 } from '@d3cloud/ui';
 import { api, ApiError } from '../lib/api';
+import { listJoin } from '../lib/groups';
+import { draftSize, useDraftGuard, useMutate } from '../lib/mutate';
 
 /**
  * Editing, from the console (T-2.10, FRM-REQ-031 … FRM-REQ-048).
@@ -22,6 +24,11 @@ import { api, ApiError } from '../lib/api';
  * What a form *omits* is as deliberate as what it offers. A project's code and a phase's number are
  * not fields here, because both are embedded in a human ID and a human ID is immutable: renumbering
  * would leave every citation pointing at something else (ADR-008).
+ *
+ * **A save lands in place, with Undo** (FRM-T-18.4): `useMutate` waits for the server, the screen
+ * re-reads without a skeleton, and a toast names what changed and anything that rolled up. **A
+ * draft is guarded**: closing by Escape, the scrim or the close control asks before throwing typed
+ * changes away. Cancel is the person saying discard, so it does not ask again.
  */
 
 interface Field {
@@ -48,7 +55,16 @@ export interface EditFormProps {
   fields: readonly Field[];
   initial: Record<string, string>;
   trigger: React.ReactNode;
+  /** After a save lands, and after it is undone: re-read in place. */
   onSaved: () => void;
+  /** What the record is called in the toast. Defaults to the title without its "Edit ". */
+  subject?: string;
+}
+
+/** "Saved BND-T-9.4 — title and size": the toast's line for a form save. */
+export function savedMessage(subject: string, labels: readonly string[]): string {
+  if (labels.length === 0) return `Saved ${subject}`;
+  return `Saved ${subject} — ${listJoin(labels.map((label) => label.toLowerCase()))}`;
 }
 
 export function EditForm({
@@ -59,8 +75,10 @@ export function EditForm({
   initial,
   trigger,
   onSaved,
+  subject = title.replace(/^Edit /, ''),
 }: EditFormProps) {
   const [open, setOpen] = useState(false);
+  const { mutate } = useMutate();
   const [values, setValues] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -68,6 +86,7 @@ export function EditForm({
   // many things are in the way; these say which, so the person knows what to go and fix.
   const [blockers, setBlockers] = useState<GateFailure[]>([]);
   const [busy, setBusy] = useState(false);
+  const allowClose = useDraftGuard(open ? draftSize(initial, values) : 0, subject);
 
   const set = (name: string, value: string) => {
     setValues((current) => ({ ...current, [name]: value }));
@@ -94,13 +113,23 @@ export function EditForm({
       return;
     }
 
-    void api
-      .patch(path, changed)
-      .then(() => {
-        setOpen(false);
-        onSaved();
-      })
-      .catch((caught: unknown) => {
+    const labels = fields.filter((field) => field.name in changed).map((field) => field.label);
+    void mutate({
+      subject,
+      run: () => api.patch<unknown>(path, changed),
+      message: () => savedMessage(subject, labels),
+      failure: 'inline',
+      undone: `Undone — ${subject} is as it was`,
+      onUndone: onSaved,
+    })
+      .then((outcome) => {
+        if (outcome.ok) {
+          setOpen(false);
+          onSaved();
+          return;
+        }
+        if (outcome.inFlight === true) return;
+        const caught = outcome.error;
         if (caught instanceof ApiError) {
           const body = caught.body as
             | { fields?: { path: string; message: string }[]; gate?: { failures?: GateFailure[] } }
@@ -126,6 +155,8 @@ export function EditForm({
     <Modal
       open={open}
       onOpenChange={(next) => {
+        // Escape, the scrim, the close control: ask before a draft is lost.
+        if (!next && !allowClose()) return;
         setOpen(next);
         if (next) {
           // Reopened after a failure, it starts from what is stored rather than from the attempt.

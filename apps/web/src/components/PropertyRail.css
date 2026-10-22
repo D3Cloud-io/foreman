@@ -1,0 +1,75 @@
+/* A record page's property rail (FRM-T-18.8, board D-08). Tokens only (d3-check-usage). */
+
+/* The record, and its rail beside it from lg; above it on a phone, where the properties are what
+   you came to change. */
+.fm-record {
+  display: grid;
+  gap: var(--space-24);
+  grid-template-columns: minmax(0, 1fr);
+}
+.fm-record__rail {
+  order: -1;
+}
+.fm-record__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  min-width: 0;
+}
+@media (min-width: 64rem) {
+  .fm-record {
+    grid-template-columns: minmax(0, 1fr) 18rem;
+    align-items: start;
+  }
+  .fm-record__rail {
+    order: 0;
+    position: sticky;
+    top: var(--space-16);
+  }
+}
+
+.fm-rail {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4) var(--space-16);
+}
+.fm-rail__list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fm-rail__row {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-8);
+  min-height: 2.75rem;
+  padding: var(--space-6) 0;
+  border-top: var(--border-width) solid var(--color-border);
+}
+.fm-rail__row:first-child {
+  border-top: 0;
+}
+.fm-rail__label {
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  color: var(--color-fg-muted);
+}
+.fm-rail__value {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+  overflow-wrap: anywhere;
+}
+
+/* A long phase name shrinks the select inside the rail rather than pushing it past the card. */
+.fm-rail__value .fm-status-control {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+}
+.fm-rail__value .fm-status-control > :first-child {
+  min-width: 0;
+  max-width: 100%;
+}

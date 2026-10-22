@@ -1,4 +1,4 @@
-import { useCallback, useId, useRef, useState, type DragEvent, type SyntheticEvent } from 'react';
+import { useId, useRef, useState, type DragEvent, type SyntheticEvent } from 'react';
 import {
   Alert,
   Button,
@@ -27,9 +27,11 @@ import type {
 } from '@foreman/shared';
 import { Upload } from 'lucide-react';
 import { ApiError, foreman } from '../lib/api';
+import { useMutate } from '../lib/mutate';
 import { useAsync } from '../lib/useAsync';
 import { Pill } from '../ui/viz';
 import { VERDICT_LABEL, VerdictPill, variantLabel, versionFor } from './Screens';
+import { formatDateTime } from '../lib/text';
 
 /**
  * One screen: the design beside what was built, a variant at a time (FRM-REQ-196), a PNG dropped
@@ -75,20 +77,15 @@ export function isPng(file: { type: string; name: string }): boolean {
 const VERDICTS: readonly ScreenVerdictKind[] = ['matches', 'drifted_accepted', 'drifted_fix'];
 
 function when(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  return formatDateTime(iso);
 }
 
 export function ScreenDetail({ code, humanId }: { code: string; humanId: string }) {
-  const { state } = useAsync(() => foreman.screen(code, humanId), [code, humanId]);
-  // A write refreshes in place rather than through `reload`, which would drop the page back to a
-  // skeleton and take focus and the chosen variant with it.
-  const [fresh, setFresh] = useState<ScreenRecord | null>(null);
+  // A write re-reads in place (`refresh`) rather than through `reload`, which would drop the page
+  // back to a skeleton and take focus and the chosen variant with it.
+  const { state, refresh } = useAsync(() => foreman.screen(code, humanId), [code, humanId]);
   const [viewport, setViewport] = useState<ScreenViewport>('desktop');
   const [theme, setTheme] = useState<ScreenTheme>('dark');
-
-  const refresh = useCallback(async () => {
-    setFresh(await foreman.screen(code, humanId));
-  }, [code, humanId]);
 
   if (state.status === 'loading') {
     return (
@@ -114,7 +111,7 @@ export function ScreenDetail({ code, humanId }: { code: string; humanId: string 
     );
   }
 
-  const screen = fresh ?? state.value;
+  const screen: ScreenRecord = state.value;
   const proposal = versionFor(screen.current.proposals, viewport, theme);
   const capture = versionFor(screen.current.captures, viewport, theme);
   const variant = variantLabel(viewport, theme);
@@ -276,13 +273,13 @@ function DropZone({
   screen: ScreenRecord;
   viewport: ScreenViewport;
   theme: ScreenTheme;
-  onAdded: () => Promise<void>;
+  onAdded: () => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const hintId = useId();
   const errorId = useId();
   const [over, setOver] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const { mutate, pending: busy } = useMutate();
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState('');
   const variant = variantLabel(viewport, theme);
@@ -294,28 +291,36 @@ function DropZone({
       setError(`${file.name} is not a PNG. Export the frame as PNG and drop that.`);
       return;
     }
-    setBusy(true);
     setError(null);
     setDone('');
-    void (async () => {
-      try {
+    // A proposal is history: a newer one supersedes it and the old one stays to compare, so the
+    // server records the event and offers no reversal — and neither does the toast (FRM-T-18.14).
+    void mutate({
+      subject: screen.humanId,
+      run: async () => {
         const blob = await foreman.uploadBlob(file);
-        await foreman.addProposal(code, screen.humanId, {
+        return foreman.addProposal(code, screen.humanId, {
           blobSha256: blob.sha256,
           viewport,
           theme,
           ...manualProvenance(screen, new Date()),
         });
-        await onAdded();
-        setDone(`${file.name} is now the current ${variant} proposal.`);
-      } catch (caught: unknown) {
-        setError(caught instanceof ApiError ? caught.message : 'The upload did not go through.');
-      } finally {
-        setBusy(false);
+      },
+      message: () => `${screen.humanId} has a new ${variant} proposal — ${file.name}`,
+      refresh: onAdded,
+      undoable: false,
+      failure: 'inline',
+    })
+      .then((outcome) => {
+        if (outcome.ok) setDone(`${file.name} is now the current ${variant} proposal.`);
+        else if (outcome.inFlight !== true) {
+          setError(outcome.error instanceof ApiError ? outcome.message : 'The upload did not go through.');
+        }
+      })
+      .finally(() => {
         // Cleared so choosing the same file again is still a change the input reports.
         if (input.current !== null) input.current.value = '';
-      }
-    })();
+      });
   };
 
   const onDrop = (event: DragEvent<HTMLButtonElement>) => {
@@ -379,7 +384,7 @@ function VerdictForm({
   code: string;
   humanId: string;
   capture: ScreenVersion;
-  onRecorded: () => Promise<void>;
+  onRecorded: () => void;
 }) {
   const legendId = useId();
   const verdictErrorId = useId();
@@ -388,7 +393,7 @@ function VerdictForm({
   const [verdictError, setVerdictError] = useState<string | null>(null);
   const [noteError, setNoteError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { mutate, pending: busy } = useMutate();
   const [done, setDone] = useState('');
 
   const submit = (event: SyntheticEvent) => {
@@ -405,26 +410,32 @@ function VerdictForm({
     setNoteError(missingNote);
     if (verdict === null || missingNote !== null) return;
 
-    setBusy(true);
     const trimmed = note.trim();
-    void (async () => {
-      try {
-        await foreman.recordVerdict(code, humanId, capture.id, {
+    // A verdict is a record of a judgement, and a later one supersedes it: the history is the
+    // undo, so the server does not reverse it and the toast does not offer to.
+    void mutate({
+      subject: `${humanId} capture`,
+      run: () =>
+        foreman.recordVerdict(code, humanId, capture.id, {
           verdict,
           ...(trimmed === '' ? {} : { note: trimmed }),
-        });
-        await onRecorded();
+        }),
+      message: () => `${humanId} capture: ${VERDICT_LABEL[verdict]}`,
+      refresh: onRecorded,
+      undoable: false,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (outcome.ok) {
         setDone(`Recorded: ${VERDICT_LABEL[verdict]}.`);
         setVerdict(null);
         setNote('');
-      } catch (caught: unknown) {
-        const fields = caught instanceof ApiError ? fieldErrors(caught.body) : {};
-        if (fields['note'] !== undefined) setNoteError(fields['note']);
-        else setFormError(caught instanceof Error ? caught.message : 'That did not go through.');
-      } finally {
-        setBusy(false);
+        return;
       }
-    })();
+      if (outcome.inFlight === true) return;
+      const fields = outcome.error instanceof ApiError ? fieldErrors(outcome.error.body) : {};
+      if (fields['note'] !== undefined) setNoteError(fields['note']);
+      else setFormError(outcome.message);
+    });
   };
 
   return (

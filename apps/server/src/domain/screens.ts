@@ -18,7 +18,7 @@ import {
   type ScreenViewport,
 } from '@foreman/shared';
 import type { Db, Prisma } from '../db.js';
-import { record, type Actor, type TransactionClient } from './audit.js';
+import { eventIds, record, type Actor, type TransactionClient } from './audit.js';
 import { openBlob } from './blobs.js';
 import { Conflict, Invalid, NotFound } from './errors.js';
 import { allocate } from './humanId.js';
@@ -319,7 +319,7 @@ export async function createScreen(
   actor: Actor,
   code: string,
   input: ScreenCreate,
-): Promise<ScreenDetail> {
+): Promise<ScreenDetail & { auditEventIds: string[] }> {
   const project = await findProject(db, code);
   const created = await db.$transaction(async (tx) => {
     const { humanId, seq } = await allocate(tx, project, 'screen');
@@ -334,7 +334,7 @@ export async function createScreen(
         figmaNodeId: input.figmaNodeId ?? null,
       },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'screen',
@@ -342,9 +342,9 @@ export async function createScreen(
       entityHumanId: humanId,
       after: bare(row),
     });
-    return row;
+    return { row, event };
   });
-  return getScreen(db, code, created.humanId);
+  return { ...(await getScreen(db, code, created.row.humanId)), auditEventIds: [created.event] };
 }
 
 export async function updateScreen(
@@ -353,9 +353,9 @@ export async function updateScreen(
   code: string,
   humanId: string,
   input: ScreenUpdate,
-): Promise<ScreenDetail> {
+): Promise<ScreenDetail & { auditEventIds: string[] }> {
   const { screen: before } = await screenIn(db, code, humanId);
-  await db.$transaction(async (tx) => {
+  const event = await db.$transaction(async (tx) => {
     const after = await tx.screen.update({
       where: { id: before.id },
       data: {
@@ -365,7 +365,7 @@ export async function updateScreen(
         ...(input.figmaNodeId === undefined ? {} : { figmaNodeId: input.figmaNodeId }),
       },
     });
-    await record(tx, {
+    return record(tx, {
       ...actor,
       action: 'update',
       entityType: 'screen',
@@ -375,7 +375,7 @@ export async function updateScreen(
       after: bare(after),
     });
   });
-  return getScreen(db, code, humanId);
+  return { ...(await getScreen(db, code, humanId)), auditEventIds: [event] };
 }
 
 /**
@@ -405,6 +405,8 @@ export interface Added<T> {
   readonly value: T;
   /** False when an identical one was already there, and nothing was written. */
   readonly created: boolean;
+  /** The audit events the write made, its own first (FRM-REQ-243); empty when nothing was written. */
+  readonly auditEventIds: string[];
 }
 
 /**
@@ -448,15 +450,16 @@ export async function addProposal(
       current.figmaFileKey === input.figmaFileKey &&
       current.figmaNodeId === input.figmaNodeId
     ) {
-      return { value: versionOf(current), created: false };
+      return { value: versionOf(current), created: false, auditEventIds: [] };
     }
 
+    let supersededEvent: string | null = null;
     if (current !== null) {
       const superseded = await tx.screenVersion.update({
         where: { id: current.id },
         data: { status: 'superseded' },
       });
-      await record(tx, {
+      supersededEvent = await record(tx, {
         ...actor,
         action: 'update',
         entityType: 'screen_version',
@@ -482,7 +485,7 @@ export async function addProposal(
       },
     });
     const value = versionOf(row);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'screen_version',
@@ -490,7 +493,8 @@ export async function addProposal(
       entityHumanId: humanId,
       after: { ...value, supersedes: current?.id ?? null },
     });
-    return { value, created: true };
+    // The new proposal's event first, then the one that retired the old.
+    return { value, created: true, auditEventIds: eventIds(event, supersededEvent) };
   });
 }
 
@@ -522,7 +526,7 @@ export async function addCapture(
       },
       include: VERSION_INCLUDE,
     });
-    if (same !== null) return { value: versionOf(same), created: false };
+    if (same !== null) return { value: versionOf(same), created: false, auditEventIds: [] };
 
     const row = await tx.screenVersion.create({
       data: {
@@ -536,7 +540,7 @@ export async function addCapture(
       },
     });
     const value = versionOf(row);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'screen_version',
@@ -544,7 +548,7 @@ export async function addCapture(
       entityHumanId: humanId,
       after: value,
     });
-    return { value, created: true };
+    return { value, created: true, auditEventIds: [event] };
   });
 }
 
@@ -559,7 +563,7 @@ export async function addVerdict(
   humanId: string,
   versionId: string,
   input: ScreenVerdictCreate,
-): Promise<ScreenVerdict> {
+): Promise<ScreenVerdict & { auditEventIds: string[] }> {
   const { screen } = await screenIn(db, code, humanId);
   const version = await db.screenVersion.findFirst({ where: { id: versionId, screenId: screen.id } });
   if (version === null) throw new NotFound(`capture ${versionId} of ${humanId}`);
@@ -579,7 +583,7 @@ export async function addVerdict(
       },
     });
     const value = verdictOf(row);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'screen_verdict',
@@ -587,7 +591,7 @@ export async function addVerdict(
       entityHumanId: humanId,
       after: value,
     });
-    return value;
+    return { ...value, auditEventIds: [event] };
   });
 }
 
@@ -638,7 +642,7 @@ export async function addComponent(
   });
   if (existing !== null) {
     if (existing.requirement?.humanId === requirement?.humanId) {
-      return { value: componentOf(existing), created: false };
+      return { value: componentOf(existing), created: false, auditEventIds: [] };
     }
     throw new Conflict(
       `${humanId} already records ${input.name} as a ${input.kind}` +
@@ -679,7 +683,7 @@ export async function addComponent(
       });
     }
     const value = componentOf(row);
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'screen_component',
@@ -687,7 +691,7 @@ export async function addComponent(
       entityHumanId: humanId,
       after: value,
     });
-    return { value, created: true };
+    return { value, created: true, auditEventIds: [event] };
   });
 }
 

@@ -6,6 +6,7 @@ import {
   DocumentCreate,
   DocumentKind,
   DocumentUpdate,
+  DecisionsQuery,
   PageQuery,
   IdeaCreate,
   IdeaUpdate,
@@ -35,6 +36,7 @@ import {
   createDecision,
   createRisk,
   createTerm,
+  driftAcceptances,
   glossaryFor,
   updateAdr,
   updateDecision,
@@ -54,6 +56,7 @@ import {
 } from '../domain/resources.js';
 import { assertFresh, setEtag } from './concurrency.js';
 import { actorOf, decodeCursor, encodeCursor, handler, param, parseBody, parseQuery } from './helpers.js';
+import { noContentWithEvents } from './undo.js';
 
 /**
  * The record over HTTP: documents and sections, ADRs, decisions, risks and glossary terms.
@@ -325,8 +328,21 @@ export function recordRoutes(db: Db): Router {
   router.get(
     '/:code/decisions',
     handler(async (req, res) => {
-      const query = parseQuery(PageQuery, req, res);
+      const query = parseQuery(DecisionsQuery, req, res);
       if (query === null) return;
+
+      // The decisions that accept drift, read by their link and paged by key, so the Drift tab
+      // reads every one rather than the first page of a list ordered as text (FRM-T-18.15).
+      if (query.acceptsDrift !== undefined) {
+        const after = decodeCursor(query.cursor);
+        if (after !== null && !/^[0-9a-f-]{36}$/i.test(after)) {
+          res.status(400).json({ error: 'the cursor is not one this list issued', fields: [{ path: 'cursor', message: 'not a cursor from this list' }] });
+          return;
+        }
+        const page = await driftAcceptances(db, param(req, 'code'), { limit: query.limit, after });
+        res.json({ ...page, nextCursor: page.nextCursor === null ? null : encodeCursor(page.nextCursor) });
+        return;
+      }
       const project = await findProject(db, param(req, 'code'));
 
       const items = await db.decision.findMany({
@@ -481,8 +497,8 @@ export function recordRoutes(db: Db): Router {
     '/:code/ideas/:humanId',
     canWrite,
     handler(async (req, res) => {
-      await softDelete(db, actorOf(req), 'idea', param(req, 'humanId'));
-      res.status(204).end();
+      const { auditEventIds } = await softDelete(db, actorOf(req), 'idea', param(req, 'humanId'));
+      noContentWithEvents(res, auditEventIds);
     }),
   );
 

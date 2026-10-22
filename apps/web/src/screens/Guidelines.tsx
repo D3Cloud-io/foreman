@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   Button,
@@ -25,7 +25,9 @@ import { Check } from 'lucide-react';
 import type { GroupListing } from '@foreman/shared';
 import { foreman, type GuidelineInput, type GuidelineRow, type GuidelineScope } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
+import { useAnchorId, useRowAnchor } from '../lib/useRowAnchor';
 import { listJoin } from '../lib/groups';
+import { draftSize, useDraftGuard, useMutate } from '../lib/mutate';
 import { GroupChip } from '../ui/groups';
 import { Pill } from '../ui/viz';
 
@@ -41,6 +43,9 @@ import { Pill } from '../ui/viz';
  * Grouped by area, because "what are the design rules" is the question you arrive with. Retired
  * guidelines stay, behind the toggle: why something *used* to be the rule is worth keeping, and
  * a card that vanishes says nothing about whether it was ever there.
+ *
+ * **Every write lands in place, with Undo** (FRM-T-18.4). Delete is soft and undoable, so it acts at
+ * once and the toast offers the way back; the editor asks before a draft is thrown away.
  */
 
 type View = 'active' | 'retired';
@@ -48,7 +53,8 @@ type View = 'active' | 'retired';
 const EMPTY: GuidelineInput = { title: '', area: '', decision: '', rationale: '', guidance: '' };
 
 export function Guidelines() {
-  const { state, reload } = useAsync(() => foreman.guidelines(), []);
+  // `refresh` re-reads in place: a save or an undo never drops the page back to a skeleton.
+  const { state, refresh } = useAsync(() => foreman.guidelines(), []);
   // Which groups exist, for "Applies to" (FRM-REQ-235). A guideline still renders without them.
   const groups = useAsync(() => foreman.groups(), []);
   const listing = groups.state.status === 'ready' ? groups.state.value : null;
@@ -61,11 +67,21 @@ export function Guidelines() {
   const areas = [...new Set(all.map((row) => row.area))].sort();
   const byArea = groupBy(items, (row) => row.area);
 
+  // A jump to a retired guideline switches to the Retired view first, so the card is there to land on.
+  const anchorId = useAnchorId();
+  const anchored = anchorId === null ? undefined : all.find((row) => row.humanId === anchorId);
+  const anchoredView = anchored?.status;
+  useEffect(() => {
+    if (anchoredView !== undefined && anchoredView !== view) setView(anchoredView);
+    // Only a change of the anchor moves the view; picking a view by hand afterwards must stick.
+  }, [anchorId, anchoredView]);
+  useRowAnchor(state.status === 'ready' && items.length > 0 && (anchored === undefined || anchored.status === view));
+
   const saved = (row: GuidelineRow) => {
     setEditing(null);
     // Reopen what was just saved, so an edit made from the card's dialog lands back on it.
     setOpen(row);
-    reload();
+    refresh();
   };
 
   return (
@@ -145,11 +161,15 @@ export function Guidelines() {
             }}
             onChanged={(row) => {
               setOpen(row);
-              reload();
+              refresh();
             }}
             onDeleted={() => {
               setOpen(null);
-              reload();
+              refresh();
+            }}
+            onUndone={() => {
+              setOpen(null);
+              refresh();
             }}
           />
         )}
@@ -161,6 +181,7 @@ export function Guidelines() {
         listing={listing}
         onClose={() => { setEditing(null); }}
         onSaved={saved}
+        onUndone={refresh}
       />
     </Page>
   );
@@ -194,6 +215,7 @@ function GuidelineCard({
 }) {
   return (
     <Card
+      id={row.humanId}
       padding="md"
       interactive
       onClick={onOpen}
@@ -225,27 +247,51 @@ function GuidelineBody({
   onEdit,
   onChanged,
   onDeleted,
+  onUndone,
 }: {
   row: GuidelineRow;
   listing: GroupListing | null;
   onEdit: () => void;
   onChanged: (row: GuidelineRow) => void;
   onDeleted: () => void;
+  /** After an undo from the toast: the card may be back, or back as it was. */
+  onUndone: () => void;
 }) {
-  const [busy, setBusy] = useState(false);
+  const { mutate, pending: busy } = useMutate();
   const [error, setError] = useState<string | null>(null);
 
-  const run = (work: () => Promise<void>) => {
-    setBusy(true);
+  const retired = row.status === 'retired';
+
+  const remove = () => {
     setError(null);
-    work()
-      .catch((caught: unknown) => {
-        setError(caught instanceof Error ? caught.message : String(caught));
-      })
-      .finally(() => { setBusy(false); });
+    // Soft, and undoable from the toast — so it acts at once rather than asking (FRM-T-18.4).
+    void mutate({
+      subject: row.humanId,
+      run: () => foreman.deleteGuideline(row.humanId),
+      message: () => `${row.humanId} deleted`,
+      apply: onDeleted,
+      undone: `Undone — ${row.humanId} is back`,
+      onUndone,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (!outcome.ok && outcome.inFlight !== true) setError(outcome.message);
+    });
   };
 
-  const retired = row.status === 'retired';
+  const toggleRetired = () => {
+    setError(null);
+    void mutate({
+      subject: row.humanId,
+      run: () => foreman.updateGuideline(row.humanId, { status: retired ? 'active' : 'retired' }),
+      message: (saved) => `${saved.humanId} ${saved.status === 'retired' ? 'retired' : 'reinstated'}`,
+      apply: onChanged,
+      undone: `Undone — ${row.humanId} is ${row.status} again`,
+      onUndone,
+      failure: 'inline',
+    }).then((outcome) => {
+      if (!outcome.ok && outcome.inFlight !== true) setError(outcome.message);
+    });
+  };
 
   return (
     <Stack gap="16">
@@ -273,24 +319,13 @@ function GuidelineBody({
         <Button
           variant="danger-ghost"
           disabled={busy}
-          onClick={() => {
-            // Soft delete, undoable from the audit log — but still the one action here that
-            // removes the card from view entirely, so it asks.
-            if (!window.confirm(`Delete ${row.humanId}? Retiring keeps it on record instead.`)) return;
-            run(() => foreman.deleteGuideline(row.humanId).then(onDeleted));
-          }}
+          onClick={remove}
         >
           Delete
         </Button>
         <Button
           disabled={busy}
-          onClick={() => {
-            run(() =>
-              foreman
-                .updateGuideline(row.humanId, { status: retired ? 'active' : 'retired' })
-                .then(onChanged),
-            );
-          }}
+          onClick={toggleRetired}
         >
           {retired ? 'Reinstate' : 'Retire'}
         </Button>
@@ -308,17 +343,30 @@ function GuidelineForm({
   listing,
   onClose,
   onSaved,
+  onUndone,
 }: {
   editing: GuidelineRow | 'new' | null;
   areas: readonly string[];
   listing: GroupListing | null;
   onClose: () => void;
   onSaved: (row: GuidelineRow) => void;
+  onUndone: () => void;
 }) {
+  // How much the open form would lose — reported up by the form, so Escape and the scrim can ask.
+  const [draft, setDraft] = useState(0);
+  const allowClose = useDraftGuard(
+    editing === null ? 0 : draft,
+    editing === 'new' || editing === null ? 'the new guideline' : editing.humanId,
+  );
   return (
     <Modal
       open={editing !== null}
-      onOpenChange={(next) => { if (!next) onClose(); }}
+      onOpenChange={(next) => {
+        if (!next && allowClose()) {
+          setDraft(0);
+          onClose();
+        }
+      }}
       size="lg"
       title={editing === 'new' || editing === null ? 'New guideline' : `Edit ${editing.humanId}`}
       description="The decision is what every brief carries — keep it to a line or two. The reasoning and the how-to are read when someone needs them."
@@ -330,8 +378,16 @@ function GuidelineForm({
           editing={editing}
           areas={areas}
           listing={listing}
-          onClose={onClose}
-          onSaved={onSaved}
+          onClose={() => {
+            setDraft(0);
+            onClose();
+          }}
+          onSaved={(row) => {
+            setDraft(0);
+            onSaved(row);
+          }}
+          onUndone={onUndone}
+          onDraft={setDraft}
         />
       )}
     </Modal>
@@ -344,14 +400,19 @@ function FormBody({
   listing,
   onClose,
   onSaved,
+  onUndone,
+  onDraft,
 }: {
   editing: GuidelineRow | 'new';
   areas: readonly string[];
   listing: GroupListing | null;
   onClose: () => void;
   onSaved: (row: GuidelineRow) => void;
+  onUndone: () => void;
+  /** How many characters would be lost if the form closed now. */
+  onDraft: (characters: number) => void;
 }) {
-  const [draft, setDraft] = useState<GuidelineInput>(
+  const stored: GuidelineInput =
     editing === 'new'
       ? EMPTY
       : {
@@ -360,8 +421,14 @@ function FormBody({
           decision: editing.decision,
           rationale: editing.rationale ?? '',
           guidance: editing.guidance ?? '',
-        },
-  );
+        };
+  const [draft, setDraft] = useState<GuidelineInput>(stored);
+  const { mutate } = useMutate();
+  // Told upward after each render, so the dialog around this form knows what Escape would lose.
+  const unsaved = draftSize({ ...stored }, { ...draft });
+  useEffect(() => {
+    onDraft(unsaved);
+  }, [unsaved, onDraft]);
   const [appliesTo, setAppliesTo] = useState<GuidelineScope>(editing === 'new' ? 'all' : editing.appliesTo);
   const [chosen, setChosen] = useState<readonly string[]>(editing === 'new' ? [] : editing.groups);
   const [busy, setBusy] = useState(false);
@@ -394,13 +461,17 @@ function FormBody({
         ? { appliesTo: 'all' as const }
         : { appliesTo: 'groups' as const, groups: chosenInOrder }),
     };
-    (editing === 'new'
-      ? foreman.createGuideline(body)
-      : foreman.updateGuideline(editing.humanId, body)
-    )
-      .then(onSaved)
-      .catch((caught: unknown) => {
-        setError(caught instanceof Error ? caught.message : String(caught));
+    void mutate({
+      subject: editing === 'new' ? 'the new guideline' : editing.humanId,
+      run: () =>
+        editing === 'new' ? foreman.createGuideline(body) : foreman.updateGuideline(editing.humanId, body),
+      message: (saved) => (editing === 'new' ? `${saved.humanId} added` : `Saved ${saved.humanId}`),
+      onUndone,
+      failure: 'inline',
+    })
+      .then((outcome) => {
+        if (outcome.ok) onSaved(outcome.value);
+        else if (outcome.inFlight !== true) setError(outcome.message);
       })
       .finally(() => { setBusy(false); });
   };

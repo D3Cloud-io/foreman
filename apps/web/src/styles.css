@@ -560,10 +560,24 @@ dd a {
   font-variant-numeric: tabular-nums;
   color: var(--color-fg);
 }
-.fm-stat__value--success { color: var(--color-success); }
+/* Hue is spent only on what needs you (D-016, D-086): danger and warning. A clean figure is plain
+   ink, and one that is not measurable yet is muted. There is no green and no accent here. */
 .fm-stat__value--danger { color: var(--color-danger); }
 .fm-stat__value--warning { color: var(--color-warning); }
-.fm-stat__value--accent { color: var(--color-accent); }
+.fm-stat__value--attention { color: var(--color-fg); }
+.fm-stat__value--muted { color: var(--color-fg-muted); }
+.fm-stat__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+.fm-stat__action {
+  margin-top: var(--space-4);
+  font-size: var(--text-12);
+  font-weight: var(--weight-medium);
+  color: var(--color-accent);
+}
 .fm-stat__detail {
   font-size: var(--text-12);
   color: var(--color-fg-muted);
@@ -572,31 +586,13 @@ dd a {
   margin-top: var(--space-4);
 }
 
-/* Status pills. Five tones, from tokens, because the library's Badge has four
-   and none of them is green (D-016). Each tinted plate is its tone's `-muted`
-   token with the tone itself on it: readable on both themes without a second
-   palette. The neutral plate is the quiet fill (1.5), which reads on any card. */
-.fm-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-6);
-  padding: 0 var(--space-8);
-  height: 1.375rem;
-  border-radius: var(--radius-full);
-  font-size: var(--text-12);
-  font-weight: var(--weight-medium);
-  white-space: nowrap;
-  background: var(--color-fill-quiet);
-  color: var(--color-fg-muted);
-  /* A pill is its content, never its container. `inline-flex` alone does not say so inside a
-     flex column, where it stretches to the full width and reads as a filled bar. */
+/* Status badges are @d3cloud/ui's Badge (D-016, D-086): neutral, attention, warning, danger. This
+   keeps one from stretching to the full width of a flex column, and draws the dot a Pill can lead
+   with. */
+.fm-badge {
   align-self: flex-start;
   width: fit-content;
 }
-.fm-pill--success { background: var(--color-success-muted); color: var(--color-success); }
-.fm-pill--danger { background: var(--color-danger-muted); color: var(--color-danger); }
-.fm-pill--accent { background: var(--color-accent-muted); color: var(--color-accent); }
-.fm-pill--warning { background: var(--color-warning-muted); color: var(--color-warning); }
 .fm-pill__dot {
   width: 0.375rem;
   height: 0.375rem;
@@ -604,11 +600,39 @@ dd a {
   background: currentColor;
   flex: none;
 }
-/* With a dot the tint is redundant and makes a dense row noisy: the dot carries
-   the colour and the plate goes quiet. */
-.fm-pill--dot {
-  background: transparent;
-  padding-left: 0;
+.fm-stat-notes {
+  margin: 0;
+  font-size: var(--text-12);
+}
+.fm-donut-with-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-16);
+  flex-wrap: wrap;
+}
+.fm-donut-with-legend .fm-legend {
+  flex-direction: column;
+  gap: var(--space-4);
+}
+/* Not measurable yet: a plate that says what is missing, quieter than a warning. */
+.fm-unmeasured {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+.fm-unmeasured__checks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+.fm-unmeasured__check {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-12);
 }
 
 /* Project cards. */
@@ -1918,7 +1942,7 @@ a.fm-glist__name:focus-visible {
   gap: var(--space-8);
   min-width: 0;
 }
-.fm-tile__head .fm-pill {
+.fm-tile__head .fm-badge {
   align-self: center;
   flex: none;
 }
@@ -1927,4 +1951,222 @@ a.fm-glist__name:focus-visible {
 .fm-break {
   overflow-wrap: anywhere;
   min-width: 0;
+}
+
+/* ─── Phone tables, one-line stats, and a badge you can see (FRM-REQ-249, FRM-T-18.10) ─────────
+
+   Below `md` (768px) a table keeps each row's title, status and primary control and folds the rest
+   into a sub-line under the title (`ui/tablePriority.ts` chooses the columns; this draws them). The
+   library's own list mode is filed for @d3cloud/ui (DS-REQ-031) and replaces the fold when it ships. */
+
+/* A folded value reads as "Label value", muted, wrapping rather than scrolling. */
+.fm-subline {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-12);
+  row-gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--text-12);
+  line-height: var(--leading-12);
+  color: var(--color-fg-muted);
+}
+.fm-subline__item {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.fm-subline__key {
+  margin-right: var(--space-4);
+  color: var(--color-fg-faint);
+}
+/* A row's title when it is also its link: the whole title is the target, and it wraps. */
+.fm-rowlink {
+  display: block;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 47.99rem) {
+  /* Cells wrap on a phone: the library's nowrap-and-clip is what pushed the sixth column off-screen.
+     Every table, not only the ones that fold columns, so one that has not been given priorities yet
+     still fits the screen rather than scrolling inside it. */
+  .d3-tbl .d3-tbl__td {
+    white-space: normal;
+    overflow-wrap: break-word;
+    vertical-align: top;
+  }
+  /* A heading wraps between words, never inside one, and keeps the room its sort button needs. */
+  .d3-tbl .d3-tbl__th {
+    white-space: normal;
+  }
+  /* Four cards of label, figure, detail and action fill the first screen of a phone. One line each:
+     the label, then the figure and its badge. The detail, chart and action stay in the reading
+     order for a screen reader (nothing is removed) and come back from `md`. */
+  .fm-stat__body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: var(--space-12);
+    row-gap: 0;
+  }
+  .fm-stat__label {
+    grid-column: 1;
+    font-size: var(--text-13);
+    color: var(--color-fg);
+  }
+  .fm-stat__row {
+    grid-column: 2;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+  }
+  .fm-stat__value {
+    font-size: var(--text-16);
+    line-height: var(--leading-16);
+  }
+  .fm-stat__detail,
+  .fm-stat__chart,
+  .fm-stat__action {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .fm-stat {
+    position: relative;
+  }
+  /* The card's own padding is sized for a figure over a caption; a line wants less of it. */
+  .fm-stat.d3-crd {
+    padding: var(--space-8) var(--space-12);
+    min-height: 44px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+}
+
+/* A neutral badge is the library's `surface-raised`, which on some grounds is the page itself: the
+   lifecycle word ("planned") read as a stray word beside the title. An outline in the field-border
+   token makes it a pill on either ground, in both themes, and the word still carries it. */
+.d3-bdg--neutral.fm-badge {
+  background: var(--color-surface-raised);
+  border: var(--border-width) solid var(--color-border-field);
+}
+
+/* ─── Every control, 44 by 44, under a coarse pointer (FRM-REQ-249, FRM-REQ-219) ───────────────
+
+   Controls the library draws and has not yet sized for a thumb (DS-REQ-016: Select, Input, Checkbox,
+   a Table's sort header, PageHeader's back link; DS-REQ-017: SegmentedControl's width) are sized here
+   from Foreman's side, by the element's own classes and never by changing a token. A fine pointer
+   keeps the dense sizes.
+
+   One rule per pattern, not one per screen:
+   - a field is 44 tall, and its input fills it;
+   - a checkbox's hit area is 44 by 44 and its drawn box stays 17 (below);
+   - a button, a tab, a segment and a sort header are at least 44 in both directions;
+   - **every link is a control** unless it is the library's `variant="inline"` link in running prose,
+     which WCAG 2.5.8 exempts: it cannot grow without breaking its line. A link that is a row's or
+     a card's action, a breadcrumb or a "see all" is a control, and is sized by the `:where()` rule,
+     which has no specificity of its own so a class that lays an anchor out (a grid row, a stretched
+     card) keeps its `display`. */
+@media (pointer: coarse) {
+  .d3-inp:not(.d3-inp--area) {
+    min-height: 44px;
+  }
+  /* The input itself fills the field, so the thing a thumb lands on is the thing measured. */
+  .d3-inp__control {
+    align-self: stretch;
+  }
+  .d3-btn {
+    min-width: 44px;
+  }
+  .d3-seg__item {
+    min-width: 44px;
+  }
+  .d3-tabs__tab {
+    min-height: 44px;
+  }
+  .d3-tbl__sort {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* The checkbox is a 17px button beside a label. Its hit area becomes the 44px button and the
+     drawn box moves to ::before at the size it was, so a thumb has room and the page does not
+     change shape: the tick stays above the box. */
+  .d3-cbx {
+    min-height: 44px;
+    gap: var(--space-2);
+  }
+  .d3-cbx__box {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    background: transparent;
+    border-color: transparent;
+  }
+  .d3-cbx__box::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 17px;
+    height: 17px;
+    margin: -8.5px 0 0 -8.5px;
+    box-sizing: border-box;
+    border: var(--border-width) solid var(--color-border-field);
+    border-radius: var(--radius-xs);
+    background: var(--color-surface);
+  }
+  .d3-cbx__box[data-state="checked"]::before,
+  .d3-cbx__box[data-state="indeterminate"]::before {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .d3-cbx--invalid .d3-cbx__box::before {
+    border-color: var(--color-danger);
+  }
+  .d3-cbx__indicator {
+    position: relative;
+    z-index: 1;
+  }
+  .d3-cbx__box[data-state="checked"],
+  .d3-cbx__box[data-state="indeterminate"] {
+    background: transparent;
+    border-color: transparent;
+  }
+
+  /* Every link in a screen is a control unless it is `variant="inline"` or prose: a link in rendered
+     Markdown sits inside a sentence, which WCAG 2.5.8 exempts, and a 44px box would split it. */
+  :where(main a:not(.d3-lnk--inline, .d3-crd, [data-inline-link], .fm-markdown a, .fm-inline-md a)) {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .fm-trail a,
+  .d3-ph__back a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .fm-rowlink {
+    display: flex;
+  }
+  /* The brand in the phone's top bar is a link home: AppShellBrand draws it at the height of its mark. */
+  .d3-shell-brand {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* A row a ⌘K jump landed on (FRM-T-18.13): outlined in the focus tokens. On a table row the id sits
+   on a wrapper inside the first cell, so the wrapper keeps focus without drawing a ring of its own. */
+.fm-row--anchored {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: calc(-1 * var(--focus-width));
+}
+.fm-row-id:focus {
+  outline: none;
 }

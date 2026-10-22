@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -19,11 +19,19 @@ import {
 } from '@d3cloud/ui';
 import { foreman, type IssuedToken, type SignedInSession, type TokenRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
+import { useDraftGuard, useMutate } from '../lib/mutate';
+import { useSession } from '../lib/session';
+import { AgentTabs } from './ConnectAgent';
 import { Pill, StatCard } from '../ui/viz';
 import { relativeDay } from '../ui/tone';
 
 /**
- * Scoped API tokens (FRM-REQ-025, FRM-REQ-026, FRM-REQ-027).
+ * Connect an agent — the scoped API tokens screen, named for the job rather than the credential
+ * (FRM-T-18.9, D-09; FRM-REQ-025, FRM-REQ-026, FRM-REQ-027). The route stays `/tokens`.
+ *
+ * Above the tokens, the three ways an agent connects, each a real command for this instance
+ * (`ConnectAgent.tsx`). A token just issued is watched: the list is re-read until its `lastUsedAt`
+ * moves, and the line under its snippet says "Connected · first call at 14:02".
  *
  * The routes have existed since P2 and nothing in the console reached them, so the only way to
  * mint a token was `issue-token` over SSH on the host. That made the one credential the audit and
@@ -41,7 +49,15 @@ import { relativeDay } from '../ui/tone';
  * - **Revoked is a state, not a deletion.** A revoked row stays visible: "this token existed and
  *   was turned off" is what you want to read six months later, and a row that vanishes tells you
  *   nothing about whether it was ever there.
+ * - **Revoking asks first, because it cannot be undone** (FRM-T-18.4, the destructive ladder). The
+ *   server's undo does not reach `api_token`, so the one thing the console can do is say what is
+ *   about to stop working before it does. Everything that *can* be undone acts at once instead.
  */
+
+/** The confirm's sentence: what stops working, and that there is no way back. */
+export function revokeConsequence(prefix: string): string {
+  return `Agents using ${prefix}… stop working at once. This cannot be undone.`;
+}
 
 const SCOPES = [
   { value: 'read', label: 'Read', detail: 'Answer questions. Every GET.' },
@@ -53,6 +69,10 @@ function scopeTone(scope: string) {
   return scope === 'admin' ? 'danger' : scope === 'write' ? 'warning' : 'neutral';
 }
 
+/** How often the list is re-read while a new token waits for its first call, and for how long. */
+const WATCH_EVERY_MS = 5_000;
+const WATCH_FOR = 120;
+
 /** Live, revoked, or expired — the three states a row can be in, decided in one place. */
 function stateOf(row: TokenRow): { label: string; tone: 'success' | 'neutral' | 'warning' } {
   if (row.revokedAt !== null) return { label: 'revoked', tone: 'neutral' };
@@ -63,11 +83,32 @@ function stateOf(row: TokenRow): { label: string; tone: 'success' | 'neutral' | 
 }
 
 export function Tokens() {
-  const { state, reload } = useAsync(() => foreman.tokens(), []);
+  const { state, refresh } = useAsync(() => foreman.tokens(), []);
   const [creating, setCreating] = useState(false);
   const [issued, setIssued] = useState<IssuedToken | null>(null);
+  const [revoking, setRevoking] = useState<TokenRow | null>(null);
+  const [watching, setWatching] = useState<string | null>(null);
+  const { oidcAvailable } = useSession();
+  const origin = window.location.origin;
 
   const rows = state.status === 'ready' ? state.value.items : [];
+  const watched = watching === null ? null : (rows.find((row) => row.id === watching) ?? null);
+  const waiting = watched !== null && watched.lastUsedAt === null && watched.revokedAt === null;
+
+  // Waiting for the first call: the existing list, re-read in place until the token's last-used
+  // time moves (FRM-DA-009 — no new route). Bounded, so a forgotten tab does not poll for ever.
+  useEffect(() => {
+    if (!waiting) return undefined;
+    let reads = 0;
+    const timer = setInterval(() => {
+      reads += 1;
+      if (reads > WATCH_FOR) clearInterval(timer);
+      else refresh();
+    }, WATCH_EVERY_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [waiting, refresh]);
   const active = rows.filter((row) => stateOf(row).label === 'active');
   const writers = active.filter((row) => row.scopes.includes('write') || row.scopes.includes('admin'));
 
@@ -75,16 +116,17 @@ export function Tokens() {
     (token: IssuedToken) => {
       setCreating(false);
       setIssued(token);
-      reload();
+      setWatching(token.id);
+      refresh();
     },
-    [reload],
+    [refresh],
   );
 
   return (
     <Page>
       <PageHeader
-        title="API tokens"
-        description="For the MCP shim, the audit skills, and anything that talks to Foreman without a browser."
+        title="Connect an agent"
+        description="Claude Code, the audit and planning skills, or any script that talks to Foreman without a browser. Each way in below is a real, working command for this instance."
         {...(state.status === 'ready'
           ? { count: active.length, countNoun: { one: 'active token', other: 'active tokens' } }
           : {})}
@@ -96,6 +138,10 @@ export function Tokens() {
       />
 
       <Stack gap="24">
+        <Section title="Ways in" surface="card">
+          <AgentTabs origin={origin} oidcAvailable={oidcAvailable} watched={watched} />
+        </Section>
+
         <Grid minItemWidth="sm">
           <StatCard label="Active" value={active.length} detail="Usable right now" />
           <StatCard
@@ -148,7 +194,9 @@ export function Tokens() {
                           {/* "Never used" is worth saying plainly: it is how you find the token
                               you issued, pasted wrong, and replaced without revoking. */}
                           {row.lastUsedAt === null
-                            ? 'never used'
+                            ? here.label === 'active'
+                              ? 'waiting for its first call'
+                              : 'never used'
                             : `last used ${relativeDay(row.lastUsedAt)}`}
                           {' · '}
                           issued {relativeDay(row.createdAt)}
@@ -157,9 +205,8 @@ export function Tokens() {
                       </Stack>
                       {row.revokedAt === null && (
                         <Button
-                          onClick={() => {
-                            void foreman.revokeToken(row.id).then(reload);
-                          }}
+                          aria-label={`Revoke ${row.name}`}
+                          onClick={() => { setRevoking(row); }}
                         >
                           Revoke
                         </Button>
@@ -170,13 +217,21 @@ export function Tokens() {
               })}
             </Stack>
           )}
+          <p className="fm-muted">The remote MCP needs no token here. It signs in through D3 Auth, as you.</p>
         </Section>
       </Stack>
 
       <SignedIn />
 
       <IssueDialog open={creating} onClose={() => { setCreating(false); }} onIssued={onIssued} />
-      <ShownOnceDialog issued={issued} onClose={() => { setIssued(null); }} />
+      <RevokeDialog row={revoking} onClose={() => { setRevoking(null); }} onRevoked={refresh} />
+      <ShownOnceDialog
+        issued={issued}
+        watched={watched}
+        origin={origin}
+        oidcAvailable={oidcAvailable}
+        onClose={() => { setIssued(null); }}
+      />
     </Page>
   );
 }
@@ -194,6 +249,8 @@ function IssueDialog({
   const [scopes, setScopes] = useState<string[]>(['read']);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { mutate } = useMutate();
+  const allowClose = useDraftGuard(open ? name.trim().length : 0, 'the new token');
 
   const toggle = (scope: string, on: boolean) => {
     setScopes((current) =>
@@ -204,15 +261,22 @@ function IssueDialog({
   const submit = () => {
     setBusy(true);
     setError(null);
-    foreman
-      .issueToken({ name: name.trim(), scopes })
-      .then((token) => {
+    // No toast: the shown-once dialog that follows is the answer, and it is not one to miss.
+    void mutate({
+      subject: name.trim(),
+      run: () => foreman.issueToken({ name: name.trim(), scopes }),
+      message: () => null,
+      undoable: false,
+      failure: 'inline',
+    })
+      .then((outcome) => {
+        if (!outcome.ok) {
+          if (outcome.inFlight !== true) setError(outcome.message);
+          return;
+        }
         setName('');
         setScopes(['read']);
-        onIssued(token);
-      })
-      .catch((caught: unknown) => {
-        setError(caught instanceof Error ? caught.message : String(caught));
+        onIssued(outcome.value);
       })
       .finally(() => { setBusy(false); });
   };
@@ -220,7 +284,8 @@ function IssueDialog({
   return (
     <Modal
       open={open}
-      onOpenChange={(next) => { if (!next) onClose(); }}
+      // Escape or the scrim with a name typed asks first; Cancel is the person saying discard.
+      onOpenChange={(next) => { if (!next && allowClose()) onClose(); }}
       title="Issue an API token"
       description="Named, scoped, and shown exactly once."
     >
@@ -271,6 +336,97 @@ function IssueDialog({
 }
 
 /**
+ * Revoke, asked first — the one write on this screen that cannot be undone. It names the token and
+ * what stops working, and Keep token is where focus lands (`destructive`), so Enter keeps it.
+ */
+function RevokeDialog({
+  row,
+  onClose,
+  onRevoked,
+}: {
+  row: TokenRow | null;
+  onClose: () => void;
+  onRevoked: () => void;
+}) {
+  const { mutate, pending } = useMutate();
+  const [error, setError] = useState<string | null>(null);
+  // Keep token, not the dialog: `destructive` keeps focus off the danger button by focusing the
+  // dialog itself, and Enter on the safe choice is the point. Moved after Radix has placed it.
+  const keep = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (row === null) return undefined;
+    const frame = requestAnimationFrame(() => {
+      keep.current?.focus();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [row]);
+
+  const revoke = (target: TokenRow) => {
+    setError(null);
+    void mutate({
+      subject: target.name,
+      run: () => foreman.revokeToken(target.id),
+      message: () => `Revoked “${target.name}”`,
+      refresh: onRevoked,
+      // The server cannot put a token back, so the toast offers nothing to press.
+      undoable: false,
+      // A refusal goes in a toast as well as here, so closing the dialog mid-request loses nothing.
+      failure: 'toast',
+    }).then((outcome) => {
+      if (outcome.ok) onClose();
+      else if (outcome.inFlight !== true) setError(outcome.message);
+    });
+  };
+
+  return (
+    <Modal
+      open={row !== null}
+      onOpenChange={(next) => {
+        if (!next) {
+          setError(null);
+          onClose();
+        }
+      }}
+      destructive
+      title={row === null ? '' : `Revoke “${row.name}”?`}
+      description={row === null ? undefined : revokeConsequence(row.prefix)}
+      footer={
+        row === null ? undefined : (
+          <>
+            <Button ref={keep} onClick={onClose}>
+              Keep token
+            </Button>
+            <Button
+              variant="danger"
+              loading={pending}
+              onClick={() => { revoke(row); }}
+            >
+              {`Revoke ${row.name}`}
+            </Button>
+          </>
+        )
+      }
+    >
+      {row === null ? null : (
+        <Stack gap="12">
+          <p>
+            To give an agent access again, issue a new token and hand it over. The revoked one stays
+            in the list, so the history still reads.
+          </p>
+          {error === null ? null : (
+            <Alert tone="danger" title="It was not revoked" dynamic>
+              {error}
+            </Alert>
+          )}
+        </Stack>
+      )}
+    </Modal>
+  );
+}
+
+/**
  * The secret, once.
  *
  * Deliberately not auto-dismissed and not copied for you: the one irreversible moment in this
@@ -279,9 +435,16 @@ function IssueDialog({
  */
 function ShownOnceDialog({
   issued,
+  watched,
+  origin,
+  oidcAvailable,
   onClose,
 }: {
   issued: IssuedToken | null;
+  /** The new token as the list last read it, for the waiting line. */
+  watched: TokenRow | null;
+  origin: string;
+  oidcAvailable: boolean;
   onClose: () => void;
 }) {
   return (
@@ -297,12 +460,14 @@ function ShownOnceDialog({
           <Alert tone="warning" title="Copy it before you close this">
             Foreman stores only a hash. If you lose it, issue another and revoke this one.
           </Alert>
-          <Stack gap="4">
-            <span className="fm-part__label">For the audit and planning skills</span>
-            <pre className="fm-secret fm-secret--quiet">
-              {`export FOREMAN_URL=${window.location.origin}\nexport FOREMAN_WRITE_TOKEN=${issued.token}`}
-            </pre>
-          </Stack>
+          {/* Each way in, with this token in it — the skills only when it can write (FRM-DA-009). */}
+          <AgentTabs
+            origin={origin}
+            oidcAvailable={oidcAvailable}
+            initial="shim"
+            token={{ name: issued.name, secret: issued.token, scopes: issued.scopes }}
+            watched={watched ?? { name: issued.name, lastUsedAt: null }}
+          />
           <FormActions>
             <Button variant="primary" onClick={onClose}>
               I have copied it
@@ -327,7 +492,8 @@ function sessionName(row: SignedInSession): string {
  * once; a phone finds out at its next refresh.
  */
 function SignedIn() {
-  const { state, reload } = useAsync(() => foreman.sessions(), []);
+  const { state, refresh } = useAsync(() => foreman.sessions(), []);
+  const { mutate } = useMutate();
   return (
     <Section title="Signed in" description="Everywhere this account is signed in. End any you don’t recognise." surface="card">
       {state.status === 'loading' ? <Skeleton lines={2} /> : null}
@@ -352,7 +518,15 @@ function SignedIn() {
                     size="sm"
                     aria-label={`Sign out ${sessionName(row)}`}
                     onClick={() => {
-                      void foreman.endSession(row.id).then(reload);
+                      // Not undoable — a session ended is ended — but signing in again is the way
+                      // back, so it acts at once and says so.
+                      void mutate({
+                        subject: sessionName(row),
+                        run: () => foreman.endSession(row.id),
+                        message: () => `Signed out ${sessionName(row)}`,
+                        refresh,
+                        undoable: false,
+                      });
                     }}
                   >
                     Sign out

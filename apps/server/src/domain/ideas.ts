@@ -70,7 +70,7 @@ export async function createIdea(db: Db, actor: Actor, code: string, input: Idea
       select: SELECT,
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'idea',
@@ -78,7 +78,7 @@ export async function createIdea(db: Db, actor: Actor, code: string, input: Idea
       entityHumanId: humanId,
       after: idea,
     });
-    return idea;
+    return { ...idea, auditEventIds: [event] };
   });
 }
 
@@ -120,7 +120,7 @@ export async function updateIdea(db: Db, actor: Actor, humanId: string, input: I
       select: SELECT,
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'idea',
@@ -129,6 +129,6 @@ export async function updateIdea(db: Db, actor: Actor, humanId: string, input: I
       before,
       after: idea,
     });
-    return idea;
+    return { ...idea, auditEventIds: [event] };
   });
 }

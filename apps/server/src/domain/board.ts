@@ -101,7 +101,7 @@ export async function score(
       include: { user: { select: { id: true, displayName: true } } },
     });
 
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'idea_score',
@@ -109,7 +109,7 @@ export async function score(
       entityHumanId: humanId,
       after: { impact: saved.impact, effort: saved.effort },
     });
-    return saved;
+    return { ...saved, auditEventIds: [event] };
   });
 }
 
@@ -150,7 +150,7 @@ export async function comment(
       data: { projectIdeaId: idea.id, userId, body: input.body, internal: input.internal },
       include: { user: { select: { id: true, displayName: true, role: true } } },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'create',
       entityType: 'idea_comment',
@@ -158,7 +158,7 @@ export async function comment(
       entityHumanId: humanId,
       after: { internal: saved.internal },
     });
-    return saved;
+    return { ...saved, auditEventIds: [event] };
   });
 }
 
@@ -184,7 +184,7 @@ export async function editComment(db: Db, actor: Actor, userId: string, id: stri
       data: { body },
       include: { user: { select: { id: true, displayName: true, role: true } } },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'update',
       entityType: 'idea_comment',
@@ -192,7 +192,7 @@ export async function editComment(db: Db, actor: Actor, userId: string, id: stri
       before: { body: before.body },
       after: { body },
     });
-    return saved;
+    return { ...saved, auditEventIds: [event] };
   });
 }
 
@@ -211,7 +211,7 @@ export async function deleteComment(db: Db, actor: Actor, userId: string, id: st
       where: { id },
       data: { deletedAt: new Date() },
     });
-    await record(tx, {
+    const event = await record(tx, {
       ...actor,
       action: 'delete',
       entityType: 'idea_comment',
@@ -219,7 +219,7 @@ export async function deleteComment(db: Db, actor: Actor, userId: string, id: st
       before,
       after: removed,
     });
-    return { deleted: id };
+    return { deleted: id, auditEventIds: [event] };
   });
 }
 
