@@ -15,6 +15,7 @@ import { foreman, type MatrixRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
+import { plural } from '../ui/status';
 
 /**
  * The Requirements Register, generated (T-3.9, FRM-REQ-057, FRM-REQ-055, ADR-006).
@@ -138,7 +139,7 @@ export function RegisterView({ code }: { code: string }) {
           {coverage.state.value.uncoveredMusts.length === 0 ? null : (
             <Alert
               tone="danger"
-              title={`${String(coverage.state.value.uncoveredMusts.length)} Musts nothing covers`}
+              title={`${plural(coverage.state.value.uncoveredMusts.length, 'Must', 'Musts')} nothing covers`}
             >
               {coverage.state.value.uncoveredMusts.map((r) => r.humanId).join(', ')}
             </Alert>

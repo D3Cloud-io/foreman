@@ -74,7 +74,7 @@ export function CoverageSummary({ code }: { code: string }) {
                 requirements.musts === 0
                   ? 'No Must requirements recorded'
                   : uncoveredMusts === 0
-                    ? `All ${String(requirements.musts)} Musts are cited by a task`
+                    ? `All ${plural(requirements.musts, 'Must is', 'Musts are')} cited by a task`
                     : `${String(uncoveredMusts)} of ${String(requirements.musts)} Musts have no task citing them`
               }
               href={`${register}?uncovered=true&priority=M`}

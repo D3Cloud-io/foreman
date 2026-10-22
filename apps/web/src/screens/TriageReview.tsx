@@ -31,6 +31,7 @@ import {
   useScrollToSelected,
   useTriageKeys,
 } from './triage';
+import { formatDateTime } from '../lib/text';
 
 /**
  * The Review tab of `/findings` (FRM-T-18.7): every attribution an agent or the ingest pass proposed
@@ -299,7 +300,7 @@ export function ReviewTab({ search, queue, phrase }: { search: string; queue: Re
             <DescriptionList>
               <DescriptionItem term="Repository">{item.commit.repo}</DescriptionItem>
               <DescriptionItem term="Author">
-                {item.commit.author} · {item.commit.committedAt.slice(0, 16).replace('T', ' ')}
+                {item.commit.author} · {formatDateTime(item.commit.committedAt)}
               </DescriptionItem>
               <DescriptionItem term="CI">{checksWords(item.commit.checks)}</DescriptionItem>
             </DescriptionList>
