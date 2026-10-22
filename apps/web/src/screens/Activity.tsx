@@ -117,7 +117,7 @@ export function Activity({ code }: { code: string }) {
             // A dormant project is visibly dormant (FRM-REQ-113). Across nineteen projects, the
             // ones that stopped are the ones worth noticing.
             <Alert tone="warning" title="Nothing has landed here in a month">
-              {plural(cadence.state.value.dormantDays ?? 0, 'day', 'days')} since the last commit.
+              {plural(cadence.state.value.dormantDays, 'day', 'days')} since the last commit.
             </Alert>
           ) : null}
         </Card>
@@ -154,7 +154,7 @@ export function Activity({ code }: { code: string }) {
         aria-label="Filter the commits"
         trailing={
           commits.state.status === 'ready' ? (
-            <span className="fm-muted">{plural(commits.state.value.total, 'commit', 'commits')}</span>
+            <span className="fm-muted">{plural(commits.state.value.total ?? 0, 'commit', 'commits')}</span>
           ) : null
         }
       >
