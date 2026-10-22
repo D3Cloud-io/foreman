@@ -253,7 +253,11 @@ test.describe('a thumb, not a cursor, on every screen', () => {
     await expect(link).toBeVisible();
     // Inline, at the height of its line — not a 44px box that breaks the sentence around it.
     expect(await link.evaluate((el) => getComputedStyle(el).display)).toBe('inline');
-    expect((await link.boundingBox())?.height ?? 0).toBeLessThan(40);
+    // A long link wraps across lines in a phone's width, so measure each line it sits on: every
+    // line box is a line of text's height, never a 44px control.
+    const lines = await link.evaluate((el) => [...el.getClientRects()].map((r) => r.height));
+    expect(lines.length).toBeGreaterThan(0);
+    for (const height of lines) expect(height).toBeLessThan(40);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
