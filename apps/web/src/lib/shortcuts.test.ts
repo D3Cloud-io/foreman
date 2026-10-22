@@ -152,13 +152,16 @@ describe('an exact human ID', () => {
     expect(href('BND-REQ-012')).toBe('/requirements/BND-REQ-012');
     expect(href('FRM-T-18.5')).toBe('/tasks/FRM-T-18.5');
     expect(href('FRM-P-18')).toBe('/projects/FRM/phases/FRM-P-18');
-    expect(href('FRM-ADR-016')).toBe('/projects/FRM/adrs');
-    expect(href('FRM-R-001')).toBe('/projects/FRM/risks');
+    expect(href('FRM-ADR-016')).toBe('/projects/FRM/adrs#FRM-ADR-016');
+    expect(href('FRM-R-001')).toBe('/projects/FRM/risks#FRM-R-001');
     expect(href('EXMP-CR-001')).toBe('/findings/EXMP-CR-001');
     expect(href('EXMP-DA-001')).toBe('/findings/EXMP-DA-001');
     expect(href('BND-SCR-001')).toBe('/projects/BND/screens/BND-SCR-001');
     expect(href('PI-007')).toBe('/project-ideas/PI-007');
-    expect(href('GL-004')).toBe('/guidelines');
+    expect(href('GL-004')).toBe('/guidelines#GL-004');
+    expect(href('BND-IDEA-003')).toBe('/projects/BND/ideas#BND-IDEA-003');
+    expect(href('BND-AUD-002')).toBe('/projects/BND/audits#BND-AUD-002');
+    expect(href('BND-TERM-001')).toBe('/projects/BND/glossary#BND-TERM-001');
   });
 
   it('sends a kind without a page of its own to Search, which finds it by ID', () => {

@@ -1,4 +1,4 @@
-import { useMemo, useState, type SyntheticEvent } from 'react';
+import { useEffect, useMemo, useState, type SyntheticEvent } from 'react';
 import {
   Alert,
   Button,
@@ -18,6 +18,7 @@ import {
 } from '@d3cloud/ui';
 import { foreman, type DocumentRow, type IdeaRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
+import { useAnchorId, useRowAnchor } from '../lib/useRowAnchor';
 import { draftSize, useDraftGuard, useMutate } from '../lib/mutate';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { Pill, SegmentBar, StatCard } from '../ui/viz';
@@ -104,6 +105,14 @@ export function Ideas({ code }: { code: string }) {
   }, [items]);
 
   const shown = filter === null ? items : items.filter((item) => item.status === filter);
+
+  // A jump to an idea the status filter hides drops the filter first, so the card is there to land on.
+  const anchorId = useAnchorId();
+  const hidden = anchorId !== null && !shown.some((idea) => idea.humanId === anchorId) && items.some((idea) => idea.humanId === anchorId);
+  useEffect(() => {
+    if (hidden) setFilter(null);
+  }, [hidden]);
+  useRowAnchor(state.status === 'ready' && shown.length > 0 && !hidden);
 
   return (
     <Page>
@@ -198,7 +207,7 @@ function IdeaCard({
     // Named, because the card holds its own Edit and Delete. In a grid of them those buttons are
     // six identical "Edit"s in a row to anyone not looking at the screen; the group's name is what
     // says which idea each pair belongs to.
-    <Card padding="md" role="group" aria-label={`${idea.humanId}: ${idea.title}`}>
+    <Card id={idea.humanId} tabIndex={-1} padding="md" role="group" aria-label={`${idea.humanId}: ${idea.title}`}>
       <Stack gap="12">
         <Cluster gap="8" align="center" justify="between">
           <span className="fm-item__id">{idea.humanId}</span>

@@ -25,6 +25,7 @@ import { Check } from 'lucide-react';
 import type { GroupListing } from '@foreman/shared';
 import { foreman, type GuidelineInput, type GuidelineRow, type GuidelineScope } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
+import { useAnchorId, useRowAnchor } from '../lib/useRowAnchor';
 import { listJoin } from '../lib/groups';
 import { draftSize, useDraftGuard, useMutate } from '../lib/mutate';
 import { GroupChip } from '../ui/groups';
@@ -65,6 +66,16 @@ export function Guidelines() {
   const items = all.filter((row) => row.status === view);
   const areas = [...new Set(all.map((row) => row.area))].sort();
   const byArea = groupBy(items, (row) => row.area);
+
+  // A jump to a retired guideline switches to the Retired view first, so the card is there to land on.
+  const anchorId = useAnchorId();
+  const anchored = anchorId === null ? undefined : all.find((row) => row.humanId === anchorId);
+  const anchoredView = anchored?.status;
+  useEffect(() => {
+    if (anchoredView !== undefined && anchoredView !== view) setView(anchoredView);
+    // Only a change of the anchor moves the view; picking a view by hand afterwards must stick.
+  }, [anchorId, anchoredView]);
+  useRowAnchor(state.status === 'ready' && items.length > 0 && (anchored === undefined || anchored.status === view));
 
   const saved = (row: GuidelineRow) => {
     setEditing(null);
@@ -204,6 +215,7 @@ function GuidelineCard({
 }) {
   return (
     <Card
+      id={row.humanId}
       padding="md"
       interactive
       onClick={onOpen}

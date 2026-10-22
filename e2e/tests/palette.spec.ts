@@ -93,6 +93,21 @@ test.describe('on a laptop', () => {
     }
   });
 
+  test('a decision ID lands on its row: the list scrolls to it, focuses it and outlines it', async ({ page }) => {
+    await signIn(page);
+    await openWithSlash(page);
+    const input = paletteOf(page).getByRole('combobox');
+    await input.fill('exmp-adr-001');
+    await input.press('Enter');
+
+    await expect(page).toHaveURL(/\/projects\/EXMP\/adrs#EXMP-ADR-001$/);
+    const row = page.locator('[id="EXMP-ADR-001"]');
+    await expect(row).toBeVisible();
+    await expect(row).toBeFocused();
+    await expect(row).toHaveClass(/fm-row--anchored/);
+    await expect(row).toBeInViewport();
+  });
+
   test('a word lists Go to first, and Enter on a screen goes there', async ({ page }) => {
     await signIn(page);
     await openWithSlash(page);

@@ -12,6 +12,7 @@ import { ProjectHeader } from '../components/ProjectHeader';
 import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
 import { plural } from '../ui/status';
 import { formatDate } from '../lib/text';
+import { rowAnchor, useRowAnchor } from '../lib/useRowAnchor';
 
 /**
  * The Risk Register, generated (T-4.12, FRM-REQ-073, ADR-006).
@@ -33,7 +34,7 @@ export function RiskRegister({ code }: { code: string }) {
   // tripwire fold into the sub-line (FRM-REQ-249).
   const riskColumns: PriorityColumn<RiskRow>[] = [
     { key: 'humanId', header: 'ID', width: '7rem', phone: 'fold', foldLabel: '', cell: (row) => row.humanId },
-    { key: 'title', header: 'Risk', phone: 'host', cell: (row) => row.title },
+    { key: 'title', header: 'Risk', phone: 'host', cell: (row) => rowAnchor(row.humanId, row.title) },
     {
       key: 'likelihood',
       header: 'Likelihood',
@@ -76,6 +77,8 @@ export function RiskRegister({ code }: { code: string }) {
   ];
 
   const columns = priorityColumns(riskColumns, usePhone());
+
+  useRowAnchor(state.status === 'ready' && state.value.items.length > 0);
 
   const fired =
     state.status === 'ready' ? state.value.items.filter((r) => r.status === 'fired') : [];
