@@ -10,6 +10,7 @@ import { useAsync } from '../lib/useAsync';
 import { ProjectHeader } from '../components/ProjectHeader';
 import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
 import { formatDate } from '../lib/text';
+import { rowAnchor, useRowAnchor } from '../lib/useRowAnchor';
 
 /**
  * The Audit Index, generated (T-4.12, FRM-REQ-073, ADR-006).
@@ -24,7 +25,7 @@ export function AuditIndex({ code }: { code: string }) {
   // Below 768px: the audit's ID is the title, its status stays, and kind, date, scope, rounds and
   // findings fold into the sub-line (FRM-REQ-249).
   const auditColumns: PriorityColumn<AuditRow>[] = [
-    { key: 'humanId', header: 'ID', width: '8rem', phone: 'host', cell: (row) => row.humanId },
+    { key: 'humanId', header: 'ID', width: '8rem', phone: 'host', cell: (row) => rowAnchor(row.humanId, row.humanId) },
     {
       key: 'kind',
       header: 'Kind',
@@ -82,6 +83,7 @@ export function AuditIndex({ code }: { code: string }) {
   ];
 
   const columns = priorityColumns(auditColumns, usePhone());
+  useRowAnchor(state.status === 'ready' && state.value.items.length > 0);
 
   return (
     <Page>

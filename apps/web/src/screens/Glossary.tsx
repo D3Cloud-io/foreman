@@ -9,6 +9,7 @@ import { foreman, type TermRow } from '../lib/api';
 import { useAsync } from '../lib/useAsync';
 import { InlineMarkdown } from '../components/InlineMarkdown';
 import { ProjectHeader } from '../components/ProjectHeader';
+import { rowAnchor, useRowAnchor } from '../lib/useRowAnchor';
 import { priorityColumns, usePhone, type PriorityColumn } from '../ui/tablePriority';
 
 /**
@@ -34,17 +35,20 @@ export function Glossary({ code }: { code: string }) {
       width: '14rem',
       sortable: true,
       phone: 'host',
-      phoneCell: (row) => (
-        <>
-          <strong>
-            <InlineMarkdown>{row.term}</InlineMarkdown>
-          </strong>
-          <div>
-            <InlineMarkdown>{row.definition}</InlineMarkdown>
-          </div>
-        </>
-      ),
-      cell: (row) => <InlineMarkdown>{row.term}</InlineMarkdown>,
+      // A term has no human ID, so its row is addressed by the record's own id.
+      phoneCell: (row) =>
+        rowAnchor(
+          row.id,
+          <>
+            <strong>
+              <InlineMarkdown>{row.term}</InlineMarkdown>
+            </strong>
+            <div>
+              <InlineMarkdown>{row.definition}</InlineMarkdown>
+            </div>
+          </>,
+        ),
+      cell: (row) => rowAnchor(row.id, <InlineMarkdown>{row.term}</InlineMarkdown>),
     },
     { key: 'definition', header: 'Definition', phone: 'hide', cell: (row) => <InlineMarkdown>{row.definition}</InlineMarkdown> },
     {
@@ -72,6 +76,7 @@ export function Glossary({ code }: { code: string }) {
   ];
 
   const columns = priorityColumns(termColumns, usePhone());
+  useRowAnchor(state.status === 'ready' && state.value.items.length > 0);
 
   return (
     <Page>

@@ -2160,3 +2160,13 @@ a.fm-glist__name:focus-visible {
     min-width: 44px;
   }
 }
+
+/* A row a ⌘K jump landed on (FRM-T-18.13): outlined in the focus tokens. On a table row the id sits
+   on a wrapper inside the first cell, so the wrapper keeps focus without drawing a ring of its own. */
+.fm-row--anchored {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: calc(-1 * var(--focus-width));
+}
+.fm-row-id:focus {
+  outline: none;
+}

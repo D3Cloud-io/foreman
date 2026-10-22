@@ -16,6 +16,8 @@ export interface Location {
   readonly path: string;
   /** The raw query string, `?uncovered=true` or empty. A filtered link is a shareable link. */
   readonly search: string;
+  /** The raw fragment, `#BND-ADR-002` or empty: the row a list screen scrolls to (FRM-T-18.13). */
+  readonly hash: string;
 }
 
 /**
@@ -33,7 +35,7 @@ export interface Location {
  * `createLocationStore` takes the window so it can be tested without a browser.
  */
 export interface LocationStore {
-  /** The current `pathname + search`. A string, so a snapshot compares by value. */
+  /** The current `pathname + search + hash`. A string, so a snapshot compares by value. */
   readonly snapshot: () => string;
   readonly subscribe: (listener: () => void) => () => void;
   readonly navigate: (to: string) => void;
@@ -42,13 +44,17 @@ export interface LocationStore {
 
 /** The slice of `window` the store touches. */
 export interface LocationHost {
-  readonly location: { readonly pathname: string; readonly search: string };
+  readonly location: {
+    readonly pathname: string;
+    readonly search: string;
+    readonly hash: string;
+  };
   readonly history: {
     pushState(data: unknown, unused: string, url?: string | URL | null): void;
     replaceState(data: unknown, unused: string, url?: string | URL | null): void;
   };
-  addEventListener(type: 'popstate', listener: () => void): void;
-  removeEventListener(type: 'popstate', listener: () => void): void;
+  addEventListener(type: 'popstate' | 'hashchange', listener: () => void): void;
+  removeEventListener(type: 'popstate' | 'hashchange', listener: () => void): void;
   readonly document: {
     addEventListener(type: 'click', listener: (event: MouseEvent) => void): void;
     removeEventListener(type: 'click', listener: (event: MouseEvent) => void): void;
@@ -58,7 +64,7 @@ export interface LocationHost {
 
 export function createLocationStore(host: LocationHost): LocationStore {
   const listeners = new Set<() => void>();
-  const snapshot = () => host.location.pathname + host.location.search;
+  const snapshot = () => host.location.pathname + host.location.search + host.location.hash;
   const emit = () => {
     for (const listener of [...listeners]) listener();
   };
@@ -95,6 +101,8 @@ export function createLocationStore(host: LocationHost): LocationStore {
     subscribe: (listener) => {
       if (listeners.size === 0) {
         host.addEventListener('popstate', emit);
+        // A fragment link (`<a href="#x">`) moves the hash without a click this store handles.
+        host.addEventListener('hashchange', emit);
         host.document.addEventListener('click', onClick);
       }
       listeners.add(listener);
@@ -102,6 +110,7 @@ export function createLocationStore(host: LocationHost): LocationStore {
         listeners.delete(listener);
         if (listeners.size === 0) {
           host.removeEventListener('popstate', emit);
+          host.removeEventListener('hashchange', emit);
           host.document.removeEventListener('click', onClick);
         }
       };
@@ -129,10 +138,18 @@ export function useLocation(): Location {
     () => '/',
   );
 
-  const index = href.indexOf('?');
+  return splitHref(href);
+}
+
+/** `/path?query#fragment` as its three parts. The query never contains a `#`, so it comes first. */
+export function splitHref(href: string): Location {
+  const at = href.indexOf('#');
+  const hash = at === -1 ? '' : href.slice(at);
+  const rest = at === -1 ? href : href.slice(0, at);
+  const index = rest.indexOf('?');
   return index === -1
-    ? { path: href, search: '' }
-    : { path: href.slice(0, index), search: href.slice(index) };
+    ? { path: rest, search: '', hash }
+    : { path: rest.slice(0, index), search: rest.slice(index), hash };
 }
 
 /**

@@ -258,7 +258,8 @@ export function exactId(query: string): string | null {
 /**
  * Where an exact human ID goes, resolved here and not by a search: a requirement, task, finding,
  * phase, screen or project idea has a page of its own; a decision record, risk, term, idea or audit
- * has its project's list; a guideline has the guidelines; a group has its page. Anything else —
+ * has its project's list and a guideline the guidelines, each with `#<ID>` so the list scrolls to
+ * the row (FRM-T-18.13); a group has its page. Anything else —
  * a decision (`-D-`), a document — goes to Search with the ID in it, which finds it by ID.
  *
  * `groups` is the listing when it has loaded; until then `GRP-n` is addressed by its ID, which the
@@ -281,21 +282,21 @@ export function jumpTarget(id: string, groups: readonly GroupRef[] | null): Dest
     case 'P':
       return here(`/projects/${code ?? ''}/phases/${id}`, 'Phase');
     case 'ADR':
-      return here(`/projects/${code ?? ''}/adrs`, 'Decisions');
+      return here(`/projects/${code ?? ''}/adrs#${id}`, 'Decisions');
     case 'R':
-      return here(`/projects/${code ?? ''}/risks`, 'Risks');
+      return here(`/projects/${code ?? ''}/risks#${id}`, 'Risks');
     case 'TERM':
-      return here(`/projects/${code ?? ''}/glossary`, 'Glossary');
+      return here(`/projects/${code ?? ''}/glossary#${id}`, 'Glossary');
     case 'IDEA':
-      return here(`/projects/${code ?? ''}/ideas`, 'Ideas');
+      return here(`/projects/${code ?? ''}/ideas#${id}`, 'Ideas');
     case 'AUD':
-      return here(`/projects/${code ?? ''}/audits`, 'Audits');
+      return here(`/projects/${code ?? ''}/audits#${id}`, 'Audits');
     case 'SCR':
       return here(`/projects/${code ?? ''}/screens/${id}`, 'Screen');
     case 'PI':
       return here(`/project-ideas/${id}`, 'Project idea');
     case 'GL':
-      return here('/guidelines', 'Guideline');
+      return here(`/guidelines#${id}`, 'Guideline');
     case 'GRP': {
       const group = groups?.find((g) => g.humanId === id);
       return {
