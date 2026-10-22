@@ -151,7 +151,7 @@ test.describe('the portfolio ledger on Home', () => {
     const busy = rowOf(page, BUSY);
     await expect(busy).toHaveCount(1);
     await expect(busy.getByRole('link', { name: 'P-1 · Ingest' })).toBeVisible();
-    await expect(busy.locator('.fm-lrow__bar').getByText('0 of 1 tasks', { exact: true })).toBeVisible();
+    await expect(busy.locator('.fm-lrow__bar').getByText('0 of 1 task', { exact: true })).toBeVisible();
     const next = busy.getByRole('link', { name: new RegExp(NEXT_TITLE) });
     await expect(next).toHaveAttribute('href', new RegExp(`/tasks/${BUSY}-T-`));
     await expect(busy.getByRole('link', { name: '1 critical + high' })).toBeVisible();
