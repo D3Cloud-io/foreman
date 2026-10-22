@@ -27,7 +27,7 @@ import { statusWords } from '../lib/mutate';
 import { useAsync, type AsyncHandle } from '../lib/useAsync';
 import { plainText } from '../lib/text';
 import { severityTone } from '../ui/status';
-import { FindingRecord, useFindingVerdict, writeVerdict, type FindingVerdict } from './FindingDetail';
+import { FindingRecord, useFindingVerdict, verdictApplies, writeVerdict, type FindingVerdict } from './FindingDetail';
 import {
   KeyHint,
   ReasonDialog,
@@ -37,6 +37,8 @@ import {
   TriageRow,
   effectiveSelection,
   moveSelection,
+  partitionBulk,
+  projectOf,
   select,
   selectionOf,
   spanOf,
@@ -135,9 +137,13 @@ export function Findings({ search }: { search: string }) {
       }),
     [filters.severity, filters.lens, filters.status, filters.project, scope],
   );
-  const drift = useDriftTriage(scope);
-  const review = useReviewQueue(scope);
-  const blocked = useAsync(() => foreman.tasksAcross('blocked', scope), [scope]);
+  // `?project=` narrows every tab, not only Findings (FRM-T-18.15).
+  const project = projectOf(search);
+  const drift = useDriftTriage(scope, project);
+  const review = useReviewQueue(scope, project);
+  const blocked = useAsync(() => foreman.tasksAcross('blocked', scope, project), [scope, project]);
+  // What the other tabs say they cover: the project, within the scope when there is one.
+  const tabPhrase = project === null ? phrase : phrase === null ? project : `${project} in ${phrase}`;
 
   const setTab = (next: string) => {
     if ((TRIAGE_TABS as readonly string[]).includes(next)) replaceLocation(tabHref(search, next as TriageTab));
@@ -165,13 +171,13 @@ export function Findings({ search }: { search: string }) {
   let panel: ReactNode;
   switch (tab) {
     case 'drift':
-      panel = <DriftTab search={search} handle={drift} phrase={phrase} />;
+      panel = <DriftTab search={search} handle={drift} phrase={tabPhrase} />;
       break;
     case 'review':
-      panel = <ReviewTab search={search} queue={review} phrase={phrase} />;
+      panel = <ReviewTab search={search} queue={review} phrase={tabPhrase} />;
       break;
     case 'blocked':
-      panel = <BlockedTab search={search} handle={blocked} phrase={phrase} />;
+      panel = <BlockedTab search={search} handle={blocked} phrase={tabPhrase} />;
       break;
     default:
       panel = (
@@ -288,17 +294,24 @@ function FindingsTab({
     reopen: 'Reopened',
     'wont-fix': 'Marked won’t fix',
   };
+  /** What a skipped item already is, for the toast: "2 already acknowledged — skipped". */
+  const ALREADY: Record<'acknowledge' | 'reopen', string> = { acknowledge: 'acknowledged', reopen: 'open' };
   const runBulk = (kind: Exclude<FindingVerdict, 'fixed'>, reason = '') => {
     if (bulk.pending || chosen.length === 0) return;
-    const targets = new Map(chosen.map((r) => [r.humanId, r]));
+    // Acknowledge and Reopen skip what they would not change (FRM-T-18.15): no PATCH, so no audit
+    // event and nothing for Undo to refuse. Won't fix is sent to each, since it also writes the reason.
+    const { send, skip } =
+      kind === 'wont-fix' ? { send: chosen, skip: [] } : partitionBulk(chosen, (r) => verdictApplies(kind, r));
+    const targets = new Map(send.map((r) => [r.humanId, r]));
     void bulk
       .run({
-        ids: chosen.map((r) => r.humanId),
+        ids: send.map((r) => r.humanId),
         verb: BULK_VERB[kind],
         noun: { one: 'finding', other: 'findings' },
         write: (id) => writeVerdict({ humanId: id, project: targets.get(id)?.project ?? '' }, kind, reason),
         refresh,
-        undone: `Undone — ${String(chosen.length)} ${chosen.length === 1 ? 'finding is' : 'findings are'} as ${chosen.length === 1 ? 'it was' : 'they were'}`,
+        undone: `Undone — ${String(send.length)} ${send.length === 1 ? 'finding is' : 'findings are'} as ${send.length === 1 ? 'it was' : 'they were'}`,
+        skipped: kind === 'wont-fix' || skip.length === 0 ? null : `${String(skip.length)} already ${ALREADY[kind]} — skipped`,
       })
       .then(() => {
         setChecked(new Set());
@@ -650,7 +663,7 @@ function FindingsTab({
             ? `Won’t fix ${String(asking.length)} findings`
             : `Won’t fix ${asking?.[0]?.humanId ?? ''}`
         }
-        description="Say why. The reason is kept with each finding's recommendation, and each verdict can be undone."
+        description="Say why. The reason is kept on each finding, beside its recommendation, and each verdict can be undone."
         label="Why it will not be fixed"
         confirm="Mark won’t fix"
         onSubmit={(reason) => {

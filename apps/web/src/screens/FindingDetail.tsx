@@ -93,21 +93,16 @@ export function verdictPressed(kind: FindingVerdict, finding: Pick<VerdictTarget
 }
 
 /**
- * Where a Won't fix keeps its reason: with the recommendation it declines, so the reason is on the
- * record itself — read on this page, in the finding's history, and undone with the verdict.
+ * The PATCH body a verdict sends — one write, nothing read first.
+ *
+ * Won't fix keeps its reason in the finding's own `wontFixReason` (FRM-T-18.15): the reviewer's
+ * recommendation is never edited by a verdict, and moving the status away from `wont_fix` — Reopen,
+ * Mark fixed — clears the reason on the server, in the same audited write.
  */
-export function withWontFixReason(recommendation: string | null, reason: string): string {
-  const line = `**Won’t fix** — ${reason.trim()}`;
-  const before = recommendation?.trimEnd() ?? '';
-  return before.length === 0 ? line : `${before}\n\n${line}`;
-}
-
-/** The PATCH body a verdict sends. */
 export function verdictBody(
   kind: FindingVerdict,
-  recommendation: string | null = null,
   reason = '',
-): { verified?: 'confirmed'; status?: string; recommendationMd?: string } {
+): { verified?: 'confirmed'; status?: string; wontFixReason?: string } {
   switch (kind) {
     case 'acknowledge':
       return { verified: 'confirmed' };
@@ -116,20 +111,19 @@ export function verdictBody(
     case 'reopen':
       return { status: 'open' };
     case 'wont-fix':
-      return { status: 'wont_fix', recommendationMd: withWontFixReason(recommendation, reason) };
+      return { status: 'wont_fix', wontFixReason: reason.trim() };
   }
 }
 
-/** The write itself. Won't fix reads the recommendation first, so the reason is added to it. */
+/** The write itself. */
 export async function writeVerdict(
   target: Pick<VerdictTarget, 'humanId' | 'project'>,
   kind: FindingVerdict,
   reason = '',
 ): Promise<Audited<{ status: string; verified: string | null }>> {
-  const recommendation = kind === 'wont-fix' ? (await foreman.finding(target.humanId)).recommendationMd : null;
   return api.patch<Audited<{ status: string; verified: string | null }>>(
     `/api/projects/${target.project}/findings/${target.humanId}`,
-    verdictBody(kind, recommendation, reason),
+    verdictBody(kind, reason),
   );
 }
 
@@ -347,7 +341,7 @@ export function FindingRecord({
         open={asking}
         onOpenChange={setAsking}
         title={`Won’t fix ${finding.humanId}`}
-        description="Say why. The reason is kept with the recommendation it declines, and the verdict can be undone."
+        description="Say why. The reason is kept on the finding, beside the recommendation it declines, and the verdict can be undone."
         label="Why it will not be fixed"
         confirm="Mark won’t fix"
         onSubmit={(reason) => {
@@ -401,6 +395,13 @@ export function FindingRecord({
         <Card>
           <CardTitle>Recommendation</CardTitle>
           <Markdown>{finding.recommendationMd}</Markdown>
+        </Card>
+      )}
+
+      {finding.status !== 'wont_fix' || finding.wontFixReason === null ? null : (
+        <Card>
+          <CardTitle>Why it won&rsquo;t be fixed</CardTitle>
+          <p>{finding.wontFixReason}</p>
         </Card>
       )}
 

@@ -7,7 +7,6 @@ import {
   verdictApplies,
   verdictBody,
   verdictPressed,
-  withWontFixReason,
 } from './FindingDetail';
 import { filtersOf, rowState } from './Findings';
 import {
@@ -16,6 +15,8 @@ import {
   bulkUndoLine,
   effectiveSelection,
   moveSelection,
+  partitionBulk,
+  projectOf,
   runBulk,
   selectionOf,
   spanOf,
@@ -23,7 +24,15 @@ import {
   tabOf,
   undoBulk,
 } from './triage';
-import { acceptanceStatement, actionFor, driftKey, splitAccepted, titleFrom, type DriftRow } from './TriageDrift';
+import {
+  acceptanceBody,
+  acceptanceStatement,
+  actionFor,
+  driftKey,
+  splitAccepted,
+  titleFrom,
+  type DriftRow,
+} from './TriageDrift';
 import { checksWords, nextWaiting, reviewKey, type ReviewItem } from './TriageReview';
 
 vi.mock('../lib/undo', () => ({
@@ -49,6 +58,15 @@ describe('where the triage surface is, in the URL', () => {
   it('keeps the scope when the tab changes, and drops the selection and the Findings filters', () => {
     expect(tabHref('?group=dormice&severity=high&sel=BND-CR-001', 'drift')).toBe('/findings?group=dormice&tab=drift');
     expect(tabHref('?group=dormice&tab=drift&sel=coverage-hole%3AX-REQ-001', 'findings')).toBe('/findings?group=dormice');
+  });
+
+  it('carries ?project= to every tab, since Drift, Review and Blocked read it too (FRM-T-18.15)', () => {
+    expect(tabHref('?project=BND&lens=security&status=fixed', 'blocked')).toBe('/findings?project=BND&tab=blocked');
+    expect(tabHref('?project=BND&tab=review', 'drift')).toBe('/findings?project=BND&tab=drift');
+    expect(tabHref('?project=BND&tab=review', 'findings')).toBe('/findings?project=BND');
+    expect(projectOf('?tab=drift&project=BND')).toBe('BND');
+    expect(projectOf('?tab=drift&project=')).toBeNull();
+    expect(projectOf('?tab=drift')).toBeNull();
   });
 
   it('reads the selection, and moves it with j and k, held at either end', () => {
@@ -104,15 +122,14 @@ describe('finding verdicts', () => {
     expect(verdictPressed('reopen', open)).toBe(false);
   });
 
-  it('sends one PATCH each, and keeps a Won’t fix reason with the recommendation', () => {
+  it('sends one PATCH each, and a Won’t fix reason in its own field — never the recommendation', () => {
     expect(verdictBody('acknowledge')).toEqual({ verified: 'confirmed' });
     expect(verdictBody('fixed')).toEqual({ status: 'fixed' });
     expect(verdictBody('reopen')).toEqual({ status: 'open' });
-    expect(verdictBody('wont-fix', 'Scope the select.', ' the code is going ')).toEqual({
-      status: 'wont_fix',
-      recommendationMd: 'Scope the select.\n\n**Won’t fix** — the code is going',
-    });
-    expect(withWontFixReason(null, 'no')).toBe('**Won’t fix** — no');
+    expect(verdictBody('wont-fix', ' the code is going ')).toEqual({ status: 'wont_fix', wontFixReason: 'the code is going' });
+    for (const kind of ['acknowledge', 'fixed', 'reopen', 'wont-fix'] as const) {
+      expect(verdictBody(kind, 'r')).not.toHaveProperty('recommendationMd');
+    }
   });
 
   it('draws the verdicts as buttons with their keys, and as a phone ActionBar', () => {
@@ -176,6 +193,31 @@ describe('bulk verdicts are N writes and N undos', () => {
     );
   });
 
+  it('skips what a verdict would not change, and says so instead of writing it (FRM-T-18.15)', async () => {
+    const rows = [
+      { id: 'A', status: 'open', verified: 'confirmed' },
+      { id: 'B', status: 'open', verified: 'unverified' },
+      { id: 'C', status: 'fixed', verified: 'confirmed' },
+    ];
+    const ack = partitionBulk(rows, (r) => verdictApplies('acknowledge', r));
+    expect(ack.send.map((r) => r.id)).toEqual(['B']);
+    expect(ack.skip.map((r) => r.id)).toEqual(['A', 'C']);
+    const reopen = partitionBulk(rows, (r) => verdictApplies('reopen', r));
+    expect(reopen.send.map((r) => r.id)).toEqual(['C']);
+
+    const write = vi.fn((id: string) => Promise.resolve({ auditEventIds: [`ev-${id}`] }));
+    const results = await runBulk(ack.send.map((r) => r.id), write);
+    expect(write).toHaveBeenCalledTimes(1);
+    const noun = { one: 'finding', other: 'findings' };
+    expect(bulkLine('Acknowledged', noun, results, '2 already acknowledged — skipped')).toBe(
+      'Acknowledged 1 finding · 2 already acknowledged — skipped',
+    );
+    // Nothing to send: nothing written, and the toast says why.
+    expect(await runBulk([], write)).toEqual([]);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(bulkLine('Acknowledged', noun, [], '3 already acknowledged — skipped')).toBe('3 already acknowledged — skipped');
+  });
+
   it('says what a selection spans', () => {
     expect(spanOf(['SHP', 'MUR', 'DS', 'MUR'])).toBe('3 projects · SHP, MUR, DS');
   });
@@ -206,22 +248,47 @@ describe('drift rows carry their resolving action', () => {
     expect(titleFrom('x'.repeat(400))).toHaveLength(300);
   });
 
-  it('finds an acceptance by its decision, and moves the item to Accepted with the reason', () => {
+  it('finds an acceptance by its link, never its wording, and moves the item to Accepted with the reason', () => {
     const hole = row({});
     const stale = row({ category: 'stale-task', humanId: 'BND-T-9.1', detail: 'In progress, untouched.' });
+    const orphan = row({ humanId: 'BND-T-9.1', detail: 'Cites no requirement.' });
     expect(acceptanceStatement(hole)).toBe('Accepted drift on BND-REQ-041 (coverage-hole): A Must with no task satisfying it.');
+    expect(acceptanceBody(hole, ' Covered for now ')).toEqual({
+      statement: acceptanceStatement(hole),
+      value: 'Accepted for now — not drift to act on',
+      rationale: 'Covered for now\n\nAccepts the drift on BND-REQ-041.',
+      acceptsDriftSubject: 'BND-REQ-041',
+      acceptsDriftCategory: 'coverage-hole',
+    });
     expect(driftKey(stale)).toBe('stale-task:BND-T-9.1');
     const split = splitAccepted(
-      [hole, stale],
+      [hole, stale, orphan],
       new Map([
         [
           'BND',
-          [{ humanId: 'BND-D-7', statement: acceptanceStatement(hole), rationale: 'Covered by BND-REQ-040 for now.' }],
+          [
+            {
+              humanId: 'BND-D-7',
+              rationale: 'Covered by BND-REQ-040 for now.',
+              acceptsDriftSubject: 'BND-REQ-041',
+              acceptsDriftCategory: 'coverage-hole',
+            },
+            // Accepting a task's staleness is not accepting that it cites nothing.
+            {
+              humanId: 'BND-D-8',
+              rationale: 'Stale on purpose.',
+              acceptsDriftSubject: 'BND-T-9.1',
+              acceptsDriftCategory: 'stale-task',
+            },
+          ],
         ],
       ]),
     );
-    expect(split.items).toEqual([stale]);
-    expect(split.accepted).toEqual([{ ...hole, decision: { humanId: 'BND-D-7', rationale: 'Covered by BND-REQ-040 for now.' } }]);
+    expect(split.items).toEqual([orphan]);
+    expect(split.accepted).toEqual([
+      { ...hole, decision: { humanId: 'BND-D-7', rationale: 'Covered by BND-REQ-040 for now.' } },
+      { ...stale, decision: { humanId: 'BND-D-8', rationale: 'Stale on purpose.' } },
+    ]);
   });
 });
 

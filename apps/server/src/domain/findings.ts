@@ -8,7 +8,7 @@ import {
 import type { Db } from '../db.js';
 import type { FindingStatus, Severity } from '../generated/prisma/enums.js';
 import { record, type Actor, type TransactionClient } from './audit.js';
-import { NotFound } from './errors.js';
+import { Invalid, NotFound } from './errors.js';
 import { allocate } from './humanId.js';
 import { findProject } from './projects.js';
 import { codeFilter } from './scope.js';
@@ -200,9 +200,40 @@ export async function createFinding(db: Db, actor: Actor, code: string, input: F
   });
 }
 
+/**
+ * A won't-fix reason sent for a finding whose status the write leaves as something else. Answered
+ * 400 naming the field, like any field the record would not keep (FRM-T-017).
+ */
+export class WontFixReasonRefused extends Invalid {
+  constructor(humanId: string, status: string) {
+    const message = `wontFixReason is kept only on a wont_fix finding, and ${humanId} would be ${status}`;
+    super(message, [{ path: 'wontFixReason', message }]);
+    this.name = 'WontFixReasonRefused';
+  }
+}
+
+/**
+ * What a write leaves in `wont_fix_reason` (FRM-T-18.15): the reason sent, when the resulting status
+ * is `wont_fix`; nothing, when the status moves away from it — Reopen clears the reason in the same
+ * write and the same audit event; otherwise what was there.
+ */
+export function wontFixReasonAfter(
+  humanId: string,
+  before: { status: FindingStatus; wontFixReason: string | null },
+  input: Pick<FindingUpdate, 'status' | 'wontFixReason'>,
+): string | null {
+  const status = input.status ?? before.status;
+  if (status !== 'wont_fix') {
+    if (typeof input.wontFixReason === 'string') throw new WontFixReasonRefused(humanId, status);
+    return null;
+  }
+  return input.wontFixReason === undefined ? before.wontFixReason : input.wontFixReason;
+}
+
 export async function updateFinding(db: Db, actor: Actor, humanId: string, input: FindingUpdate) {
   const before = await db.finding.findFirst({ where: { humanId, deletedAt: null } });
   if (before === null) throw new NotFound(humanId);
+  const wontFixReason = wontFixReasonAfter(humanId, before, input);
 
   return db.$transaction(async (tx) => {
     const relations = await relationIds(tx, before.projectId, input);
@@ -223,6 +254,7 @@ export async function updateFinding(db: Db, actor: Actor, humanId: string, input
         ...(input.observedMd === undefined ? {} : { observedMd: input.observedMd }),
         ...(input.recommendationMd === undefined ? {} : { recommendationMd: input.recommendationMd }),
         ...(input.fixedCommitSha === undefined ? {} : { fixedCommitSha: input.fixedCommitSha }),
+        ...(wontFixReason === before.wontFixReason ? {} : { wontFixReason }),
         ...relations,
       },
     });
@@ -414,6 +446,7 @@ export async function inbox(db: Db, query: InboxQuery = {}) {
       foundIn: finding.audit === null ? null : finding.audit.humanId,
       locations: finding.locations,
       fixedCommitSha: finding.fixedCommitSha,
+      wontFixReason: finding.wontFixReason,
     }))
     .sort(
       (a, b) =>
@@ -422,4 +455,94 @@ export async function inbox(db: Db, query: InboxQuery = {}) {
         a.humanId.localeCompare(b.humanId),
     );
   return { items, total, counts };
+}
+
+// ─── Won't-fix reasons out of the recommendation (FRM-T-18.15) ─────────────
+
+/**
+ * The paragraph the console appended to a recommendation before a reason had its own column:
+ * `**Won’t fix** — <reason>`, after a blank line, or as the whole text when there was none. The
+ * straight apostrophe is accepted too, since API callers copied the line by hand.
+ */
+const WONT_FIX_LINE = /(?:^|\n\n)\*\*Won[’']t fix\*\* — /;
+
+/**
+ * Split appended won't-fix paragraphs off a recommendation: what the reviewer wrote, and every reason
+ * appended after it, oldest first. Null when there is none. Everything from the first such paragraph
+ * on is the console's, because it only ever appended — a won't fix, a reopen and a second won't fix
+ * left two, and that is why the column replaced it.
+ */
+export function splitWontFixReasons(
+  recommendation: string | null,
+): { recommendation: string | null; reasons: string[] } | null {
+  if (recommendation === null) return null;
+  const at = recommendation.search(WONT_FIX_LINE);
+  if (at === -1) return null;
+  const head = recommendation.slice(0, at).trimEnd();
+  const reasons = recommendation
+    .slice(at)
+    .split(new RegExp(WONT_FIX_LINE.source, 'g'))
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  return { recommendation: head.length === 0 ? null : head, reasons };
+}
+
+export interface MovedReason {
+  readonly humanId: string;
+  readonly status: FindingStatus;
+  /** What the column holds after the move: the latest reason, and only on a `wont_fix` finding. */
+  readonly reason: string | null;
+  /** How many appended paragraphs came out of the recommendation. */
+  readonly removed: number;
+}
+
+/**
+ * Move every appended won't-fix paragraph out of `recommendation_md` (FRM-T-18.15). A `wont_fix`
+ * finding keeps the latest as its `wont_fix_reason` — unless it already has one, which the move
+ * never overwrites; any other finding was reopened since, so its reason went with the verdict and
+ * the paragraphs only come out. One audited update per finding, as `actor`; without `write`
+ * nothing is changed and the report says what would be. Idempotent: a second run finds nothing.
+ */
+export async function moveWontFixReasons(
+  db: Db,
+  actor: Actor,
+  options: { write: boolean; project?: string | undefined },
+): Promise<MovedReason[]> {
+  const candidates = await db.finding.findMany({
+    where: {
+      deletedAt: null,
+      recommendationMd: { contains: '** — ' },
+      ...(options.project === undefined ? {} : { project: { code: options.project } }),
+    },
+    orderBy: { humanId: 'asc' },
+  });
+
+  const moved: MovedReason[] = [];
+  for (const finding of candidates) {
+    const split = splitWontFixReasons(finding.recommendationMd);
+    if (split === null) continue;
+    const latest = split.reasons[split.reasons.length - 1] ?? null;
+    const reason =
+      finding.status === 'wont_fix' ? (finding.wontFixReason ?? latest?.slice(0, 1000) ?? null) : null;
+    moved.push({ humanId: finding.humanId, status: finding.status, reason, removed: split.reasons.length });
+    if (!options.write) continue;
+
+    await db.$transaction(async (tx) => {
+      const after = await tx.finding.update({
+        where: { id: finding.id },
+        data: { recommendationMd: split.recommendation, wontFixReason: reason },
+      });
+      await syncCitations(tx, 'finding', finding.id, `${after.observedMd ?? ''}\n${after.recommendationMd ?? ''}`);
+      await record(tx, {
+        ...actor,
+        action: 'update',
+        entityType: 'finding',
+        entityId: finding.id,
+        entityHumanId: finding.humanId,
+        before: finding,
+        after,
+      });
+    });
+  }
+  return moved;
 }

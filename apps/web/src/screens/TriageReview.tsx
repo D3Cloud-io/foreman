@@ -86,11 +86,12 @@ export function checksWords(checks: ProposedAttribution['commit']['checks']): st
     : `CI ${checks.map((c) => `${c.name}: ${c.conclusion ?? 'running'}`).join(', ')}`;
 }
 
-export function useReviewQueue(scope: string | null): ReviewQueue {
+/** The queue across the scope, narrowed to one project when `?project=` names one (FRM-T-18.15). */
+export function useReviewQueue(scope: string | null, project: string | null = null): ReviewQueue {
   const handle = useAsync(async () => {
-    const page = await foreman.attributionsAcross(scope);
+    const page = await foreman.attributionsAcross(scope, project);
     return { items: [...page.items] as ReviewItem[], total: page.total };
-  }, [scope]);
+  }, [scope, project]);
   const decided = handle.state.status === 'ready' ? handle.state.value.items.filter((i) => i.decided !== undefined).length : 0;
   return {
     ...handle,

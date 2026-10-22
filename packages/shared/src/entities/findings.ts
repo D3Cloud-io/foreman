@@ -75,6 +75,25 @@ export const FindingUpdate = FindingCreate.partial().extend({
    * knows the answer (FRM-REQ-117, FRM-REQ-119).
    */
   fixedCommitSha: z.string().regex(/^[0-9a-f]{7,40}$/i).nullish(),
+  /**
+   * Why it will not be fixed (FRM-T-18.15). Taken only when the status the write leaves is
+   * `wont_fix` — refused by name otherwise, here when the same body moves the status elsewhere and
+   * by the server when the finding's current status is not `wont_fix` — and cleared by any write
+   * that moves the status away. Kept apart from `recommendationMd`, which is the reviewer's text and
+   * which a verdict never edits.
+   *
+   * Not a `foreman_update` field: the MCP definitions are at their token budget, and `UpdateInput`
+   * is strict, so a session sending it is refused by name rather than having it dropped.
+   */
+  wontFixReason: z.string().trim().min(1).max(1000).nullish(),
+}).superRefine((value, ctx) => {
+  if (typeof value.wontFixReason !== 'string') return;
+  if (value.status === undefined || value.status === 'wont_fix') return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['wontFixReason'],
+    message: `wontFixReason is kept only on a wont_fix finding, and this sets the status to ${value.status}`,
+  });
 });
 export type FindingUpdate = z.infer<typeof FindingUpdate>;
 
