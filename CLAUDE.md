@@ -58,6 +58,13 @@ pnpm --filter foreman-server run reconcile-coverage -- --write
 pnpm --filter foreman-server run relint -- --write
 # Re-runs the EARS lint over requirements already stored. The importer did not lint until
 # 2026-09-20, so everything it wrote sat on the column defaults — unparsed, not ok, no note.
+pnpm --filter foreman-server run clean-markup -- --write
+# Strips Markdown and wiki-link residue the importer left in plain-text fields (FRM-T-18.11).
+# Reports by default; every substitution is an audited, undoable update; split cells are listed
+# for a person, never guessed.
+pnpm --filter foreman-server run move-wontfix-reasons -- --write
+# Moves "**Won't fix** — …" paragraphs out of findings' recommendations into wontFixReason, and
+# links "Accepted drift on …" decisions to their subject (FRM-T-18.15). Reports by default.
 ```
 
 ## Non-negotiables
