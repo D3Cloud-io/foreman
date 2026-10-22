@@ -638,6 +638,13 @@ model Decision {
   rationale String?
   lockedAt  DateTime? @map("locked_at") @db.Timestamptz(6)
   supersededById String? @map("superseded_by") @db.Uuid
+  /// The drift this decision accepts (FRM-T-18.15): the drifting record's human ID and the drift
+  /// engine's category, both or neither. Columns rather than a `reference` row: a reference has no
+  /// category (one task can drift two ways, and accepting one is not accepting the other), its
+  /// kinds are mirrored into the MCP link schema whose token budget is full, and a decision's
+  /// references are rewritten from its rationale on every edit.
+  acceptsDriftSubject  String? @map("accepts_drift_subject")
+  acceptsDriftCategory String? @map("accepts_drift_category")
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -648,6 +655,7 @@ model Decision {
   supersedes   Decision[] @relation("decision_supersedes")
 
   @@index([projectId])
+  @@index([projectId, acceptsDriftSubject])
   @@map("decision")
 }
 
@@ -1116,6 +1124,10 @@ model Finding {
   locationRaw   String? @map("location_raw")
   observedMd    String? @map("observed_md")
   recommendationMd String? @map("recommendation_md")
+  /// Why it will not be fixed (FRM-T-18.15). Its own column, not a line appended to the
+  /// recommendation: that text is the reviewer's, and a verdict never edits it. Set only while the
+  /// status is `wont_fix`; any other status clears it in the same write.
+  wontFixReason String? @map("wont_fix_reason")
 
   /// What this finding contradicts, when it contradicts something.
   requirementId String? @map("requirement_id") @db.Uuid

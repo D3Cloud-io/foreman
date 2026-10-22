@@ -19,6 +19,7 @@ import {
   inbox,
   updateAudit,
   updateFinding,
+  WontFixReasonRefused,
 } from '../domain/findings.js';
 import { findProject } from '../domain/projects.js';
 import { resolveScope, scopeCodes } from '../domain/scope.js';
@@ -203,7 +204,14 @@ export function projectFindingRoutes(db: Db): Router {
     handler(async (req, res) => {
       const body = parseBody(FindingUpdate, req, res);
       if (body === null) return;
-      res.json(await updateFinding(db, actorOf(req), param(req, 'humanId'), body));
+      try {
+        res.json(await updateFinding(db, actorOf(req), param(req, 'humanId'), body));
+      } catch (error) {
+        // A reason the finding would not keep is a field refused by name — 400, as `parseBody`
+        // answers when the same body names another status (FRM-T-18.15).
+        if (!(error instanceof WontFixReasonRefused)) throw error;
+        res.status(400).json({ error: error.message, fields: error.fields });
+      }
     }),
   );
 

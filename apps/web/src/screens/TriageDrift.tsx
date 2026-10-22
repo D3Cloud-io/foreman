@@ -16,7 +16,7 @@ import {
   Textarea,
 } from '@d3cloud/ui';
 import { Check } from 'lucide-react';
-import { api, foreman, type Audited, type DecisionRow, type DriftItem } from '../lib/api';
+import { api, foreman, type Audited, type DecisionRow, type DriftAcceptanceRow, type DriftItem } from '../lib/api';
 import { useMutate, type MutationSpec } from '../lib/mutate';
 import { useAsync, type AsyncHandle } from '../lib/useAsync';
 import { CATEGORIES } from './DriftView';
@@ -43,8 +43,11 @@ import {
  *
  * **Accepting drift needs a reason**, and the reason is kept: it is recorded as a decision on the
  * project ("Accepted drift on BND-REQ-041 …", the reason as its rationale), which the history and
- * the decision register both show and Undo removes. An accepted item moves to "Accepted" with its
- * reason; the engine still counts it everywhere else, so nothing claims it is gone.
+ * the decision register both show and Undo removes. The decision is **linked** to what it accepts —
+ * `acceptsDriftSubject` and `acceptsDriftCategory` (FRM-T-18.15) — and read back by that link through
+ * `GET …/decisions?acceptsDrift=1`, every page of it; the statement's wording is for people, and
+ * nothing matches on it. An accepted item moves to "Accepted" with its reason; the engine still
+ * counts it everywhere else, so nothing claims it is gone.
  */
 
 export interface DriftRow extends DriftItem {
@@ -65,25 +68,41 @@ export function driftKey(item: Pick<DriftItem, 'category' | 'humanId'>): string 
   return `${item.category}:${item.humanId}`;
 }
 
-/** The statement an acceptance is recorded under; its start is how it is found again. */
-export function acceptancePrefix(item: Pick<DriftItem, 'category' | 'humanId'>): string {
-  return `Accepted drift on ${item.humanId} (${item.category})`;
-}
-
+/** The statement an acceptance is recorded under — for people reading the decision register. */
 export function acceptanceStatement(item: Pick<DriftItem, 'category' | 'humanId' | 'detail'>): string {
-  return `${acceptancePrefix(item)}: ${item.detail}`.slice(0, 1000);
+  return `Accepted drift on ${item.humanId} (${item.category}): ${item.detail}`.slice(0, 1000);
 }
 
-/** Split drift into what still needs you and what a decision on the project accepted. */
+/** The body that records an acceptance: the decision, and its link to the drift it accepts. */
+export function acceptanceBody(item: Pick<DriftItem, 'category' | 'humanId' | 'detail'>, reason: string) {
+  return {
+    statement: acceptanceStatement(item),
+    value: 'Accepted for now — not drift to act on',
+    // The ID in the rationale makes the decision cite the record, so the record's backlinks
+    // show it was accepted and why.
+    rationale: `${reason.trim()}\n\nAccepts the drift on ${item.humanId}.`,
+    acceptsDriftSubject: item.humanId,
+    acceptsDriftCategory: item.category,
+  };
+}
+
+/**
+ * Split drift into what still needs you and what a decision on the project accepted — matched by the
+ * decision's link to the record and the category, never by its wording.
+ */
 export function splitAccepted(
   rows: readonly DriftRow[],
-  decisions: ReadonlyMap<string, readonly Pick<DecisionRow, 'humanId' | 'statement' | 'rationale'>[]>,
+  decisions: ReadonlyMap<
+    string,
+    readonly Pick<DriftAcceptanceRow, 'humanId' | 'rationale' | 'acceptsDriftSubject' | 'acceptsDriftCategory'>[]
+  >,
 ): DriftTriage {
   const items: DriftRow[] = [];
   const accepted: AcceptedRow[] = [];
   for (const row of rows) {
-    const prefix = acceptancePrefix(row);
-    const decision = (decisions.get(row.project.code) ?? []).find((d) => d.statement.startsWith(prefix));
+    const decision = (decisions.get(row.project.code) ?? []).find(
+      (d) => d.acceptsDriftSubject === row.humanId && d.acceptsDriftCategory === row.category,
+    );
     if (decision === undefined) items.push(row);
     else accepted.push({ ...row, decision: { humanId: decision.humanId, rationale: decision.rationale } });
   }
@@ -133,12 +152,17 @@ export function titleFrom(statement: string): string {
   return first.trim().slice(0, 300);
 }
 
-export function useDriftTriage(scope: string | null): AsyncHandle<DriftTriage> {
+/**
+ * Drift across the scope, narrowed to one project when `?project=` names one (FRM-T-18.15), and what
+ * of it a decision accepted. `GET /api/drift` takes only a group, so the project is kept from its
+ * answer here: the same intersection `/api/tasks` and `/api/attributions` make of the two.
+ */
+export function useDriftTriage(scope: string | null, project: string | null = null): AsyncHandle<DriftTriage> {
   return useAsync(async () => {
     const across = await foreman.driftAcross(scope);
-    const rows: DriftRow[] = across.items.flatMap((project) =>
-      project.items.map((item) => ({ ...item, project: { code: project.project, name: project.name } })),
-    );
+    const rows: DriftRow[] = across.items
+      .filter((p) => project === null || p.project === project)
+      .flatMap((p) => p.items.map((item) => ({ ...item, project: { code: p.project, name: p.name } })));
     // Only the projects with drift can have accepted any; a project whose decisions do not load
     // shows its drift as still waiting rather than hiding it.
     const codes = [...new Set(rows.map((r) => r.project.code))];
@@ -146,15 +170,15 @@ export function useDriftTriage(scope: string | null): AsyncHandle<DriftTriage> {
       await Promise.all(
         codes.map(async (code) => {
           try {
-            return [code, (await foreman.decisionsUpTo(code)).items] as const;
+            return [code, await foreman.driftAcceptances(code)] as const;
           } catch {
-            return [code, [] as DecisionRow[]] as const;
+            return [code, [] as DriftAcceptanceRow[]] as const;
           }
         }),
       ),
     );
     return splitAccepted(rows, decisions);
-  }, [scope]);
+  }, [scope, project]);
 }
 
 function categoryLabel(category: DriftItem['category']): string {
@@ -512,20 +536,15 @@ function AcceptDrift({ item, onSaved }: { item: DriftRow; onSaved: () => void })
   useEffect(() => {
     setReason('');
   }, [item.humanId, item.category]);
-  const ready = reason.trim().length > 0;
+  // An acceptance is linked to a record by its ID; drift naming none has nothing to link to.
+  const ready = reason.trim().length > 0 && item.humanId !== '';
   const submit = (event: SyntheticEvent) => {
     event.preventDefault();
     if (!ready || pending) return;
     save({
       subject: item.humanId,
       run: () =>
-        api.post<Audited<DecisionRow>>(`/api/projects/${item.project.code}/decisions`, {
-          statement: acceptanceStatement(item),
-          value: 'Accepted for now — not drift to act on',
-          // The ID in the rationale makes the decision cite the record, so the record's backlinks
-          // show it was accepted and why.
-          rationale: `${reason.trim()}\n\nAccepts the drift on ${item.humanId}.`,
-        }),
+        api.post<Audited<DecisionRow>>(`/api/projects/${item.project.code}/decisions`, acceptanceBody(item, reason)),
       message: (result) => `Accepted drift on ${item.humanId} — recorded as ${result.humanId}`,
       refresh: onSaved,
       undone: `Undone — ${item.humanId} is drift again`,

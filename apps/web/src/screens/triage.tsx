@@ -40,14 +40,23 @@ export function tabOf(search: string): TriageTab {
   return (TRIAGE_TABS as readonly string[]).includes(value) ? (value as TriageTab) : 'findings';
 }
 
-/** `/findings` on another tab: the scope kept, the selection and the tab's own filters dropped. */
+/**
+ * `/findings` on another tab: the scope and the project kept, the selection and the Findings tab's
+ * own filters dropped. `?project=` narrows every tab (FRM-T-18.15) — Drift, Review and Blocked pass
+ * it to their reads — so it travels with the tab; severity, lens and status mean nothing elsewhere.
+ */
 export function tabHref(search: string, tab: TriageTab): string {
   return withParams(`/findings${search}`, {
     tab: tab === 'findings' ? null : tab,
     sel: null,
-    // Filters belong to the Findings tab; carrying them to Drift would filter nothing visibly.
-    ...(tab === 'findings' ? {} : { severity: null, lens: null, status: null, project: null }),
+    ...(tab === 'findings' ? {} : { severity: null, lens: null, status: null }),
   });
+}
+
+/** The project `?project=` narrows the triage tabs to, or null for every project in the scope. */
+export function projectOf(search: string): string | null {
+  const value = new URLSearchParams(search).get('project')?.trim() ?? '';
+  return value.length === 0 ? null : value;
 }
 
 /** The selected row a query string names, or null. */
@@ -278,15 +287,35 @@ function names(ids: readonly string[]): string {
 
 /**
  * What a bulk write says: "Acknowledged 3 findings", or — when some refused — how many went and
- * each refusal in the server's words: "Acknowledged 2 of 3 — DS-DA-009 refused: …".
+ * each refusal in the server's words: "Acknowledged 2 of 3 — DS-DA-009 refused: …". Items the
+ * verdict would not have changed were never sent; `skipped` says so — "2 already acknowledged —
+ * skipped" — on its own when nothing else was.
  */
-export function bulkLine(verb: string, noun: { one: string; other: string }, results: readonly BulkResult[]): string {
+export function bulkLine(
+  verb: string,
+  noun: { one: string; other: string },
+  results: readonly BulkResult[],
+  skipped: string | null = null,
+): string {
+  if (results.length === 0) return skipped ?? `Nothing to ${verb.toLowerCase()}`;
+  const tail = skipped === null ? '' : ` · ${skipped}`;
   const done = results.filter((r) => r.ok).length;
   const refused = results.filter((r): r is Extract<BulkResult, { ok: false }> => !r.ok);
-  if (refused.length === 0) return `${verb} ${String(done)} ${done === 1 ? noun.one : noun.other}`;
+  if (refused.length === 0) return `${verb} ${String(done)} ${done === 1 ? noun.one : noun.other}${tail}`;
   const why = refused.map((r) => `${r.id} refused: ${r.message}`).join('; ');
-  if (done === 0) return `Nothing changed — ${why}`;
-  return `${verb} ${String(done)} of ${String(results.length)} — ${why}`;
+  if (done === 0) return `Nothing changed — ${why}${tail}`;
+  return `${verb} ${String(done)} of ${String(results.length)} — ${why}${tail}`;
+}
+
+/**
+ * Split a bulk selection into what a verdict would change and what it would not. The second is
+ * never written: a PATCH that changes nothing would still be an audit event, and an Undo of nothing.
+ */
+export function partitionBulk<T>(items: readonly T[], applies: (item: T) => boolean): { send: T[]; skip: T[] } {
+  const send: T[] = [];
+  const skip: T[] = [];
+  for (const item of items) (applies(item) ? send : skip).push(item);
+  return { send, skip };
 }
 
 /**
@@ -347,6 +376,8 @@ export function useBulk(): {
     write: (id: string) => Promise<{ auditEventIds?: readonly string[] }>;
     refresh: () => void;
     undone: string;
+    /** What was left out because the verdict would not change it — "2 already acknowledged — skipped". */
+    skipped?: string | null;
   }) => Promise<BulkResult[]>;
   pending: boolean;
 } {
@@ -359,16 +390,19 @@ export function useBulk(): {
     write: (id: string) => Promise<{ auditEventIds?: readonly string[] }>;
     refresh: () => void;
     undone: string;
+    skipped?: string | null;
   }) => {
     setPending(true);
     try {
       const results = await runBulk(spec.ids, spec.write);
-      spec.refresh();
-      refreshSignals();
+      if (results.length > 0) {
+        spec.refresh();
+        refreshSignals();
+      }
       const anyWent = results.some((r) => r.ok && r.auditEventIds.length > 0);
       const refused = results.some((r) => !r.ok);
       toast.show({
-        message: bulkLine(spec.verb, spec.noun, results),
+        message: bulkLine(spec.verb, spec.noun, results, spec.skipped ?? null),
         ...(refused ? { duration: 0 } : {}),
         ...(anyWent
           ? {

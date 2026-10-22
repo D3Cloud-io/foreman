@@ -814,6 +814,12 @@ export interface DecisionRow {
   lockedAt: string | null;
 }
 
+/** A decision accepting drift, linked to what it accepts by the record and the category (FRM-T-18.15). */
+export interface DriftAcceptanceRow extends DecisionRow {
+  acceptsDriftSubject: string;
+  acceptsDriftCategory: string;
+}
+
 export interface TermRow {
   id: string;
   term: string;
@@ -943,6 +949,8 @@ export interface FindingRow {
   foundIn: string | null;
   locations: { path: string; lines: string | null }[];
   fixedCommitSha: string | null;
+  /** Why it will not be fixed — set only while the status is `wont_fix` (FRM-T-18.15). */
+  wontFixReason: string | null;
 }
 
 export interface FindingDetail {
@@ -961,6 +969,8 @@ export interface FindingDetail {
   observedMd: string | null;
   recommendationMd: string | null;
   fixedCommitSha: string | null;
+  /** Why it will not be fixed — its own field, never a line in the recommendation (FRM-T-18.15). */
+  wontFixReason: string | null;
   project: { code: string; name: string };
   audit: { humanId: string; kind: string; runDate: string; verdict: string | null } | null;
   locations: { path: string; lines: string | null; note: string | null }[];
@@ -1270,18 +1280,45 @@ export const foreman = {
   rejectAttribution: (code: string, sha: string, task: string) =>
     api.post<AttributionWrite>(`/api/projects/${code}/attributions/${sha}/reject`, { task }),
   /** Attributions nobody has ruled on, across a scope, newest first (FRM-T-18.7). */
-  attributionsAcross: (group: string | null = null) =>
+  attributionsAcross: (group: string | null = null, project: string | null = null) =>
     api.get<ProposedAttributionsResponse>(
-      `/api/attributions?${new URLSearchParams({ status: 'proposed', limit: '200', ...(group === null ? {} : { group }) }).toString()}`,
+      `/api/attributions?${new URLSearchParams({
+        status: 'proposed',
+        limit: '200',
+        ...(group === null ? {} : { group }),
+        ...(project === null ? {} : { project }),
+      }).toString()}`,
     ),
   /** Tasks in one status across a scope — blocked unless asked otherwise (FRM-T-18.7). */
-  tasksAcross: (status = 'blocked', group: string | null = null) =>
+  tasksAcross: (status = 'blocked', group: string | null = null, project: string | null = null) =>
     api.get<TasksAcrossResponse>(
-      `/api/tasks?${new URLSearchParams({ status, limit: '200', ...(group === null ? {} : { group }) }).toString()}`,
+      `/api/tasks?${new URLSearchParams({
+        status,
+        limit: '200',
+        ...(group === null ? {} : { group }),
+        ...(project === null ? {} : { project }),
+      }).toString()}`,
     ),
   /** A project's decisions, for the drift a decision accepted (FRM-T-18.7). */
   decisionsUpTo: (code: string, limit = 200) =>
     api.get<Page<DecisionRow>>(`/api/projects/${code}/decisions?limit=${String(limit)}`),
+  /**
+   * Every decision in a project that accepts drift, read by its link and followed page by page to
+   * the end — no cap (FRM-T-18.15).
+   */
+  driftAcceptances: async (code: string): Promise<DriftAcceptanceRow[]> => {
+    const all: DriftAcceptanceRow[] = [];
+    let cursor: string | null = null;
+    do {
+      const query = new URLSearchParams({ acceptsDrift: '1', limit: '200', ...(cursor === null ? {} : { cursor }) });
+      const page: Page<DriftAcceptanceRow> = await api.get<Page<DriftAcceptanceRow>>(
+        `/api/projects/${code}/decisions?${query.toString()}`,
+      );
+      all.push(...page.items);
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+    return all;
+  },
   ci: (code: string) => api.get<CiState>(`/api/projects/${code}/ci`),
   cadence: (code: string) => api.get<Cadence>(`/api/projects/${code}/cadence`),
   deployments: (code: string) => api.get<Page<DeploymentRow>>(`/api/projects/${code}/deployments`),

@@ -45,7 +45,19 @@ async function finding(request: APIRequestContext, lens: string, title: string):
 
 async function findingState(request: APIRequestContext, id: string) {
   const res = await request.get(`/api/findings/${id}`);
-  return (await res.json()) as { status: string; verified: string; recommendationMd: string | null };
+  return (await res.json()) as {
+    status: string;
+    verified: string;
+    recommendationMd: string | null;
+    wontFixReason: string | null;
+  };
+}
+
+/** How many audit events a record has: a verdict that changed nothing must not have written one. */
+async function eventCount(request: APIRequestContext, id: string): Promise<number> {
+  const res = await request.get(`/api/audit-events?entity=${encodeURIComponent(id)}&limit=200`);
+  expect(res.status()).toBe(200);
+  return ((await res.json()) as { items: unknown[] }).items.length;
 }
 
 /** The toast that says `text`. */
@@ -152,11 +164,14 @@ test.describe('triage on /findings', () => {
     await dialog.getByRole('textbox', { name: 'Why it will not be fixed' }).fill('The router is being retired');
     await dialog.getByRole('button', { name: 'Mark won’t fix' }).click();
     await expect(toast(page, `${id} marked won’t fix`)).toBeVisible();
+    // The reason is its own field; the recommendation the reviewer wrote is untouched (FRM-T-18.15).
     await expect
       .poll(async () => findingState(request, id))
-      .toMatchObject({ status: 'wont_fix', recommendationMd: 'Scope the select.\n\n**Won’t fix** — The router is being retired' });
+      .toMatchObject({ status: 'wont_fix', recommendationMd: 'Scope the select.', wontFixReason: 'The router is being retired' });
     await toast(page, `${id} marked won’t fix`).getByRole('button', { name: 'Undo' }).click();
-    await expect.poll(async () => (await findingState(request, id)).status).toBe('open');
+    await expect
+      .poll(async () => findingState(request, id))
+      .toMatchObject({ status: 'open', recommendationMd: 'Scope the select.', wontFixReason: null });
 
     // f, then r from the buttons beside the record.
     await page.getByRole('group', { name: `Verdicts on ${id}` }).getByRole('button', { name: /Mark fixed/ }).click();
@@ -196,6 +211,34 @@ test.describe('triage on /findings', () => {
     await expect(partial).toContainText(`${second} was not undone`);
     await expect.poll(async () => (await findingState(request, first)).verified).toBe('unverified');
     expect((await findingState(request, second)).verified).toBe('confirmed');
+  });
+
+  test('Findings: bulk Acknowledge and Reopen skip what they would not change, writing nothing for it', async ({ page }) => {
+    const request = page.request;
+    const lens = `triage-${RUN}-skip`;
+    const already = await finding(request, lens, `Already acknowledged ${RUN}`);
+    const fresh = await finding(request, lens, `Not yet acknowledged ${RUN}`);
+    const ack = await request.patch(`/api/projects/EXMP/findings/${already}`, { data: { verified: 'confirmed' } });
+    expect(ack.status()).toBe(200);
+    const before = await eventCount(request, already);
+
+    await page.goto(`/findings?project=EXMP&lens=${lens}`);
+    await page.getByRole('checkbox', { name: `Select ${already} for a bulk verdict` }).click();
+    await page.getByRole('checkbox', { name: `Select ${fresh} for a bulk verdict` }).click();
+    const bar = page.getByRole('region', { name: 'Bulk verdicts' });
+    await bar.getByRole('button', { name: 'Acknowledge 2' }).click();
+    await expect(toast(page, 'Acknowledged 1 finding · 1 already acknowledged — skipped')).toBeVisible();
+    await expect.poll(async () => (await findingState(request, fresh)).verified).toBe('confirmed');
+    // No PATCH for the one already acknowledged, so no audit event.
+    expect(await eventCount(request, already)).toBe(before);
+
+    // Both open: Reopen has nothing to do, and says so rather than writing two no-ops.
+    const counts = [await eventCount(request, already), await eventCount(request, fresh)];
+    await page.getByRole('checkbox', { name: `Select ${already} for a bulk verdict` }).click();
+    await page.getByRole('checkbox', { name: `Select ${fresh} for a bulk verdict` }).click();
+    await bar.getByRole('button', { name: 'Reopen' }).click();
+    await expect(toast(page, '2 already open — skipped')).toBeVisible();
+    expect([await eventCount(request, already), await eventCount(request, fresh)]).toEqual(counts);
   });
 
   test('Review: confirms with y and rejects with n, moving on by itself, and Undo puts a ruling back', async ({ page }) => {
@@ -271,6 +314,12 @@ test.describe('triage on /findings', () => {
     await expect(recorded).toBeVisible();
     const group = page.getByRole('region', { name: /^Accepted, \d+/ });
     await expect(group).toContainText(accepted.humanId);
+    // The decision is linked to the record and the category, and read back by that link.
+    const acceptances = await request.get('/api/projects/EXMP/decisions?acceptsDrift=1&limit=200');
+    const linked = ((await acceptances.json()) as { items: { acceptsDriftSubject: string; acceptsDriftCategory: string }[] }).items;
+    expect(linked).toContainEqual(
+      expect.objectContaining({ acceptsDriftSubject: accepted.humanId, acceptsDriftCategory: 'coverage-hole' }),
+    );
 
     // Undo takes the decision back, and the drift is waiting again.
     await recorded.getByRole('button', { name: 'Undo' }).click();
@@ -299,6 +348,42 @@ test.describe('triage on /findings', () => {
     await saved.getByRole('button', { name: 'Undo' }).click();
     await expect(toast(page, `${task.humanId} is blocked again`)).toBeVisible();
     await expect(page.locator('.fm-triage__rows').getByText(task.humanId, { exact: true })).toBeVisible();
+  });
+
+  test('Drift, Review and Blocked honour ?project=, and a tab change keeps it', async ({ page }) => {
+    const request = page.request;
+    const task = await created<{ humanId: string }>(request, '/api/projects/EXMP/tasks', {
+      title: `Stuck for the project filter ${RUN}`,
+      status: 'blocked',
+      blockedReason: `Waiting ${RUN}`,
+    });
+
+    // The tab carries the project with it.
+    await page.goto('/findings?project=EXMP');
+    await page.getByRole('tablist', { name: 'What to triage' }).getByRole('tab', { name: /^Blocked/ }).click();
+    await expect(page).toHaveURL(/[?&]project=EXMP/);
+    await expect(page).toHaveURL(/[?&]tab=blocked/);
+    await expect(page.locator('.fm-triage__rows').getByText(task.humanId, { exact: true })).toBeVisible();
+    for (const code of await page.locator('.fm-triage__rows .fm-triage__project').allTextContents()) {
+      expect(code).toBe('EXMP');
+    }
+
+    // Another project's blocked list does not have it.
+    await page.goto('/findings?tab=blocked&project=NBR');
+    await expect(page.locator('.fm-triage__rows').getByText(task.humanId, { exact: true })).toHaveCount(0);
+
+    // Review and Blocked pass the project to their reads; Drift keeps only its rows.
+    for (const tab of ['drift', 'review']) {
+      const attributions = page.waitForRequest((r) => r.url().includes('/api/attributions?') && r.url().includes('project=NBR'));
+      const tasks = page.waitForRequest((r) => r.url().includes('/api/tasks?') && r.url().includes('project=NBR'));
+      await page.goto(`/findings?tab=${tab}&project=NBR`);
+      await attributions;
+      await tasks;
+      await page.waitForLoadState('networkidle');
+      for (const code of await page.locator('.fm-triage__rows .fm-triage__project').allTextContents()) {
+        expect(code, tab).toMatch(/^NBR\b/);
+      }
+    }
   });
 });
 

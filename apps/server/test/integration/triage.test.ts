@@ -276,21 +276,23 @@ describe.skipIf(url === undefined)('triage across a scope', () => {
       );
       const finding = created.humanId;
       const read = async () =>
-        json<{ status: string; verified: string; recommendationMd: string | null }>(await api(`/api/findings/${finding}`));
+        json<{ status: string; verified: string; recommendationMd: string | null; wontFixReason: string | null }>(
+          await api(`/api/findings/${finding}`),
+        );
 
       const acknowledged = await json<{ auditEventIds: string[] }>(
         await patch(`/api/projects/TRA/findings/${finding}`, { verified: 'confirmed' }),
       );
       expect((await read()).verified).toBe('confirmed');
 
-      // Won't fix keeps its reason with the recommendation, so the reason is on the record.
+      // Won't fix keeps its reason in its own field; the recommendation is not touched (FRM-T-18.15).
       await json(
         await patch(`/api/projects/TRA/findings/${finding}`, {
           status: 'wont_fix',
-          recommendationMd: "**Won't fix** — the code is being deleted.",
+          wontFixReason: 'the code is being deleted.',
         }),
       );
-      expect(await read()).toMatchObject({ status: 'wont_fix', recommendationMd: "**Won't fix** — the code is being deleted." });
+      expect(await read()).toMatchObject({ status: 'wont_fix', wontFixReason: 'the code is being deleted.', recommendationMd: null });
 
       const reopened = await json<{ auditEventIds: string[] }>(await patch(`/api/projects/TRA/findings/${finding}`, { status: 'open' }));
       await json(await post(`/api/undo/${reopened.auditEventIds[0] ?? ''}`, {}));
