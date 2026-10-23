@@ -81,6 +81,45 @@ export function PhaseCard({ counted, code }: { counted: Counted; code: string })
   );
 }
 
+/**
+ * The open work leads (FRM-T-18.16): active phases first, then parked and planned ones in build
+ * order. Finished and cancelled phases need no ring — a wall of identical 100% rings buried the one
+ * phase still moving — so they go to one compact row each underneath. A missing exit demo is said
+ * once, in the summary above with its link to Drift, not on every finished row.
+ */
+export function splitPhases<T extends { phase: { status: string } }>(rows: readonly T[]): {
+  readonly open: T[];
+  readonly closed: T[];
+} {
+  const closedStatus = new Set(['complete', 'cancelled']);
+  const open = rows.filter((row) => !closedStatus.has(row.phase.status));
+  // A stable sort keeps build order inside each band.
+  const band = (status: string) => (status === 'active' ? 0 : 1);
+  open.sort((a, b) => band(a.phase.status) - band(b.phase.status));
+  return { open, closed: rows.filter((row) => closedStatus.has(row.phase.status)) };
+}
+
+function ClosedPhaseRow({ counted, code }: { counted: Counted; code: string }) {
+  const { phase, done, cancelled, total } = counted;
+  return (
+    <li className="fm-phase-done__row">
+      <span className="fm-phase-done__number">Phase {phase.number}</span>
+      <Link className="fm-phase-done__name" href={`/projects/${code}/phases/${phase.humanId}`}>
+        {plainText(phase.name)}
+      </Link>
+      {phase.status === 'cancelled' && (
+        <Badge tone={phaseStatusTone(phase.status)} size="sm">
+          cancelled
+        </Badge>
+      )}
+      <span className="fm-phase-done__count">
+        {total === 0 ? 'No tasks' : `${String(done)} of ${String(total)} done`}
+        {cancelled === 0 ? '' : `, ${String(cancelled)} cancelled`}
+      </span>
+    </li>
+  );
+}
+
 export function Phases({ code }: { code: string }) {
   // Each phase arrives with its task counts, counted by the server over the whole set; this
   // screen counts nothing (FRM-REQ-242).
@@ -95,6 +134,7 @@ export function Phases({ code }: { code: string }) {
     total: phase.tasks.total,
   }));
 
+  const split = splitPhases(counted);
   const complete = items.filter((phase) => phase.status === 'complete').length;
   const active = items.filter((phase) => phase.status === 'active').length;
   const cancelled = items.filter((phase) => phase.status === 'cancelled').length;
@@ -147,11 +187,26 @@ export function Phases({ code }: { code: string }) {
             )}
           </Section>
 
-          <Grid minItemWidth="md">
-            {counted.map((row) => (
-              <PhaseCard key={row.phase.humanId} counted={row} code={code} />
-            ))}
-          </Grid>
+          {split.open.length > 0 && (
+            <Grid minItemWidth="md">
+              {split.open.map((row) => (
+                <PhaseCard key={row.phase.humanId} counted={row} code={code} />
+              ))}
+            </Grid>
+          )}
+
+          {split.closed.length > 0 && (
+            <Section
+              title={split.open.length === 0 ? `Every phase is closed · ${String(split.closed.length)}` : `Complete · ${String(split.closed.length)}`}
+              surface="card"
+            >
+              <ul className="fm-phase-done" aria-label="Closed phases">
+                {split.closed.map((row) => (
+                  <ClosedPhaseRow key={row.phase.humanId} counted={row} code={code} />
+                ))}
+              </ul>
+            </Section>
+          )}
         </Stack>
       )}
     </Page>

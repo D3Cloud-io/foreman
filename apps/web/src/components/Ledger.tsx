@@ -419,8 +419,8 @@ function phaseCell(row: PortfolioRow) {
       )}
       <span className="fm-lrow__bar">
         {/* The words say it; the bar is how fast you see it. Neutral: progress is not a mood (D-016). */}
-        <span className="fm-bar" aria-hidden="true">
-          <span className="fm-bar__fill" style={{ width: `${String(width)}%` }} />
+        <span className="fm-lbar" aria-hidden="true">
+          <span className="fm-lbar__fill" style={{ width: `${String(width)}%` }} />
         </span>
         <span className="fm-lrow__l2">{total === 0 ? 'no tasks yet' : `${String(closed)} of ${plural(total, 'task', 'tasks')}`}</span>
       </span>

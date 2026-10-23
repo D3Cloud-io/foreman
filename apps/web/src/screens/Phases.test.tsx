@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { PhaseCard } from './Phases';
+import { PhaseCard, splitPhases } from './Phases';
+import { Donut } from '../ui/viz';
+import { SERIES } from '../ui/tone';
 
 /** FRM-DA-003: Bindery's Phase 9 is 8 of 12 on Phases, as on the overview. */
 describe('a phase card', () => {
@@ -52,5 +54,41 @@ describe('a phase card', () => {
       <PhaseCard counted={{ phase, done: 1, cancelled: 0, total: 2 }} code="BND" />,
     );
     expect(withDemo).not.toContain('no exit demo');
+  });
+});
+
+/** FRM-T-18.16: the open work leads; finished phases are one row each. */
+describe('the phases split', () => {
+  const row = (number: string, status: string) => ({ phase: { number, status } });
+
+  it('puts active phases first, then parked and planned in build order, and closes the rest', () => {
+    const { open, closed } = splitPhases([
+      row('0', 'complete'),
+      row('12', 'planned'),
+      row('14', 'active'),
+      row('13', 'parked'),
+      row('15', 'cancelled'),
+    ]);
+    expect(open.map((r) => r.phase.number)).toEqual(['14', '12', '13']);
+    expect(closed.map((r) => r.phase.number)).toEqual(['0', '15']);
+  });
+
+  it('leaves the build order alone inside a band', () => {
+    const { open } = splitPhases([row('3', 'planned'), row('1', 'active'), row('2', 'planned'), row('4', 'active')]);
+    expect(open.map((r) => r.phase.number)).toEqual(['1', '4', '3', '2']);
+  });
+});
+
+describe('the ring', () => {
+  it('draws done work in the accent, never the success token', () => {
+    expect(SERIES.done).toBe('var(--color-accent)');
+    expect(Object.values(SERIES).join(' ')).not.toContain('success');
+  });
+
+  it('uses the small figure on a small ring, so 100% fits inside it', () => {
+    const small = renderToStaticMarkup(<Donut size={72} segments={[{ label: 'Done', value: 1, color: SERIES.done }]} label="100%" />);
+    const large = renderToStaticMarkup(<Donut size={104} segments={[{ label: 'Done', value: 1, color: SERIES.done }]} label="100%" />);
+    expect(small).toContain('fm-donut__label--sm');
+    expect(large).not.toContain('fm-donut__label--sm');
   });
 });

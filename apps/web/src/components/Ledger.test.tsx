@@ -124,9 +124,11 @@ describe('a ledger row (FRM-REQ-245)', () => {
     expect(out.indexOf('2 blocked')).toBeLessThan(out.indexOf('3 to review'));
   });
 
-  it('draws progress neutrally and never in green', () => {
+  it('draws progress in its own bar, never in green', () => {
     const out = html(<Ledger rows={[row('AAA')]} />);
-    expect(out).toContain('fm-bar__fill');
+    // Its own class: a shared .fm-bar shrank every SegmentBar in the console (FRM-T-18.16).
+    expect(out).toContain('fm-lbar__fill');
+    expect(out).not.toContain('class="fm-bar"');
     expect(out).not.toMatch(/success|green/i);
   });
 });

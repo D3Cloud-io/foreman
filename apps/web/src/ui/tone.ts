@@ -48,13 +48,17 @@ export function toBadgeTone(tone: Tone): BadgeTone {
  *
  * Series are **data, not status**: they are kept distinct so a segment can be told from its
  * neighbour, and every segment is also named in text (legend, caption, aria-label), so colour is
- * never how you know. None uses the success token — done work is neutral ink, not a celebration —
- * and `quiet` (cancelled) is not the track colour, which a cancelled segment used to disappear into.
+ * never how you know. Done work is drawn in the product accent — progress is the thing a ring
+ * exists to show, and grey ink made a finished phase look like an empty one (FRM-T-18.16) — but
+ * never in the success token, which is status and would make done work a celebration (D-016).
+ * Work not started is the track colour, so it reads as empty; `quiet` (cancelled) is darker than
+ * the track, which a cancelled segment used to disappear into.
  */
 export const SERIES = {
-  done: 'var(--color-fg-muted)',
-  active: 'var(--color-accent)',
-  waiting: 'var(--color-fg-faint)',
+  done: 'var(--color-accent)',
+  active: 'var(--color-info)',
+  // Not started reads as empty — the track's own colour — so a 0% ring looks empty, not full.
+  waiting: 'var(--color-border)',
   blocked: 'var(--color-danger)',
   warning: 'var(--color-warning)',
   info: 'var(--color-info)',

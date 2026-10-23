@@ -107,7 +107,8 @@ export function Donut({
           })}
       </svg>
       <div className="fm-donut__centre">
-        <span className="fm-donut__label">{label}</span>
+        {/* The figure scales with the ring: "100%" at the large size overflowed a 72px ring. */}
+        <span className={size < 90 ? 'fm-donut__label fm-donut__label--sm' : 'fm-donut__label'}>{label}</span>
         {caption !== undefined && <span className="fm-donut__caption">{caption}</span>}
       </div>
     </div>

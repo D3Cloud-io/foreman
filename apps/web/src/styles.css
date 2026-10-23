@@ -444,9 +444,52 @@ dd a {
   color: var(--color-fg);
   font-variant-numeric: tabular-nums;
 }
+.fm-donut__label--sm {
+  font-size: var(--text-14);
+}
 .fm-donut__caption {
   font-size: var(--text-11);
   color: var(--color-fg-muted);
+}
+
+/* Finished phases, one line each under the cards for the work still open (FRM-T-18.16). */
+.fm-phase-done {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.fm-phase-done__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-12);
+  padding: var(--space-8) 0;
+  border-top: var(--border-width) solid var(--color-border);
+}
+.fm-phase-done__row:first-child {
+  border-top: 0;
+}
+.fm-phase-done__number {
+  flex: none;
+  min-width: 4.5rem;
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.fm-phase-done__name {
+  flex: 1;
+  min-width: 0;
+}
+/* A list of names, each a link: underlined only when pointed at, or it is a page of underlines. */
+.fm-phase-done__name.d3-lnk {
+  text-decoration: none;
+}
+.fm-phase-done__name.d3-lnk:hover,
+.fm-phase-done__name.d3-lnk:focus-visible {
+  text-decoration: underline;
+}
+.fm-phase-done__count {
+  flex: none;
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* The stacked bar. `overflow: hidden` plus a radius gives the row rounded ends
