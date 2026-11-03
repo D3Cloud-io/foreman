@@ -26,6 +26,7 @@ import { coverageRoutes } from './routes/coverage.js';
 import { recordRoutes } from './routes/record.js';
 import { findingRoutes, projectFindingRoutes } from './routes/findings.js';
 import { operationsRoutes } from './routes/operations.js';
+import { standingFailures } from './domain/operations.js';
 import { attributionAcrossRoutes, realityRoutes } from './routes/reality.js';
 import { taskRealityRoutes } from './routes/taskReality.js';
 import { webhookRoutes } from './routes/webhooks.js';
@@ -182,7 +183,7 @@ export function createApp({ config, db, oidc = null, registry, verifier: given }
     const [queued, running, failed, revision] = await Promise.all([
       db.job.count({ where: { status: 'queued' } }),
       db.job.count({ where: { status: 'running' } }),
-      db.job.count({ where: { status: 'failed' } }),
+      standingFailures(db),
       schemaRevision(config.DATABASE_URL),
     ]);
     res.json({

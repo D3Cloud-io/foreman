@@ -72,6 +72,7 @@ export interface Health {
   readonly queue: {
     readonly queued: number;
     readonly running: number;
+    /** Failed jobs still standing: see `standingFailures`. */
     readonly failed: number;
     /** The oldest thing still waiting. A queue with depth 3 and an eight-hour-old head is stalled. */
     readonly oldestQueuedAt: string | null;
@@ -93,6 +94,30 @@ const STALL_AFTER_MS = 30 * 60 * 1000;
 /** A backup older than this means last night's did not run. */
 const BACKUP_STALE_AFTER_MS = 36 * 60 * 60 * 1000;
 
+/**
+ * Failed jobs that nothing has since put right (FRM-T-18.18).
+ *
+ * A failed job stops counting once a later job of the same kind, about the same subject, has
+ * succeeded: tonight's reconcile of a repository answers last night's failed one, and nothing
+ * else does. The subject is the repository a job reads (`payload.repoId`) where it has one; a job
+ * with none, like the nightly dump, is answered by the next of its kind. Nothing retries or
+ * clears a failed row, so counting every one ever kept `/health` red over a single old failure,
+ * and with it every deploy that probes it.
+ */
+export async function standingFailures(db: Db): Promise<number> {
+  const [row] = await db.$queryRaw<{ count: bigint }[]>`
+    select count(*) as count from job failed
+    where failed.status = 'failed'
+      and not exists (
+        select 1 from job later
+        where later.kind = failed.kind
+          and later.status = 'succeeded'
+          and later.payload->>'repoId' is not distinct from failed.payload->>'repoId'
+          and coalesce(later.finished_at, later.updated_at) > coalesce(failed.finished_at, failed.updated_at)
+      )`;
+  return Number(row?.count ?? 0);
+}
+
 export interface HealthOptions {
   readonly backupDir?: string | undefined;
   readonly now?: Date | undefined;
@@ -105,7 +130,7 @@ export async function health(db: Db, options: HealthOptions = {}): Promise<Healt
     await Promise.all([
       db.job.count({ where: { status: 'queued' } }),
       db.job.count({ where: { status: 'running' } }),
-      db.job.count({ where: { status: 'failed' } }),
+      standingFailures(db),
       db.job.findFirst({
         where: { status: 'queued' },
         orderBy: { createdAt: 'asc' },
