@@ -2,10 +2,10 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createMailer, type Alert } from '../../src/adapters/mail.js';
 import { createDb, type Db } from '../../src/db.js';
-import { health } from '../../src/domain/operations.js';
+import { health, standingFailures } from '../../src/domain/operations.js';
 import { alertOnStall, buildRegistry, drainOne, enqueue, weekKey } from '../../src/jobs/index.js';
 import { logger } from '../../src/logger.js';
 
@@ -195,6 +195,54 @@ describe.skipIf(url === undefined)('operations', () => {
       expect(report.problems.join(' ')).toContain('has not moved');
 
       await db.job.deleteMany({ where: { id } });
+    });
+
+    describe('failed jobs still standing (FRM-T-18.18)', () => {
+      // Its own kind, so a failure another test leaves behind cannot answer for these or be
+      // answered by them.
+      const KIND = 'health-reconcile-test';
+      const REPO_A = '01a00000-0000-7000-8000-00000000000a';
+      const REPO_B = '01a00000-0000-7000-8000-00000000000b';
+      const at = (hours: number) => new Date(Date.UTC(2026, 10, 2, hours));
+      const job = (status: 'failed' | 'succeeded', repoId: string, finishedAt: Date) =>
+        db.job.create({ data: { kind: KIND, status, payload: { repoId }, finishedAt } });
+
+      beforeEach(async () => {
+        await db.job.deleteMany({ where: { kind: KIND } });
+      });
+      afterAll(async () => {
+        await db.job.deleteMany({ where: { kind: KIND } });
+      });
+
+      it('stops counting a failure once a later run for the same repo succeeds', async () => {
+        const before = await standingFailures(db);
+        await job('failed', REPO_A, at(0));
+        await job('succeeded', REPO_A, at(24));
+
+        expect(await standingFailures(db)).toBe(before);
+        const report = await health(db, { backupDir });
+        expect(report.queue.failed).toBe(before);
+      });
+
+      it('keeps counting a failure nothing has succeeded after', async () => {
+        const before = await standingFailures(db);
+        // A success from before the failure answers nothing.
+        await job('succeeded', REPO_A, at(0));
+        await job('failed', REPO_A, at(24));
+
+        expect(await standingFailures(db)).toBe(before + 1);
+        const report = await health(db, { backupDir });
+        expect(report.ok).toBe(false);
+        expect(report.problems.join(' ')).toContain('failed');
+      });
+
+      it('keeps counting a failure for one repo when only another repo has succeeded', async () => {
+        const before = await standingFailures(db);
+        await job('failed', REPO_A, at(0));
+        await job('succeeded', REPO_B, at(24));
+
+        expect(await standingFailures(db)).toBe(before + 1);
+      });
     });
   });
 
