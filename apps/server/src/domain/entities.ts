@@ -269,41 +269,99 @@ async function citations(db: Db, type: EntityType, id: string) {
   );
 }
 
+/** A citing entity as a backlink names it: its human ID (a term has none) and a readable title. */
+interface Source {
+  readonly humanId: string | null;
+  readonly title: string;
+  readonly deletedAt: Date | null;
+}
+
+/** How each audit kind reads in a backlink, since an audit has no title of its own. */
+const AUDIT_KIND: Record<string, string> = {
+  code_review: 'Code review',
+  design: 'Design audit',
+  feature: 'Feature review',
+  api: 'API audit',
+};
+
+/**
+ * The entity a reference comes from, or null when it is gone or soft-deleted.
+ *
+ * Every kind that can cite or be linked has a case here: a kind that fell through to null read as
+ * "(deleted)" in every backlink list, which a phase linked to an ADR is not (FRM-T-18.17).
+ */
 async function findOneById(
   db: Db,
   type: EntityType,
   id: string,
-): Promise<{ humanId: string; title: string } | null> {
+): Promise<{ humanId: string | null; title: string } | null> {
+  const source = await findSource(db, type, id);
+  return source === null || source.deletedAt !== null
+    ? null
+    : { humanId: source.humanId, title: source.title };
+}
+
+async function findSource(db: Db, type: EntityType, id: string): Promise<Source | null> {
   switch (type) {
     case 'requirement': {
       const row = await db.requirement.findUnique({ where: { id } });
-      return row === null ? null : { humanId: row.humanId, title: row.statement.slice(0, 120) };
+      return row === null ? null : { ...row, title: row.statement.slice(0, 120) };
     }
-    case 'task': {
-      const row = await db.task.findUnique({ where: { id } });
-      return row === null ? null : { humanId: row.humanId, title: row.title };
+    case 'task':
+      return db.task.findUnique({ where: { id } });
+    case 'phase': {
+      const row = await db.phase.findUnique({ where: { id } });
+      return row === null ? null : { ...row, title: row.name };
     }
-    case 'adr': {
-      const row = await db.adr.findUnique({ where: { id } });
-      return row === null ? null : { humanId: row.humanId, title: row.title };
+    case 'adr':
+      return db.adr.findUnique({ where: { id } });
+    case 'decision': {
+      const row = await db.decision.findUnique({ where: { id } });
+      return row === null ? null : { ...row, title: row.statement.slice(0, 120) };
     }
-    case 'finding': {
-      const row = await db.finding.findUnique({ where: { id } });
-      return row === null ? null : { humanId: row.humanId, title: row.title };
+    case 'risk':
+      return db.risk.findUnique({ where: { id } });
+    case 'term': {
+      // A term has no human ID; the glossary names it by the term itself.
+      const row = await db.term.findUnique({ where: { id } });
+      return row === null ? null : { humanId: null, title: row.term, deletedAt: row.deletedAt };
+    }
+    case 'finding':
+      return db.finding.findUnique({ where: { id } });
+    case 'audit': {
+      const row = await db.audit.findUnique({ where: { id } });
+      if (row === null) return null;
+      const label = `${AUDIT_KIND[row.kind] ?? row.kind} ${row.runDate.toISOString().slice(0, 10)}`;
+      return { ...row, title: row.scope === null ? label : `${label} — ${row.scope}` };
+    }
+    case 'idea':
+      return db.idea.findUnique({ where: { id } });
+    case 'project_idea':
+      return db.projectIdea.findUnique({ where: { id } });
+    case 'guideline':
+      return db.guideline.findUnique({ where: { id } });
+    case 'group': {
+      const row = await db.projectGroup.findUnique({ where: { id } });
+      return row === null ? null : { ...row, title: row.name };
     }
     case 'screen': {
       // A gap citing a DS requirement shows the screen in that requirement's backlinks (FRM-REQ-199).
       const row = await db.screen.findUnique({ where: { id } });
-      return row === null ? null : { humanId: row.humanId, title: row.name };
+      return row === null ? null : { ...row, title: row.name };
     }
     case 'document_section': {
       const row = await db.documentSection.findUnique({
         where: { id },
-        include: { document: { select: { title: true } } },
+        include: { document: { select: { title: true, deletedAt: true } } },
       });
       return row === null
         ? null
-        : { humanId: row.key, title: `${row.document.title} — ${row.heading}` };
+        : {
+            humanId: row.key,
+            title: `${row.document.title} — ${row.heading}`,
+            // A section of a deleted document is as gone as the document.
+            deletedAt: row.deletedAt ?? row.document.deletedAt,
+          };
     }
     default:
       return null;
