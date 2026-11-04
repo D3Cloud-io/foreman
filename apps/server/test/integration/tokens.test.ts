@@ -170,14 +170,14 @@ describe.skipIf(url === undefined)('scoped API tokens', () => {
     expect(res.status).toBe(201);
   });
 
-  it('never lets a token mint another token, whatever it holds', async () => {
-    const { token } = await issue('test:write', ['read', 'write', 'admin']);
+  it('lets only an admin token mint another token (FRM-T-029)', async () => {
+    const { token } = await issue('test:write', ['read', 'write']);
     const res = await asToken(token, '/tokens', {
       method: 'POST',
       body: JSON.stringify({ name: 'test:escalated', scopes: ['write'] }),
     });
     // A read-only token one request away from a write token is not a scope system.
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
   });
 
   it('stops working the moment it is revoked', async () => {

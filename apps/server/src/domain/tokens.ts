@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { hashToken } from '../auth/sessions.js';
-import type { Scope } from '../auth/middleware.js';
+import type { AuthContext, Scope } from '../auth/middleware.js';
 import type { Db } from '../db.js';
 import { record, type Actor } from './audit.js';
 import { NotFound } from './errors.js';
@@ -31,7 +31,7 @@ export interface IssuedToken {
 export async function issueToken(
   db: Db,
   actor: Actor,
-  input: { name: string; scopes: readonly Scope[]; expiresInDays?: number },
+  input: { name: string; scopes: readonly Scope[]; expiresInDays?: number; issuedByTokenId?: string },
 ): Promise<IssuedToken> {
   const token = `frm_${randomBytes(32).toString('base64url')}`;
   // A short, non-secret prefix, so a token can be recognised in a list without revealing it.
@@ -57,8 +57,14 @@ export async function issueToken(
       entityType: 'api_token',
       entityId: created.id,
       entityHumanId: prefix,
-      // The token's value never reaches the trail; the prefix, which is not a secret, does.
-      after: { name: created.name, scopes: created.scopes, prefix },
+      // The token's value never reaches the trail; the prefix, which is not a secret, does. When a
+      // token issued this one (FRM-T-029) its id is named too; a console session has none.
+      after: {
+        name: created.name,
+        scopes: created.scopes,
+        prefix,
+        ...(input.issuedByTokenId === undefined ? {} : { issuedByTokenId: input.issuedByTokenId }),
+      },
     });
 
     return {
@@ -109,6 +115,29 @@ export async function listTokens(db: Db) {
       expiresAt: true,
       revokedAt: true,
       createdAt: true,
+    },
+  });
+}
+
+/**
+ * A token asked to issue scopes it does not hold (FRM-T-029). The request is refused; this is the
+ * record that it was tried, against the issuing token, in the same shape as a scope denial.
+ */
+export async function recordEscalationDenied(
+  db: Db,
+  issuer: AuthContext | undefined,
+  requested: readonly Scope[],
+  method: string,
+  path: string,
+): Promise<void> {
+  await db.auditEvent.create({
+    data: {
+      actor: issuer?.actor ?? 'anonymous',
+      actorKind: issuer?.actorKind ?? 'system',
+      action: 'update',
+      entityType: 'api_token',
+      entityId: issuer?.tokenId ?? '00000000-0000-7000-8000-000000000000',
+      after: { event: 'scope_escalation_denied', requested: [...requested], held: issuer?.scopes ?? [], method, path },
     },
   });
 }
