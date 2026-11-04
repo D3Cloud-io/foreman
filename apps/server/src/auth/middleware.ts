@@ -358,3 +358,27 @@ export function requireUser(req: Request, res: Response, next: NextFunction): vo
   }
   next();
 }
+
+/**
+ * Guard: who may issue a token (FRM-T-029). A console session, or an `admin`-scoped `frm_` token.
+ *
+ * Narrower than it looks. A `frm_` token is the only bearer that carries a `tokenId`: a D3 Auth
+ * token for `/mcp` or for the app's audience has none, so both still get 401 here (FRM-T-010,
+ * CON-ADR-003). A `frm_` token without `admin` is refused and the refusal is audited, like any
+ * other scope denial. Listing and revoking keep `requireUser`.
+ */
+export function requireTokenIssuer(db: Db) {
+  const needAdmin = requireScope(db, 'admin');
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const auth = req.auth;
+    if (isConsoleSession(auth)) {
+      next();
+      return;
+    }
+    if (auth?.tokenId === undefined || auth.appToken === true) {
+      res.status(401).json({ error: 'a signed-in user is required' });
+      return;
+    }
+    needAdmin(req, res, next);
+  };
+}

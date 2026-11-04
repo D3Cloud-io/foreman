@@ -183,10 +183,69 @@ describe.skipIf(url === undefined)('console-only routes', () => {
     });
   });
 
-  describe('a Foreman frm_ token, even an admin one', () => {
-    it('cannot mint a token', async () => {
-      expect((await mintAdmin({ bearer: adminToken })).status).toBe(401);
+  describe('an admin frm_ token (FRM-T-029)', () => {
+    const issue = (bearer: string, scopes: string[]) =>
+      as({ bearer }, '/api/tokens', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'test:console-only:minted', scopes }),
+      });
+
+    it('mints a token, shown once and hashed at rest, and the audit event names the issuer', async () => {
+      const res = await issue(adminToken, ['read', 'write']);
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { id: string; token: string; scopes: string[] };
+      expect(body.token.startsWith('frm_')).toBe(true);
+      expect(body.scopes).toEqual(['read', 'write']);
+
+      const row = await db.apiToken.findUniqueOrThrow({ where: { id: body.id } });
+      expect(row.tokenHash).not.toBe(body.token);
+      expect(JSON.stringify(row)).not.toContain(body.token);
+
+      const issuerRow = await db.apiToken.findFirstOrThrow({ where: { name: 'test:console-only:admin' } });
+      const event = await db.auditEvent.findFirstOrThrow({ where: { entityType: 'api_token', entityId: body.id } });
+      expect(event.actor).toBe('test:console-only:admin');
+      expect(event.after).toMatchObject({ issuedByTokenId: issuerRow.id });
+      expect(JSON.stringify(event)).not.toContain(body.token);
+    });
+
+    it('may issue an admin token, since it holds admin itself', async () => {
+      expect((await issue(adminToken, ['admin', 'write', 'read'])).status).toBe(201);
+    });
+
+    it('cannot issue scopes it does not hold: a typed 403, audited, nothing minted', async () => {
+      const issued = await as({ cookie }, '/api/tokens', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'test:console-only:limited', scopes: ['admin', 'read'] }),
+      });
+      const limited = ((await issued.json()) as { token: string }).token;
+      const res = await issue(limited, ['admin', 'read', 'write']);
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { code: string }).code).toBe('scope_escalation');
       expect(await db.apiToken.count({ where: { name: 'test:console-only:minted' } })).toBe(0);
+
+      const limitedRow = await db.apiToken.findFirstOrThrow({ where: { name: 'test:console-only:limited' } });
+      const denied = await db.auditEvent.findFirst({
+        where: { entityType: 'api_token', entityId: limitedRow.id, after: { path: ['event'], equals: 'scope_escalation_denied' } },
+      });
+      expect(denied).not.toBeNull();
+    });
+
+    it.each([['read'], ['write'], ['read', 'write']])('a %s-scoped token is refused', async (...scopes) => {
+      const issued = await as({ cookie }, '/api/tokens', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'test:console-only:weak', scopes }),
+      });
+      const weak = ((await issued.json()) as { token: string }).token;
+      const res = await issue(weak, ['read']);
+      expect([401, 403]).toContain(res.status);
+      expect(await db.apiToken.count({ where: { name: 'test:console-only:minted' } })).toBe(0);
+    });
+
+    it('still cannot list or revoke tokens', async () => {
+      expect((await as({ bearer: adminToken }, '/api/tokens')).status).toBe(401);
+      const target = await db.apiToken.findFirstOrThrow({ where: { name: 'test:console-only:admin' } });
+      expect((await as({ bearer: adminToken }, `/api/tokens/${target.id}`, { method: 'DELETE' })).status).toBe(401);
+      expect((await db.apiToken.findUniqueOrThrow({ where: { id: target.id } })).revokedAt).toBeNull();
     });
 
     it('cannot reach TOTP enrolment', async () => {
