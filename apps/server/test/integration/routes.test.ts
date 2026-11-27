@@ -36,6 +36,7 @@ const PUBLIC = new Set([
   'POST /auth/native/refresh', // the refresh token is the credential
   'POST /auth/native/link', // a D3 Auth token plus this account's password and code
   'POST /auth/native/invite', // the invitation's token, then the challenge it answers (FRM-T-15.2)
+  'PUT /uploads/:token', // a one-use upload link: the link is the credential, and it only adds one file (FRM-REQ-256)
 ]);
 
 describe.skipIf(url === undefined)('every route, not only the ones tested individually', () => {

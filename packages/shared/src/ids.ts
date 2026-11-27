@@ -49,6 +49,10 @@ export const ProjectCode = z
   // `GRP` likewise: it prefixes groups, the families projects belong to (FRM-ADR-024).
   .refine((code) => code !== GROUP_PREFIX, {
     message: '`GRP` is reserved: it prefixes groups, which belong to no project',
+  })
+  // `ATT` likewise: it prefixes attachments, which hang off any entity (FRM-ADR-026).
+  .refine((code) => code !== ATTACHMENT_PREFIX, {
+    message: '`ATT` is reserved: it prefixes attachments, which are filed on an entity, not a project',
   });
 export type ProjectCode = z.infer<typeof ProjectCode>;
 
@@ -109,6 +113,22 @@ export function formatGroupId(seq: number): string {
 }
 
 /**
+ * An **attachment** — a file filed on a project idea, a project, a phase, a task, a requirement or
+ * an ADR (FRM-ADR-026) — takes the same codeless shape, `ATT-012`, because the thing it hangs off
+ * may belong to no project (a project idea), and an ID must not change when that idea converts.
+ */
+export const ATTACHMENT_PREFIX = 'ATT';
+
+export const ATTACHMENT_ID_RE = /^ATT-(\d+)$/;
+
+export const AttachmentId = z.string().regex(ATTACHMENT_ID_RE, 'expected ATT-<SEQ>, e.g. ATT-012');
+export type AttachmentId = z.infer<typeof AttachmentId>;
+
+export function formatAttachmentId(seq: number): string {
+  return `${ATTACHMENT_PREFIX}-${String(seq).padStart(3, '0')}`;
+}
+
+/**
  * Either kind of ID, for the places that take whatever a person typed — `/api/entities/:id`,
  * search, and the MCP verbs that address an entity by name.
  *
@@ -128,7 +148,10 @@ export function parseAnyId(
   if (g?.[1] !== undefined) return { code: null, type: GUIDELINE_PREFIX, seq: g[1] };
 
   const grp = GROUP_ID_RE.exec(value.trim());
-  return grp?.[1] === undefined ? null : { code: null, type: GROUP_PREFIX, seq: grp[1] };
+  if (grp?.[1] !== undefined) return { code: null, type: GROUP_PREFIX, seq: grp[1] };
+
+  const att = ATTACHMENT_ID_RE.exec(value.trim());
+  return att?.[1] === undefined ? null : { code: null, type: ATTACHMENT_PREFIX, seq: att[1] };
 }
 
 /**
@@ -140,7 +163,7 @@ export function parseAnyId(
  */
 export const AnyId = z
   .string()
-  .refine((value) => parseAnyId(value) !== null, 'expected <CODE>-<TYPE>-<SEQ>, PI-<SEQ>, GL-<SEQ> or GRP-<SEQ>');
+  .refine((value) => parseAnyId(value) !== null, 'expected <CODE>-<TYPE>-<SEQ>, PI-<SEQ>, GL-<SEQ>, GRP-<SEQ> or ATT-<SEQ>');
 export type AnyId = z.infer<typeof AnyId>;
 
 /**

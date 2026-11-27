@@ -1,5 +1,11 @@
 import {
+  ATTACHMENT_PREFIX,
+  ATTACHMENT_TYPES_SENTENCE,
+  type Attachment,
+  type AttachmentTicket,
   AttributeInput,
+  cleanAttachmentName,
+  sniffAttachment,
   CreateInput,
   DeleteInput,
   gateForAttribute,
@@ -47,7 +53,64 @@ export interface WriteToolDefinition {
     | typeof AttributeInput;
   /** Whether this call needs asking about first, decided from the arguments and current state. */
   gate(client: ForemanClient, input: unknown): Promise<GateDecision>;
-  run(client: ForemanClient, input: unknown): Promise<unknown>;
+  run(client: ForemanClient, input: unknown, context?: ToolContext): Promise<unknown>;
+}
+
+/**
+ * What the process running the MCP server can do beyond calling Foreman.
+ *
+ * `readFile` exists **only in the stdio shim**, which runs on the operator's own machine. The
+ * remote `/mcp` runs inside Foreman, so a path there would name a file on Foreman's own disk — it
+ * is never given one, and asking it to attach answers with a one-use upload link to run where the
+ * file actually is (FRM-ADR-026, FRM-REQ-256).
+ */
+export interface ToolContext {
+  readonly readFile?: (path: string) => Promise<Uint8Array>;
+}
+
+/** A word for a POSIX shell, single-quoted; a leading `~/` is left outside the quotes to expand. */
+export function shellWord(value: string): string {
+  const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+  return value.startsWith('~/') ? `~/${quote(value.slice(2))}` : quote(value);
+}
+
+/**
+ * `foreman_update { id, attach: <path> }` (FRM-ADR-026). Through the shim, the file is read here,
+ * checked against the same rules the server applies — so a key or a binary never leaves the
+ * machine just to be refused — and sent as one multipart body. Through the remote `/mcp`, Foreman
+ * hands back a one-use upload link and the exact command that finishes the job.
+ */
+async function attachFile(
+  client: ForemanClient,
+  id: string,
+  path: string,
+  context: ToolContext | undefined,
+): Promise<unknown> {
+  const name = cleanAttachmentName(path);
+  if (name === null) throw new Error(`${path} names no file`);
+
+  if (context?.readFile === undefined) {
+    const ticket = await client.post<AttachmentTicket>('/api/attachments/tickets', { entity: id, name: path });
+    return {
+      attached: false,
+      // Said plainly, because the next move is the caller's, not Foreman's.
+      next: `This MCP server runs inside Foreman and cannot read your disk. Run this where the file is, within 15 minutes; it files it on ${ticket.entity} as “${ticket.name}”, once.`,
+      command: `curl --fail-with-body -sS -T ${shellWord(path)} ${shellWord(ticket.uploadUrl)}`,
+      expiresAt: ticket.expiresAt,
+      maxBytes: ticket.maxBytes,
+    };
+  }
+
+  const bytes = await context.readFile(path);
+  if (sniffAttachment(bytes, name) === null) {
+    throw new Error(`${name} was not sent: ${ATTACHMENT_TYPES_SENTENCE}`);
+  }
+  const attachment = await client.upload<Attachment & { auditEventIds: string[] }>(
+    '/api/attachments',
+    { name, bytes },
+    { entity: id },
+  );
+  return { attached: true, ...attachment };
 }
 
 /** The current status of an entity, so a status change can be judged as forward or backward. */
@@ -156,15 +219,17 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
     title: 'Update',
     description:
       'Change an entity’s text, body, priority, size, phase, a task’s declared files or a ' +
-      'project’s group. A field its kind does not store is refused.',
+      'project’s group, or attach a file. A field its kind does not store is refused.',
     inputSchema: UpdateInput,
     gate: (_client, input) => {
       const args = UpdateInput.parse(input);
       // Nothing to look up: the only gated field here is decided by the request itself.
       return Promise.resolve(args.priority === undefined ? { gated: false } : gateForPriority(args.priority));
     },
-    run: async (client, input) => {
+    run: async (client, input, context) => {
       const args = UpdateInput.parse(input);
+      // On its own call, enforced by `UpdateInput`: attaching answers with the attachment.
+      if (args.attach !== undefined) return attachFile(client, args.id, args.attach, context);
       const kind = kindOf(args.id);
       const body: Record<string, unknown> = {};
       if (kind === 'projects') {
@@ -261,10 +326,10 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
   },
   {
     name: 'foreman_delete',
-    title: 'Delete an idea',
+    title: 'Delete',
     description:
-      'Delete an idea or project idea. Anything else is cited by something, so is deleted from the ' +
-      'console. Soft, undoable, confirmed first.',
+      'Delete an idea, project idea or attachment. Anything else is cited by something, so is ' +
+      'deleted from the console. Soft, undoable, confirmed first.',
     inputSchema: DeleteInput,
     // Always gated, even though an idea is the cheapest thing here to lose. A gate that applies
     // only to expensive deletions teaches that an ungated one is safe, and this is the verb whose
@@ -272,10 +337,11 @@ export const WRITE_TOOLS: readonly WriteToolDefinition[] = [
     gate: () => Promise.resolve(gateForDelete()),
     run: async (client, input) => {
       const args = DeleteInput.parse(input);
+      const kind = kindOf(args.id);
       await client.del(
-        kindOf(args.id) === 'project-ideas'
-          ? `/api/project-ideas/${args.id}`
-          : `/api/projects/${projectOf(args.id)}/${kindOf(args.id)}/${args.id}`,
+        kind === 'project-ideas' || kind === 'attachments'
+          ? `/api/${kind}/${args.id}`
+          : `/api/projects/${projectOf(args.id)}/${kind}/${args.id}`,
       );
       return { deleted: args.id };
     },
@@ -381,6 +447,9 @@ function kindOf(humanId: string): string {
     // the usual path, which is why it is spelled the way the route is.
     case 'PI':
       return 'project-ideas';
+    // A file on an entity (FRM-ADR-026): `/api/attachments/ATT-012`, whatever it is filed on.
+    case ATTACHMENT_PREFIX:
+      return 'attachments';
     default:
       throw new Error(`${humanId} cannot be changed through this tool`);
   }

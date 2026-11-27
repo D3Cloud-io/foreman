@@ -32,6 +32,7 @@ import { draftSize, useDraftGuard, useMutate } from '../lib/mutate';
 import { navigate } from '../lib/router';
 import { listJoin } from '../lib/groups';
 import { HistoryDrawer } from '../components/HistoryDrawer';
+import { Attachments } from '../components/Attachments';
 import { useMode, useMoney, useReviews, useSession } from '../lib/session';
 import { Markdown } from '../components/Markdown';
 import { Pill } from '../ui/viz';
@@ -261,6 +262,9 @@ export function ProjectIdeaDetail({ humanId }: { humanId: string }) {
                 onSave={(text) => save({ [section.key]: text })}
               />
             ))}
+            {/* Sources for the canvas above — the design PDF, the sketch (FRM-ADR-026). After the
+                sections, because they are what gets read; the files are what they were read from. */}
+            <Attachments entity={idea.humanId} editable={canEdit} />
           </div>
 
           {/* Its own grid area, so on a phone the lists come before it — they are what gets

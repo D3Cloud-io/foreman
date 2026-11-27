@@ -3,6 +3,7 @@ import type { ForemanClient } from './client.js';
 import { ForemanApiError } from './client.js';
 import { listResources, readResource, RESOURCE_TEMPLATE } from './resources.js';
 import { READ_TOOLS, WRITE_TOOLS, type ToolDefinition } from './tools/index.js';
+import type { ToolContext } from './tools/writes.js';
 
 /**
  * The MCP server the shim exposes over stdio.
@@ -24,9 +25,16 @@ export interface ServerOptions {
   readonly client: ForemanClient;
   readonly name?: string;
   readonly version?: string;
+  /**
+   * Reading a local file, for `foreman_update { attach }` (FRM-ADR-026). **The stdio shim only**:
+   * the remote `/mcp` runs inside Foreman, where a path names Foreman's own disk, so it never
+   * passes one and attaching there answers with a one-use upload link instead.
+   */
+  readonly readFile?: ToolContext['readFile'];
 }
 
-export function createServer({ client, name, version }: ServerOptions): McpServer {
+export function createServer({ client, name, version, readFile }: ServerOptions): McpServer {
+  const context: ToolContext = readFile === undefined ? {} : { readFile };
   const server = new McpServer(
     { name: name ?? SERVER_NAME, version: version ?? SERVER_VERSION },
     {
@@ -60,6 +68,7 @@ export function createServer({ client, name, version }: ServerOptions): McpServe
             content: [
               { type: 'text' as const, text: JSON.stringify(result, null, 2) },
               ...(await imagesFor(tool, client, args, result)),
+              ...(await filesFor(tool, client, result)),
             ],
             // Advertised cache metadata: how long this answer stays good, and what it covers.
             _meta: { 'io.d3cloud.foreman/cache': tool.cache },
@@ -134,7 +143,7 @@ export function createServer({ client, name, version }: ServerOptions): McpServe
             }
           }
 
-          const result = await tool.run(client, args);
+          const result = await tool.run(client, args, context);
           return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
         } catch (error) {
           const message =
@@ -217,6 +226,25 @@ export function createServer({ client, name, version }: ServerOptions): McpServe
 }
 
 export const GUIDELINES_URI = 'foreman://guidelines';
+
+/**
+ * An attachment's file as MCP content (FRM-ADR-026). Like the pictures, a failure to fetch it is a
+ * line of text: the attachment was found, and its metadata is worth returning on its own.
+ */
+async function filesFor(tool: ToolDefinition, client: ForemanClient, result: unknown) {
+  if (tool.files === undefined) return [];
+  try {
+    return [...(await tool.files(client, result))];
+  } catch (error) {
+    const message =
+      error instanceof ForemanApiError
+        ? `${error.message} (${String(error.status)})`
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    return [{ type: 'text' as const, text: `File unavailable: ${message}` }];
+  }
+}
 
 /**
  * A tool's pictures as MCP `image` content (FRM-REQ-198). A failure to fetch them is said in a

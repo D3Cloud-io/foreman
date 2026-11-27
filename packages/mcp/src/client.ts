@@ -24,7 +24,22 @@ export interface ForemanClient {
   post<T>(path: string, body: unknown, query?: Record<string, QueryValue>): Promise<T>;
   patch<T>(path: string, body: unknown, query?: Record<string, QueryValue>): Promise<T>;
   del<T>(path: string): Promise<T>;
+  /**
+   * One file as multipart, in the `file` part (FRM-ADR-026). The bytes go as the request body —
+   * never as base64 through the model (FRM-ADR-020).
+   */
+  upload<T>(path: string, file: UploadFile, query?: Record<string, QueryValue>): Promise<T>;
+  /** Raw bytes and their type: an attachment's content, for `foreman_get ATT-n`. */
+  bytes(path: string): Promise<{ bytes: Uint8Array; contentType: string }>;
 }
+
+export interface UploadFile {
+  readonly name: string;
+  readonly bytes: Uint8Array;
+}
+
+/** A file is bigger than a JSON answer: long enough for 25 MB over a slow uplink. */
+const TRANSFER_TIMEOUT_MS = 120_000;
 
 export interface ClientOptions {
   readonly baseUrl: string;
@@ -44,6 +59,7 @@ export function createClient(options: ClientOptions): ForemanClient {
     path: string,
     body?: unknown,
     query: Record<string, QueryValue> = {},
+    raw: { form?: FormData; bytes?: true } = {},
   ): Promise<T> {
       const url = new URL(`${base}${path}`);
       for (const [key, value] of Object.entries(query)) {
@@ -55,21 +71,30 @@ export function createClient(options: ClientOptions): ForemanClient {
 
       // A hung request must not hang the whole session: the shim is in Claude's critical path.
       const controller = new AbortController();
+      const limit = raw.form !== undefined || raw.bytes === true ? Math.max(timeoutMs, TRANSFER_TIMEOUT_MS) : timeoutMs;
       const timer = setTimeout(() => {
         controller.abort();
-      }, timeoutMs);
+      }, limit);
 
       try {
         const res = await doFetch(url, {
           method,
           headers: {
             authorization: `Bearer ${options.token}`,
-            accept: 'application/json',
+            ...(raw.bytes === true ? {} : { accept: 'application/json' }),
             ...(body === undefined ? {} : { 'content-type': 'application/json' }),
           },
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          // A form sets its own multipart content type, boundary included.
+          ...(raw.form !== undefined ? { body: raw.form } : body === undefined ? {} : { body: JSON.stringify(body) }),
           signal: controller.signal,
         });
+
+        if (raw.bytes === true && res.ok) {
+          return {
+            bytes: new Uint8Array(await res.arrayBuffer()),
+            contentType: res.headers.get('content-type') ?? 'application/octet-stream',
+          } as T;
+        }
 
         const text = await res.text();
         const answer: unknown = text.length > 0 ? JSON.parse(text) : undefined;
@@ -85,7 +110,7 @@ export function createClient(options: ClientOptions): ForemanClient {
       } catch (error) {
         if (error instanceof ForemanApiError) throw error;
         if (error instanceof Error && error.name === 'AbortError') {
-          throw new ForemanApiError(504, `Foreman did not answer within ${String(timeoutMs)}ms`);
+          throw new ForemanApiError(504, `Foreman did not answer within ${String(limit)}ms`);
         }
         throw new ForemanApiError(
           502,
@@ -104,5 +129,14 @@ export function createClient(options: ClientOptions): ForemanClient {
     patch: <T>(path: string, body: unknown, query?: Record<string, QueryValue>) =>
       request<T>('PATCH', path, body, query),
     del: <T>(path: string) => request<T>('DELETE', path),
+    upload: <T>(path: string, file: UploadFile, query?: Record<string, QueryValue>) => {
+      const form = new FormData();
+      // Copied into a plain ArrayBuffer: a Buffer's backing store may be a shared pool, which a
+      // Blob would carry whole.
+      form.append('file', new File([Uint8Array.from(file.bytes)], file.name));
+      return request<T>('POST', path, undefined, query, { form });
+    },
+    bytes: (path: string) =>
+      request<{ bytes: Uint8Array; contentType: string }>('GET', path, undefined, {}, { bytes: true }),
   };
 }

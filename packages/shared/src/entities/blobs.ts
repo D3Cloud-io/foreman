@@ -17,6 +17,21 @@ export const BLOB_MEDIA_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'appli
 export const BlobMediaType = z.enum(BLOB_MEDIA_TYPES);
 export type BlobMediaType = z.infer<typeof BlobMediaType>;
 
+/**
+ * Every type a stored blob can carry: what `POST /api/blobs` takes, and what an attachment adds
+ * (FRM-ADR-026). The store keeps bytes and does not care what they are; each door into it decides
+ * what it lets in, so a screen's proposal can still only ever be an image.
+ */
+export const STORED_MEDIA_TYPES = [
+  ...BLOB_MEDIA_TYPES,
+  'application/pdf',
+  'image/gif',
+  'text/markdown',
+  'text/plain',
+] as const;
+export const StoredMediaType = z.enum(STORED_MEDIA_TYPES);
+export type StoredMediaType = z.infer<typeof StoredMediaType>;
+
 /** Lowercase hex, 64 characters: the file's name on disk and its address over HTTP. */
 export const Sha256 = z.string().regex(/^[0-9a-f]{64}$/, 'not a lowercase hex SHA-256');
 export type Sha256 = z.infer<typeof Sha256>;
@@ -25,7 +40,7 @@ export type Sha256 = z.infer<typeof Sha256>;
 export const Blob = z.object({
   id: Uuid,
   sha256: Sha256,
-  mediaType: BlobMediaType,
+  mediaType: StoredMediaType,
   byteSize: z.number().int().nonnegative(),
   /** Where to read it back: `/api/blobs/<sha256>`, behind the same authentication as the API. */
   url: z.string(),

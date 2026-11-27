@@ -60,6 +60,9 @@ const UNDOABLE = [
   'screen',
   // A family of projects (FRM-ADR-024). Its reorders are their own events — see `undoReorder`.
   'group',
+  // A file on an entity (FRM-ADR-026). Its bytes are never touched: delete and restore move only
+  // the row's `deleted_at`, and the blob it names stays wherever another attachment may need it.
+  'attachment',
 ] as const;
 
 export type UndoableType = (typeof UNDOABLE)[number];
@@ -107,6 +110,8 @@ function model(tx: TransactionClient, type: UndoableType) {
       return tx.screen;
     case 'group':
       return tx.projectGroup;
+    case 'attachment':
+      return tx.attachment;
   }
 }
 

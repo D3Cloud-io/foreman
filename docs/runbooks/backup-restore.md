@@ -42,6 +42,23 @@ The `backup` job has three stages: `dump`, `blobs`, `prune`.
 - **`prune`** removes a dump's `.blobs/` with the dump, and any `.partial` or unpaired `.blobs/`.
   Hardlinks mean pruning an old set never damages a newer one.
 
+### Attachments (FRM-REQ-258, FRM-ADR-026)
+
+Files attached to project ideas, projects, phases, tasks, requirements and ADRs need nothing of their
+own here. An `attachment` row is a name on an entity pointing at a `blob` row by its SHA-256 (a
+foreign key, so it can never name a blob that is not recorded), and the bytes are an ordinary blob
+file under `FOREMAN_BLOB_DIR`. So the `blobs` stage copies them, the drill hashes them, and a restore
+of the dump plus its paired `.blobs/` brings every attachment back — live or soft-deleted, since a
+deletion only sets `attachment.deleted_at` and never touches the file.
+
+To check a restored database the way the drill would, beyond the blob rows themselves:
+
+```bash
+docker compose exec postgres psql -U foreman -d foreman_restored -tAc \
+  "select count(*) from attachment a left join blob b on b.sha256 = a.blob_sha256 where b.id is null"
+# 0, always: the foreign key makes anything else impossible.
+```
+
 ## Taking one now
 
 ```bash

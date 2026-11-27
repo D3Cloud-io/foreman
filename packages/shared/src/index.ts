@@ -14,3 +14,4 @@ export * from './ears/index.js';
 export * from './findings/location.js';
 export * from './import/parse.js';
 export * from './import/citations.js';
+export * from './entities/attachments.js';

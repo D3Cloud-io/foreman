@@ -1,4 +1,6 @@
 import {
+  ATTACHMENT_INLINE_MAX_BYTES,
+  type Attachment,
   BriefInput,
   CACHE,
   CoverageInput,
@@ -42,6 +44,57 @@ export interface ToolDefinition {
    * is something to look at, and its JSON alone says what changed without showing it (FRM-REQ-198).
    */
   images?(client: ForemanClient, input: unknown, result: unknown): Promise<readonly ToolImage[]>;
+  /**
+   * An attachment's file beside its metadata (FRM-ADR-026): `foreman_get ATT-012` is how a session
+   * reads the design PDF on PI-015. Only `foreman_get` has this.
+   */
+  files?(client: ForemanClient, result: unknown): Promise<readonly ToolFile[]>;
+}
+
+/**
+ * One piece of MCP content carrying a file: an image as `image`, text as `text`, and a PDF as an
+ * embedded `resource` with its bytes — the three shapes a client knows how to put in front of a
+ * model.
+ */
+export type ToolFile =
+  | { readonly type: 'image'; readonly data: string; readonly mimeType: string }
+  | { readonly type: 'text'; readonly text: string }
+  | {
+      readonly type: 'resource';
+      readonly resource: { readonly uri: string; readonly mimeType: string; readonly blob: string };
+    };
+
+/**
+ * The file behind an attachment, fetched through the same API client as every other call, so the
+ * shim and the remote `/mcp` return it the same way. Over the inline cap, a line saying where it is
+ * rather than megabytes of base64 nobody asked to spend context on.
+ */
+export async function attachmentFiles(client: ForemanClient, result: unknown): Promise<readonly ToolFile[]> {
+  const found = result as { type?: unknown; entity?: unknown } | null;
+  if (found?.type !== 'attachment') return [];
+  const attachment = found.entity as Attachment;
+  if (attachment.byteSize > ATTACHMENT_INLINE_MAX_BYTES) {
+    return [
+      {
+        type: 'text',
+        text: `${attachment.name} is ${String(attachment.byteSize)} bytes, over the ${String(ATTACHMENT_INLINE_MAX_BYTES)} sent inline. Download it from ${attachment.contentUrl}?download=1 with a read token.`,
+      },
+    ];
+  }
+  const { bytes } = await client.bytes(attachment.contentUrl);
+  const base64 = Buffer.from(bytes).toString('base64');
+  if (attachment.mediaType.startsWith('text/')) {
+    return [{ type: 'text', text: new TextDecoder().decode(bytes) }];
+  }
+  if (attachment.mediaType.startsWith('image/')) {
+    return [{ type: 'image', data: base64, mimeType: attachment.mediaType }];
+  }
+  return [
+    {
+      type: 'resource',
+      resource: { uri: `foreman://attachment/${attachment.humanId}`, mimeType: attachment.mediaType, blob: base64 },
+    },
+  ];
 }
 
 /** One MCP `image` content item: base64 bytes and their type. */
@@ -119,7 +172,7 @@ export const READ_TOOLS: readonly ToolDefinition[] = [
     title: 'Get by ID',
     // A screen also comes back with its current proposal and latest capture as image content
     // (FRM-REQ-198) — not said here, because the definition budget has almost nothing left.
-    description: 'One entity by human ID (BND-REQ-021), with what cites it.',
+    description: 'One entity by human ID (BND-REQ-021), with what cites it. ATT-n comes with its file.',
     inputSchema: GetInput,
     cache: CACHE.get,
     run: async (client, input) => {
@@ -127,6 +180,7 @@ export const READ_TOOLS: readonly ToolDefinition[] = [
       return client.get(`/api/entities/${args.id}`, { backlinks: args.backlinks });
     },
     images: (client, _input, result) => screenImages(client, result),
+    files: (client, result) => attachmentFiles(client, result),
   },
   {
     name: 'foreman_coverage',
@@ -200,7 +254,13 @@ export const MAX_TOOLS = 12;
  * Four characters per token is the usual approximation for English; the number is crude on purpose,
  * because the failure it guards against is a doubling, not a rounding.
  */
-export const TOOL_DEFINITION_TOKEN_BUDGET = 2400;
+/*
+ * Raised to 2500 by FRM-ADR-026 (attachments), with the set at about 2430. Attaching a file arrived
+ * as one field on `foreman_update` and one more prefix on `foreman_delete` and `foreman_get` — not as
+ * a thirteenth tool — and that still cost ~30 tokens the old figure did not have. 2500 is inside the
+ * plan's own 2–3k range; the bloat test below still trips on a doubling, which is what this guards.
+ */
+export const TOOL_DEFINITION_TOKEN_BUDGET = 2500;
 
 export function toolDefinitionTokens(definitions: readonly ToolSummary[] = TOOLS): number {
   const payload = definitions.map((tool) => ({

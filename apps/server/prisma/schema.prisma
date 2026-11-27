@@ -281,6 +281,8 @@ enum EntityType {
   screen_component
   build
   group
+  attachment
+  attachment_ticket
 }
 
 enum AuditAction {
@@ -323,15 +325,15 @@ model Project {
 
   /// `BND`, `AUTH`, `FRM`. Unique, and immutable after creation: every human ID embeds it
   /// (ADR-008, FRM-REQ-031).
-  code      String           @unique
-  name      String
-  slug      String           @unique
-  lifecycle ProjectLifecycle @default(planned)
-  pitch     String?
+  code          String           @unique
+  name          String
+  slug          String           @unique
+  lifecycle     ProjectLifecycle @default(planned)
+  pitch         String?
   /// Legacy provenance: where this project's documents came from in the vault.
-  vaultPath String?          @map("vault_path")
+  vaultPath     String?          @map("vault_path")
   /// Next sequence per human-ID type, so IDs are never reused after a delete.
-  idCounters Json            @default("{}") @map("id_counters")
+  idCounters    Json             @default("{}") @map("id_counters")
   /// The family it belongs to, or none (FRM-REQ-223). One column, so a project is in at most one.
   groupId       String?          @map("group_id") @db.Uuid
   /// Its place within its group, or among the ungrouped (FRM-REQ-226). Ties are broken by code.
@@ -361,8 +363,8 @@ model Project {
   techItems    TechItem[]
   ideas        Idea[]
   screens      Screen[]
-  cameFrom     ProjectIdea[]    @relation("ConvertedFrom")
-  group        ProjectGroup?    @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  cameFrom     ProjectIdea[] @relation("ConvertedFrom")
+  group        ProjectGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
   @@index([lifecycle])
   @@index([groupId, groupPosition])
@@ -374,10 +376,10 @@ model Repo {
   projectId String @map("project_id") @db.Uuid
 
   /// `matdemers1/d3-auth`.
-  fullName      String  @unique @map("full_name")
-  defaultBranch String  @default("main") @map("default_branch")
+  fullName      String    @unique @map("full_name")
+  defaultBranch String    @default("main") @map("default_branch")
   /// GitHub's numeric repository id, when the App has seen it.
-  githubId      BigInt? @unique @map("github_id")
+  githubId      BigInt?   @unique @map("github_id")
   /// Set once a full backfill has completed, so incremental ingest knows where to start.
   backfilledAt  DateTime? @map("backfilled_at") @db.Timestamptz(6)
 
@@ -385,7 +387,7 @@ model Repo {
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project   Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   commits   Commit[]
   checkRuns CheckRun[]
   releases  Release[]
@@ -401,10 +403,10 @@ model Phase {
 
   /// **Numeric, not integer.** Bindery shipped a Phase 8.5; an integer column would have made
   /// that plan unrepresentable.
-  number Decimal @db.Decimal(6, 2)
+  number    Decimal @db.Decimal(6, 2)
   /// **Independent of `number`.** Bindery built 0–8.5, then 9–11, then 13–16, with 12 still ahead:
   /// the order phases were built in is not the order they are numbered.
-  sortOrder Int    @map("sort_order")
+  sortOrder Int     @map("sort_order")
 
   humanId   String      @unique @map("human_id")
   name      String
@@ -435,10 +437,10 @@ model Phase {
 }
 
 model PhaseDependency {
-  phaseId   String @map("phase_id") @db.Uuid
-  dependsOnId String @map("depends_on_id") @db.Uuid
+  phaseId     String  @map("phase_id") @db.Uuid
+  dependsOnId String  @map("depends_on_id") @db.Uuid
   /// Why the order is forced, in the plan's own words.
-  reason    String?
+  reason      String?
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -478,14 +480,14 @@ model Requirement {
   humanId String @unique @map("human_id")
   seq     Int
 
-  statement String
+  statement      String
   /// The EARS shape the linter recognised. `unparsed` is stored with a warning, never rejected.
-  earsPattern EarsPattern @default(unparsed) @map("ears_pattern")
-  earsLintOk  Boolean     @default(false) @map("ears_lint_ok")
-  earsLintNote String?    @map("ears_lint_note")
-  priority    Priority    @default(M)
-  source      String?
-  acceptanceTest String?  @map("acceptance_test")
+  earsPattern    EarsPattern @default(unparsed) @map("ears_pattern")
+  earsLintOk     Boolean     @default(false) @map("ears_lint_ok")
+  earsLintNote   String?     @map("ears_lint_note")
+  priority       Priority    @default(M)
+  source         String?
+  acceptanceTest String?     @map("acceptance_test")
 
   /// **Nullable on purpose**: an unassigned requirement is legal and meaningful — it is the backlog.
   phaseId String? @map("phase_id") @db.Uuid
@@ -494,10 +496,10 @@ model Requirement {
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  project  Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  phase    Phase?            @relation(fields: [phaseId], references: [id], onDelete: SetNull)
-  tasks    TaskRequirement[]
-  findings Finding[]
+  project    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phase      Phase?            @relation(fields: [phaseId], references: [id], onDelete: SetNull)
+  tasks      TaskRequirement[]
+  findings   Finding[]
   /// Component gaps citing this requirement (FRM-REQ-199) — a DS requirement, always.
   screenGaps ScreenComponent[]
 
@@ -513,20 +515,20 @@ model Task {
   phaseId   String? @map("phase_id") @db.Uuid
 
   /// `BND-T-0.3` — the task ID carries its phase, which is why the sequence segment may be dotted.
-  humanId String     @unique @map("human_id")
-  title   String
-  status  TaskStatus @default(todo)
+  humanId       String     @unique @map("human_id")
+  title         String
+  status        TaskStatus @default(todo)
   /// Required by a check when `status` is `blocked`; enforced in the domain layer, not by the column.
-  blockedReason String? @map("blocked_reason")
-  size      Size?
-  doneWhen  String? @map("done_when")
+  blockedReason String?    @map("blocked_reason")
+  size          Size?
+  doneWhen      String?    @map("done_when")
   /// What the task is about, in Markdown: context and the owner's words (FRM-T-017). Capped at
   /// 2000 by the API, as `foreman_create` always advertised; null when there is none.
-  body      String?
-  sortOrder Int     @default(0) @map("sort_order")
+  body          String?
+  sortOrder     Int        @default(0) @map("sort_order")
   /// True when the human ID was synthesized by the importer rather than authored, so a synthesized
   /// ID is never mistaken for a canonical one (FRM-REQ-045, FRM-REQ-151).
-  idSynthesized Boolean @default(false) @map("id_synthesized")
+  idSynthesized Boolean    @default(false) @map("id_synthesized")
 
   startedAt   DateTime? @map("started_at") @db.Timestamptz(6)
   completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
@@ -540,8 +542,8 @@ model Task {
   files        TaskFile[]
   requirements TaskRequirement[]
   commits      CommitTask[]
-  dependsOn    TaskDependency[] @relation("task_depends_on")
-  dependedOnBy TaskDependency[] @relation("task_depended_on_by")
+  dependsOn    TaskDependency[]  @relation("task_depends_on")
+  dependedOnBy TaskDependency[]  @relation("task_depended_on_by")
   deployments  DeploymentTask[]
 
   @@index([projectId, status])
@@ -587,16 +589,16 @@ model Adr {
   id        String @id @default(uuid(7)) @db.Uuid
   projectId String @map("project_id") @db.Uuid
 
-  humanId String    @unique @map("human_id")
-  number  Int
-  title   String
-  status  AdrStatus @default(proposed)
-  decisionAbstract String? @map("decision_abstract")
-  contextMd  String? @map("context_md")
-  decisionMd String? @map("decision_md")
-  consequencesMd String? @map("consequences_md")
-  rejectedMd String? @map("rejected_md")
-  decidedOn  DateTime? @map("decided_on") @db.Date
+  humanId          String    @unique @map("human_id")
+  number           Int
+  title            String
+  status           AdrStatus @default(proposed)
+  decisionAbstract String?   @map("decision_abstract")
+  contextMd        String?   @map("context_md")
+  decisionMd       String?   @map("decision_md")
+  consequencesMd   String?   @map("consequences_md")
+  rejectedMd       String?   @map("rejected_md")
+  decidedOn        DateTime? @map("decided_on") @db.Date
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -632,19 +634,19 @@ model Decision {
   id        String @id @default(uuid(7)) @db.Uuid
   projectId String @map("project_id") @db.Uuid
 
-  humanId   String  @unique @map("human_id")
-  statement String
-  value     String
-  rationale String?
-  lockedAt  DateTime? @map("locked_at") @db.Timestamptz(6)
-  supersededById String? @map("superseded_by") @db.Uuid
+  humanId              String    @unique @map("human_id")
+  statement            String
+  value                String
+  rationale            String?
+  lockedAt             DateTime? @map("locked_at") @db.Timestamptz(6)
+  supersededById       String?   @map("superseded_by") @db.Uuid
   /// The drift this decision accepts (FRM-T-18.15): the drifting record's human ID and the drift
   /// engine's category, both or neither. Columns rather than a `reference` row: a reference has no
   /// category (one task can drift two ways, and accepting one is not accepting the other), its
   /// kinds are mirrored into the MCP link schema whose token budget is full, and a decision's
   /// references are rewritten from its rationale on every edit.
-  acceptsDriftSubject  String? @map("accepts_drift_subject")
-  acceptsDriftCategory String? @map("accepts_drift_category")
+  acceptsDriftSubject  String?   @map("accepts_drift_subject")
+  acceptsDriftCategory String?   @map("accepts_drift_category")
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -699,22 +701,22 @@ model Idea {
   id        String @id @default(uuid(7)) @db.Uuid
   projectId String @map("project_id") @db.Uuid
 
-  humanId String     @unique @map("human_id")
-  seq     Int
-  title   String
+  humanId   String     @unique @map("human_id")
+  seq       Int
+  title     String
   /// What it is, in basic terms. Capped in the schema layer, not here, so the limit is one number
   /// in one place rather than a column type nobody reads.
-  body    String?
-  status  IdeaStatus @default(new)
+  body      String?
+  status    IdeaStatus @default(new)
   /// Why it was parked or rejected, and required for both.
   ///
   /// This is the whole value of writing a rejection down: the existing documents head that
   /// section *"do not re-litigate these"*, and a rejected idea with no reason gets proposed
   /// again six months later by someone who cannot tell it was considered. Same rule as a
   /// blocked task needing to say what is blocking it.
-  reason  String?
+  reason    String?
   /// When it stopped being untriaged. Null while `new`.
-  decidedAt DateTime? @map("decided_at") @db.Timestamptz(6)
+  decidedAt DateTime?  @map("decided_at") @db.Timestamptz(6)
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -833,16 +835,16 @@ model GuidelineGroup {
 model ProjectIdea {
   id String @id @default(uuid(7)) @db.Uuid
 
-  humanId String @unique @map("human_id")
-  seq     Int    @unique
-  title   String
+  humanId   String            @unique @map("human_id")
+  seq       Int               @unique
+  title     String
   /// What it is, in basic terms. This becomes the project's pitch when it is converted, which is
   /// the reason to write more than a line here and nowhere else in the ideas feature.
-  pitch   String?
-  status  ProjectIdeaStatus @default(new)
+  pitch     String?
+  status    ProjectIdeaStatus @default(new)
   /// Why it was parked or rejected, and required for both. Same rule, same reason as an idea's.
-  reason  String?
-  decidedAt DateTime? @map("decided_at") @db.Timestamptz(6)
+  reason    String?
+  decidedAt DateTime?         @map("decided_at") @db.Timestamptz(6)
 
   /// The project this became. Null until converted, and the only way `status` reaches `converted`.
   projectId   String?   @map("project_id") @db.Uuid
@@ -851,10 +853,10 @@ model ProjectIdea {
   /// Who submitted it. Null for everything written before roles existed, and for anything a
   /// token wrote — which is why it is nullable rather than required: an idea with no author is a
   /// real state, and pretending otherwise would mean inventing one.
-  submittedById String? @map("submitted_by_id") @db.Uuid
+  submittedById     String? @map("submitted_by_id") @db.Uuid
   /// What was awarded, in minor units. Integer, not a float and not a decimal that has to be
   /// serialised: money in cents is the one representation that cannot quietly lose a penny.
-  fundedAmountCents Int? @map("funded_amount_cents")
+  fundedAmountCents Int?    @map("funded_amount_cents")
 
   // ── The canvas (FRM-ADR-017) ──────────────────────────────────────────────
   // Named, prompted sections rather than one blank page: the structure is what keeps an idea
@@ -886,12 +888,12 @@ model ProjectIdea {
 
   /// `SetNull`, not `Cascade`: a hard-deleted project must not take the record of the idea that
   /// became it. The idea outlives the project, the way a decision outlives what it decided.
-  project Project? @relation("ConvertedFrom", fields: [projectId], references: [id], onDelete: SetNull)
+  project     Project?      @relation("ConvertedFrom", fields: [projectId], references: [id], onDelete: SetNull)
   /// `SetNull`: a departed colleague's account may go, and their submissions stay. The audit
   /// event still records who wrote it.
-  submittedBy User? @relation("SubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
-  scores   IdeaScore[]
-  comments IdeaComment[]
+  submittedBy User?         @relation("SubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull)
+  scores      IdeaScore[]
+  comments    IdeaComment[]
 
   @@index([status])
   @@index([submittedById])
@@ -970,10 +972,10 @@ model Invite {
   userId    String @unique @map("user_id") @db.Uuid
   tokenHash String @unique @map("token_hash")
 
-  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
-  acceptedAt DateTime? @map("accepted_at") @db.Timestamptz(6)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  acceptedAt  DateTime? @map("accepted_at") @db.Timestamptz(6)
   /// Who sent it. Null if the account was seeded rather than invited.
-  invitedById String? @map("invited_by_id") @db.Uuid
+  invitedById String?   @map("invited_by_id") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -984,7 +986,7 @@ model Invite {
 }
 
 model Term {
-  id String @id @default(uuid(7)) @db.Uuid
+  id        String  @id @default(uuid(7)) @db.Uuid
   /// Nullable: a null project means the term is ecosystem-wide.
   projectId String? @map("project_id") @db.Uuid
 
@@ -1010,10 +1012,10 @@ model Document {
   /// Phase plans only.
   phaseId   String? @map("phase_id") @db.Uuid
 
-  kind  DocumentKind
-  title String
+  kind       DocumentKind
+  title      String
   /// Where this document came from, when it was imported rather than authored here.
-  sourcePath String? @map("source_path")
+  sourcePath String?      @map("source_path")
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -1055,7 +1057,7 @@ model DocumentRevision {
   id         String @id @default(uuid(7)) @db.Uuid
   documentId String @map("document_id") @db.Uuid
 
-  revisionNo Int    @map("revision_no")
+  revisionNo Int       @map("revision_no")
   /// The whole document, sections included, as it stood.
   snapshot   Json
   actor      String
@@ -1076,15 +1078,15 @@ model Audit {
   id        String @id @default(uuid(7)) @db.Uuid
   projectId String @map("project_id") @db.Uuid
 
-  humanId String      @unique @map("human_id")
-  kind    AuditKind
-  scope   String?
-  runDate DateTime    @map("run_date") @db.Date
-  verdict String?
-  rounds  Int         @default(1)
-  status  AuditStatus @default(running)
+  humanId   String      @unique @map("human_id")
+  kind      AuditKind
+  scope     String?
+  runDate   DateTime    @map("run_date") @db.Date
+  verdict   String?
+  rounds    Int         @default(1)
+  status    AuditStatus @default(running)
   /// Where the audit's own write-up lives, for the ones that predate Foreman.
-  vaultPath String?   @map("vault_path")
+  vaultPath String?     @map("vault_path")
 
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -1104,30 +1106,30 @@ model Finding {
   projectId String  @map("project_id") @db.Uuid
   auditId   String? @map("audit_id") @db.Uuid
 
-  humanId String   @unique @map("human_id")
-  title   String
-  lenses  String[] @default([])
+  humanId    String        @unique @map("human_id")
+  title      String
+  lenses     String[]      @default([])
   severity   Severity
   confidence String?
   verified   Verified?
   status     FindingStatus @default(open)
 
-  foundRound Int?    @map("found_round")
-  fixedRound Int?    @map("fixed_round")
+  foundRound       Int?    @map("found_round")
+  fixedRound       Int?    @map("fixed_round")
   /// Joins to ingested reality: the commit that actually fixed it.
-  fixedCommitSha String? @map("fixed_commit_sha")
-  effort     String?
+  fixedCommitSha   String? @map("fixed_commit_sha")
+  effort           String?
   /// The location **as it was written**, kept verbatim alongside the parsed rows. A real one reads
   /// `api/config.py:12-14; api/settings_store.py:70; api/main.py (no startup check in lifespan)` —
   /// prose and all — and a parse that silently dropped the prose would lose the only part naming
   /// what is wrong with the third file.
-  locationRaw   String? @map("location_raw")
-  observedMd    String? @map("observed_md")
+  locationRaw      String? @map("location_raw")
+  observedMd       String? @map("observed_md")
   recommendationMd String? @map("recommendation_md")
   /// Why it will not be fixed (FRM-T-18.15). Its own column, not a line appended to the
   /// recommendation: that text is the reviewer's, and a verdict never edits it. Set only while the
   /// status is `wont_fix`; any other status clears it in the same write.
-  wontFixReason String? @map("wont_fix_reason")
+  wontFixReason    String? @map("wont_fix_reason")
 
   /// What this finding contradicts, when it contradicts something.
   requirementId String? @map("requirement_id") @db.Uuid
@@ -1138,11 +1140,11 @@ model Finding {
   updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  audit       Audit?       @relation(fields: [auditId], references: [id], onDelete: SetNull)
-  requirement Requirement? @relation(fields: [requirementId], references: [id], onDelete: SetNull)
-  adr         Adr?         @relation(fields: [adrId], references: [id], onDelete: SetNull)
-  phase       Phase?       @relation(fields: [phaseId], references: [id], onDelete: SetNull)
+  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  audit       Audit?            @relation(fields: [auditId], references: [id], onDelete: SetNull)
+  requirement Requirement?      @relation(fields: [requirementId], references: [id], onDelete: SetNull)
+  adr         Adr?              @relation(fields: [adrId], references: [id], onDelete: SetNull)
+  phase       Phase?            @relation(fields: [phaseId], references: [id], onDelete: SetNull)
   locations   FindingLocation[]
 
   @@index([projectId, status])
@@ -1163,12 +1165,12 @@ model FindingLocation {
   id        String @id @default(uuid(7)) @db.Uuid
   findingId String @map("finding_id") @db.Uuid
 
-  path String
+  path      String
   /// `12-14`, or `42,67,69,144`, or null when the finding names a file without pinning a line.
-  lines String?
+  lines     String?
   /// What the raw location said about this file in prose — "(no startup check in `lifespan`)".
-  note  String?
-  sortOrder Int  @default(0) @map("sort_order")
+  note      String?
+  sortOrder Int     @default(0) @map("sort_order")
 
   /// Set when the file has changed since the finding was fixed (FRM-REQ-123). The regression
   /// watch: a fix whose file moved again is worth a second look, and nothing else notices.
@@ -1188,8 +1190,8 @@ model Commit {
   sha         String
   message     String
   author      String
-  authorEmail String?  @map("author_email")
-  committedAt DateTime @map("committed_at") @db.Timestamptz(6)
+  authorEmail String?   @map("author_email")
+  committedAt DateTime  @map("committed_at") @db.Timestamptz(6)
   additions   Int?
   deletions   Int?
   /// Set when a force push removed this SHA from the remote. **Marked, never deleted**
@@ -1213,8 +1215,8 @@ model CommitFile {
   id       String @id @default(uuid(7)) @db.Uuid
   commitId String @map("commit_id") @db.Uuid
 
-  path   String
-  status String
+  path      String
+  status    String
   additions Int?
   deletions Int?
 
@@ -1231,12 +1233,12 @@ model CommitTask {
   commitId String @map("commit_id") @db.Uuid
   taskId   String @map("task_id") @db.Uuid
 
-  source     AttributionSource
-  confidence Decimal           @db.Decimal(4, 3)
-  confirmed  Boolean           @default(false)
-  confirmedAt DateTime?        @map("confirmed_at") @db.Timestamptz(6)
-  confirmedBy String?          @map("confirmed_by")
-  rejectedAt  DateTime?        @map("rejected_at") @db.Timestamptz(6)
+  source      AttributionSource
+  confidence  Decimal           @db.Decimal(4, 3)
+  confirmed   Boolean           @default(false)
+  confirmedAt DateTime?         @map("confirmed_at") @db.Timestamptz(6)
+  confirmedBy String?           @map("confirmed_by")
+  rejectedAt  DateTime?         @map("rejected_at") @db.Timestamptz(6)
   /// Which paths overlapped, or which ID the message declared — the evidence, kept for review.
   evidence    Json?
 
@@ -1256,13 +1258,13 @@ model CheckRun {
   repoId String @map("repo_id") @db.Uuid
 
   /// Not a foreign key: a check run can arrive before the commit it belongs to.
-  commitSha  String           @map("commit_sha")
-  name       String
-  conclusion CheckConclusion?
-  startedAt   DateTime?       @map("started_at") @db.Timestamptz(6)
-  completedAt DateTime?       @map("completed_at") @db.Timestamptz(6)
-  detailsUrl  String?         @map("details_url")
-  externalId  String?         @map("external_id")
+  commitSha   String           @map("commit_sha")
+  name        String
+  conclusion  CheckConclusion?
+  startedAt   DateTime?        @map("started_at") @db.Timestamptz(6)
+  completedAt DateTime?        @map("completed_at") @db.Timestamptz(6)
+  detailsUrl  String?          @map("details_url")
+  externalId  String?          @map("external_id")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -1338,14 +1340,14 @@ model Deployment {
 
   environment    String
   image          String
-  imageSha       String    @map("image_sha")
-  schemaRevision String?   @map("schema_revision")
-  deployedAt     DateTime  @map("deployed_at") @db.Timestamptz(6)
+  imageSha       String   @map("image_sha")
+  schemaRevision String?  @map("schema_revision")
+  deployedAt     DateTime @map("deployed_at") @db.Timestamptz(6)
   note           String?
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   tasks   DeploymentTask[]
 
   @@index([projectId, deployedAt])
@@ -1416,19 +1418,19 @@ model Reference {
 model AuditEvent {
   id String @id @default(uuid(7)) @db.Uuid
 
-  actor      String
-  actorKind  ActorKind  @default(user) @map("actor_kind")
-  action     AuditAction
-  entityType EntityType @map("entity_type")
-  entityId   String     @map("entity_id") @db.Uuid
+  actor           String
+  actorKind       ActorKind   @default(user) @map("actor_kind")
+  action          AuditAction
+  entityType      EntityType  @map("entity_type")
+  entityId        String      @map("entity_id") @db.Uuid
   /// Denormalised so an audit trail stays readable after the entity is gone.
-  entityHumanId String? @map("entity_human_id")
-  before Json?
-  after  Json?
+  entityHumanId   String?     @map("entity_human_id")
+  before          Json?
+  after           Json?
   /// Set when this event has been undone, and by which event.
-  undoneAt      DateTime? @map("undone_at") @db.Timestamptz(6)
-  undoneByEventId String? @map("undone_by_event_id") @db.Uuid
-  requestId     String?   @map("request_id")
+  undoneAt        DateTime?   @map("undone_at") @db.Timestamptz(6)
+  undoneByEventId String?     @map("undone_by_event_id") @db.Uuid
+  requestId       String?     @map("request_id")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -1460,18 +1462,18 @@ model ApiToken {
 /// The reconciliation report for the vault migration. **Every source file gets a row** — mapped,
 /// partial or unmapped, with a reason. Silence is the failure mode (never-regress test #2).
 model ImportRecord {
-  id String @id @default(uuid(7)) @db.Uuid
+  id    String @id @default(uuid(7)) @db.Uuid
   /// The import run, which is a job.
   jobId String @map("job_id") @db.Uuid
 
-  sourcePath String       @map("source_path")
-  entityType EntityType?  @map("entity_type")
-  entityId   String?      @map("entity_id") @db.Uuid
-  status     ImportStatus
+  sourcePath  String       @map("source_path")
+  entityType  EntityType?  @map("entity_type")
+  entityId    String?      @map("entity_id") @db.Uuid
+  status      ImportStatus
   /// Why it is partial or unmapped. Required for anything that is not `mapped`.
-  note       String?
+  note        String?
   /// Bytes of the source file, so a silently truncated parse is visible.
-  sourceBytes Int?        @map("source_bytes")
+  sourceBytes Int?         @map("source_bytes")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -1495,23 +1497,23 @@ model User {
   /// is the one operator, who was an admin in everything but name.
   role        UserRole   @default(submitter)
 
-  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
-  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
   /// Set when the person asked to delete their account (FRM-T-15.3, FRM-ADR-022): suspended until
   /// then, restorable by an admin, and purged by the nightly job once it passes.
   deleteAfter DateTime? @map("delete_after") @db.Timestamptz(6)
 
-  credential Credential?
-  identities Identity[]
-  sessions   Session[]
-  invite     Invite?
-  submitted  ProjectIdea[]  @relation("SubmittedBy")
-  scores     IdeaScore[]
-  comments   IdeaComment[]
+  credential         Credential?
+  identities         Identity[]
+  sessions           Session[]
+  invite             Invite?
+  submitted          ProjectIdea[]       @relation("SubmittedBy")
+  scores             IdeaScore[]
+  comments           IdeaComment[]
+  relayRegistrations RelayRegistration[]
 
   @@index([role])
-  relayRegistrations RelayRegistration[]
   @@map("user")
 }
 
@@ -1519,13 +1521,13 @@ model User {
 model Credential {
   userId String @id @map("user_id") @db.Uuid
 
-  passwordHash     String    @map("password_hash")
-  passwordUpdatedAt DateTime @default(now()) @map("password_updated_at") @db.Timestamptz(6)
+  passwordHash      String    @map("password_hash")
+  passwordUpdatedAt DateTime  @default(now()) @map("password_updated_at") @db.Timestamptz(6)
   /// Encrypted with the KEK. Null until TOTP is enrolled.
-  totpSecret       String?   @map("totp_secret")
-  totpConfirmedAt  DateTime? @map("totp_confirmed_at") @db.Timestamptz(6)
+  totpSecret        String?   @map("totp_secret")
+  totpConfirmedAt   DateTime? @map("totp_confirmed_at") @db.Timestamptz(6)
   /// Last accepted TOTP step, so a code cannot be replayed inside its window.
-  totpLastStep     BigInt?   @map("totp_last_step")
+  totpLastStep      BigInt?   @map("totp_last_step")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -1541,15 +1543,15 @@ model Identity {
   id     String @id @default(uuid(7)) @db.Uuid
   userId String @map("user_id") @db.Uuid
 
-  iss String
-  sub String
+  iss         String
+  sub         String
   /// Whatever the issuer last told us, for display only.
-  claims Json?
+  claims      Json?
   lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(6)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   relayRegistrations RelayRegistration[]
 
   @@unique([iss, sub])
@@ -1562,15 +1564,15 @@ model Session {
   userId String @map("user_id") @db.Uuid
 
   /// The cookie carries this, hashed here, so a leaked database row cannot be replayed as a cookie.
-  tokenHash String     @unique @map("token_hash")
-  method    AuthMethod
+  tokenHash  String     @unique @map("token_hash")
+  method     AuthMethod
   /// Present for an OIDC session, so RP-initiated logout can be driven from it.
-  idTokenSub String?   @map("id_token_sub")
-  ip        String?
-  userAgent String?    @map("user_agent")
-  lastSeenAt DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
-  expiresAt DateTime   @map("expires_at") @db.Timestamptz(6)
-  revokedAt DateTime?  @map("revoked_at") @db.Timestamptz(6)
+  idTokenSub String?    @map("id_token_sub")
+  ip         String?
+  userAgent  String?    @map("user_agent")
+  lastSeenAt DateTime   @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  expiresAt  DateTime   @map("expires_at") @db.Timestamptz(6)
+  revokedAt  DateTime?  @map("revoked_at") @db.Timestamptz(6)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -1580,8 +1582,8 @@ model Session {
   deviceName     String? @map("device_name")
   devicePlatform String? @map("device_platform")
 
-  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  refreshes NativeRefresh[]
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshes          NativeRefresh[]
   relayRegistrations RelayRegistration[]
 
   @@index([userId, expiresAt])
@@ -1624,21 +1626,21 @@ model AuthThrottle {
 model Job {
   id String @id @default(uuid(7)) @db.Uuid
 
-  kind    String
-  payload Json      @default("{}")
-  status  JobStatus @default(queued)
+  kind           String
+  payload        Json      @default("{}")
+  status         JobStatus @default(queued)
   /// Set while a worker holds the job, with the lease that lets a dead worker's job be reclaimed.
-  lockedBy  String?   @map("locked_by")
-  lockedAt  DateTime? @map("locked_at") @db.Timestamptz(6)
-  leaseUntil DateTime? @map("lease_until") @db.Timestamptz(6)
-  availableAt DateTime @default(now()) @map("available_at") @db.Timestamptz(6)
-  attempts  Int       @default(0)
-  maxAttempts Int     @default(3) @map("max_attempts")
-  lastError String?   @map("last_error")
-  startedAt  DateTime? @map("started_at") @db.Timestamptz(6)
-  finishedAt DateTime? @map("finished_at") @db.Timestamptz(6)
+  lockedBy       String?   @map("locked_by")
+  lockedAt       DateTime? @map("locked_at") @db.Timestamptz(6)
+  leaseUntil     DateTime? @map("lease_until") @db.Timestamptz(6)
+  availableAt    DateTime  @default(now()) @map("available_at") @db.Timestamptz(6)
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(3) @map("max_attempts")
+  lastError      String?   @map("last_error")
+  startedAt      DateTime? @map("started_at") @db.Timestamptz(6)
+  finishedAt     DateTime? @map("finished_at") @db.Timestamptz(6)
   /// Set for a job that must not run twice — an ingest of one delivery, say.
-  idempotencyKey String? @unique @map("idempotency_key")
+  idempotencyKey String?   @unique @map("idempotency_key")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -1655,13 +1657,13 @@ model JobStage {
   id    String @id @default(uuid(7)) @db.Uuid
   jobId String @map("job_id") @db.Uuid
 
-  name      String
-  sortOrder Int       @map("sort_order")
-  status    JobStatus @default(queued)
-  attempts  Int       @default(0)
+  name       String
+  sortOrder  Int       @map("sort_order")
+  status     JobStatus @default(queued)
+  attempts   Int       @default(0)
   /// Whatever the stage produced, handed to the next stage.
-  output    Json?
-  lastError String?   @map("last_error")
+  output     Json?
+  lastError  String?   @map("last_error")
   startedAt  DateTime? @map("started_at") @db.Timestamptz(6)
   finishedAt DateTime? @map("finished_at") @db.Timestamptz(6)
 
@@ -1719,8 +1721,68 @@ model Blob {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   screenVersions ScreenVersion[]
+  attachments    Attachment[]
 
   @@map("blob")
+}
+
+/// A file filed on an entity (FRM-ADR-026): a name on a project idea, project, phase, task,
+/// requirement or ADR, pointing at a blob. **The bytes are the blob's**, so two attachments of one
+/// PDF are one file on disk, and the nightly backup set and restore drill already cover them.
+///
+/// The entity is named by `(entity_type, entity_id)` as `reference` names its ends, with the human
+/// ID it had beside it (a project's is its code). A check constraint keeps the type to the six kinds
+/// an attachment can be filed on. Soft delete only, like everything else here.
+model Attachment {
+  id      String @id @default(uuid(7)) @db.Uuid
+  /// `ATT-012`, from `attachment_seq`: codeless, because a project idea has no code to prefix.
+  humanId String @unique @map("human_id")
+  seq     Int    @unique
+
+  entityType    EntityType @map("entity_type")
+  entityId      String     @map("entity_id") @db.Uuid
+  entityHumanId String     @map("entity_human_id")
+
+  /// The file name as uploaded, cleaned of any path (`cleanAttachmentName`).
+  name       String
+  blobSha256 String @map("blob_sha256")
+  /// The actor who attached it, as the audit trail names them.
+  uploadedBy String @map("uploaded_by")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  blob Blob @relation(fields: [blobSha256], references: [sha256])
+
+  @@index([entityType, entityId])
+  @@index([blobSha256])
+  @@map("attachment")
+}
+
+/// A one-use upload link (FRM-REQ-256), for a session whose MCP server cannot see the file — the
+/// remote `/mcp`, which runs here while the file is on somebody's laptop. Only the SHA-256 of the
+/// secret is kept; the link is bound to one entity and one name, lives fifteen minutes, and is spent
+/// by the first upload that lands.
+model AttachmentTicket {
+  id        String @id @default(uuid(7)) @db.Uuid
+  tokenHash String @unique @map("token_hash")
+
+  entityType    EntityType @map("entity_type")
+  entityId      String     @map("entity_id") @db.Uuid
+  entityHumanId String     @map("entity_human_id")
+  name          String
+
+  /// Who asked for it: the upload is recorded as theirs.
+  actor     String
+  actorKind ActorKind @map("actor_kind")
+
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt       DateTime? @map("used_at") @db.Timestamptz(6)
+  attachmentId String?   @map("attachment_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("attachment_ticket")
 }
 
 // ─── Screens (FRM-P-12) ────────────────────────────────────────────────────
@@ -1766,11 +1828,11 @@ model Screen {
   projectId String @map("project_id") @db.Uuid
 
   /// `BND-SCR-001`, from the project's counter. Immutable once assigned (ADR-008).
-  humanId String  @unique @map("human_id")
-  seq     Int
-  name    String
+  humanId      String  @unique @map("human_id")
+  seq          Int
+  name         String
   /// The console route, e.g. `/projects/:code`. Null for a screen that is a state, not a page.
-  route   String?
+  route        String?
   /// Where the screen's frame lives in Figma, when it is known before the first proposal.
   figmaFileKey String? @map("figma_file_key")
   figmaNodeId  String? @map("figma_node_id")
@@ -1793,11 +1855,11 @@ model Screen {
 /// readable after (FRM-REQ-193). A capture carries the commit it was taken at (FRM-REQ-194).
 /// Append-only: a version is never edited, which is what makes a verdict on one mean something.
 model ScreenVersion {
-  id       String            @id @default(uuid(7)) @db.Uuid
-  screenId String            @map("screen_id") @db.Uuid
-  kind     ScreenVersionKind
+  id         String                @id @default(uuid(7)) @db.Uuid
+  screenId   String                @map("screen_id") @db.Uuid
+  kind       ScreenVersionKind
   /// The image, by content address. The bytes are in the blob store, never here.
-  blobSha256 String         @map("blob_sha256")
+  blobSha256 String                @map("blob_sha256")
   viewport   ScreenViewport
   theme      ScreenTheme
   /// Proposals only; null on a capture.

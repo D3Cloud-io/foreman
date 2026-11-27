@@ -1,4 +1,13 @@
-import { GROUP_PREFIX, GUIDELINE_PREFIX, parseAnyId, PROJECT_IDEA_PREFIX } from '@foreman/shared';
+import {
+  ATTACHMENT_PREFIX,
+  AttachableEntityType,
+  GROUP_PREFIX,
+  GUIDELINE_PREFIX,
+  parseAnyId,
+  PROJECT_IDEA_PREFIX,
+  type AttachmentSummary,
+} from '@foreman/shared';
+import { attachmentSummaries, findAttachment } from './attachments.js';
 import type { Db } from '../db.js';
 import type { EntityType } from '../generated/prisma/enums.js';
 import { NotFound } from './errors.js';
@@ -42,6 +51,9 @@ const BY_TYPE: Record<string, EntityType> = {
   // And a group, the family projects belong to (FRM-REQ-239): it comes back as the group, its
   // projects in order and the active guidelines that apply to it — `GET /api/groups/:id`'s shape.
   [GROUP_PREFIX]: 'group',
+  // A file filed on an entity (FRM-ADR-026). Comes back as its metadata; `foreman_get` adds the
+  // file itself as content.
+  [ATTACHMENT_PREFIX]: 'attachment',
 };
 
 export interface EntityResult {
@@ -57,6 +69,11 @@ export interface EntityResult {
     readonly title: string;
     readonly kind: string;
   }[];
+  /**
+   * What is filed on it (FRM-ADR-026), for the kinds that take attachments: a line each, enough to
+   * pick one to fetch by its `ATT-n`. Absent for every other kind.
+   */
+  readonly attachments?: readonly AttachmentSummary[];
 }
 
 export async function getByHumanId(
@@ -71,7 +88,7 @@ export async function getByHumanId(
     // Not a lookup failure: an unprefixed ID is ambiguous by construction, and saying so is more
     // useful than "not found".
     throw new NotFound(
-      `${humanId} is not a human ID Foreman issues (expected BND-REQ-021, PI-007, GL-004 or GRP-001)`,
+      `${humanId} is not a human ID Foreman issues (expected BND-REQ-021, PI-007, GL-004, GRP-001 or ATT-012)`,
     );
   }
 
@@ -81,12 +98,14 @@ export async function getByHumanId(
   const found = await findOne(db, type, humanId);
   if (found === null) throw new NotFound(humanId);
 
+  const attachable = AttachableEntityType.safeParse(type);
   return {
     type,
     humanId,
     projectCode: parsed.code,
     entity: found.entity,
     backlinks: options.backlinks === false ? [] : await citations(db, type, found.id),
+    ...(attachable.success ? { attachments: await attachmentSummaries(db, attachable.data, found.id) } : {}),
   };
 }
 
@@ -236,6 +255,16 @@ async function findOne(
     }
     case 'screen':
       return screenByHumanId(db, humanId);
+    case 'attachment': {
+      // Its metadata only: the bytes are `/api/attachments/ATT-n/content`, which `foreman_get`
+      // fetches beside this answer (FRM-ADR-026).
+      try {
+        const attachment = await findAttachment(db, humanId);
+        return { id: attachment.id, entity: attachment };
+      } catch {
+        return null;
+      }
+    }
     case 'audit': {
       const row = await db.audit.findFirst({
         where,
