@@ -287,6 +287,9 @@ export const EntityType = z.enum([
   'build',
   // A family of projects (FRM-ADR-024). Appended, so no stored value moves.
   'group',
+  // A file on an entity (FRM-ADR-026), and the one-use upload link a remote session gets for one.
+  'attachment',
+  'attachment_ticket',
 ]);
 export type EntityType = z.infer<typeof EntityType>;
 

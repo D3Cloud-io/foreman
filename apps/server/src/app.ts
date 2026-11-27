@@ -35,6 +35,7 @@ import { linkRoutes } from './routes/links.js';
 import { guidelineRoutes } from './routes/guidelines.js';
 import { groupRoutes } from './routes/groups.js';
 import { blobRoutes } from './routes/blobs.js';
+import { attachmentRoutes, uploadLinkRoutes } from './routes/attachments.js';
 import { screenRoutes } from './routes/screens.js';
 import { projectIdeaRoutes } from './routes/projectIdeas.js';
 import { boardRoutes } from './routes/board.js';
@@ -146,6 +147,9 @@ export function createApp({ config, db, oidc = null, registry, verifier: given }
   mount(app, '/api/guidelines', guidelineRoutes(db));
   mount(app, '/api/groups', groupRoutes(db));
   mount(app, '/api/blobs', blobRoutes(db, config));
+  // Files filed on entities (FRM-ADR-026), and the one-use upload links the remote /mcp hands out.
+  mount(app, '/api/attachments', attachmentRoutes(db, config));
+  mount(app, '/uploads', uploadLinkRoutes(db, config));
   mount(app, '/api/board', boardRoutes(db, config));
   mount(app, '/api/projects', coverageRoutes(db));
   mount(app, '/api/projects', recordRoutes(db));
@@ -226,6 +230,7 @@ export function createApp({ config, db, oidc = null, registry, verifier: given }
   app.use('/api', apiNotFound);
   app.use('/auth', apiNotFound);
   app.use('/webhooks', apiNotFound);
+  app.use('/uploads', apiNotFound);
 
   // The console is served by the API, not by a second process (Architecture: one origin, one
   // cookie, no CORS). In development Vite serves it instead and CONSOLE_DIST is unset.
@@ -233,7 +238,7 @@ export function createApp({ config, db, oidc = null, registry, verifier: given }
   if (consoleDist !== undefined && existsSync(consoleDist)) {
     app.use(express.static(consoleDist, { index: false, maxAge: '1h' }));
     // SPA fallback, but never for the API: a mistyped endpoint must 404, not return HTML.
-    app.get(/^(?!\/(?:api|auth|webhooks|healthz|readyz|health|mcp|\.well-known)\b).*/, (_req, res) => {
+    app.get(/^(?!\/(?:api|auth|webhooks|uploads|healthz|readyz|health|mcp|\.well-known)\b).*/, (_req, res) => {
       res.sendFile(join(consoleDist, 'index.html'));
     });
   }

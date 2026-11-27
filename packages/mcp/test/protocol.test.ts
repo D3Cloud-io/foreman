@@ -48,6 +48,14 @@ function fakeApi(responses: Record<string, unknown> = {}) {
       calls.push({ method: 'DELETE', path });
       return Promise.resolve(match(path) as never);
     },
+    upload: (path, file, query) => {
+      calls.push({ method: 'UPLOAD', path, body: { name: file.name, size: file.bytes.length, query } });
+      return Promise.resolve(match(path) as never);
+    },
+    bytes: (path) => {
+      calls.push({ method: 'BYTES', path });
+      return Promise.resolve(match(path) as never);
+    },
   };
 
   return { client, calls };
@@ -56,9 +64,15 @@ function fakeApi(responses: Record<string, unknown> = {}) {
 /** A connected client/server pair, with the transports linked in memory. */
 async function connect(
   api: ForemanClient,
-  clientOptions: { elicitation?: (message: string) => { confirm: boolean } | 'decline' } = {},
+  clientOptions: {
+    elicitation?: (message: string) => { confirm: boolean } | 'decline';
+    readFile?: (path: string) => Promise<Uint8Array>;
+  } = {},
 ) {
-  const server = createServer({ client: api });
+  const server = createServer({
+    client: api,
+    ...(clientOptions.readFile === undefined ? {} : { readFile: clientOptions.readFile }),
+  });
   const client = new Client(
     { name: 'test-client', version: '0.0.0' },
     // Elicitation is declared only when the test provides a handler, so the "client cannot be
@@ -207,6 +221,8 @@ describe('tools/call over the protocol', () => {
       post: () => Promise.reject(new Error('unused')),
       patch: () => Promise.reject(new Error('unused')),
       del: () => Promise.reject(new Error('unused')),
+      upload: () => Promise.reject(new Error('unused')),
+      bytes: () => Promise.reject(new Error('unused')),
     };
     const { client } = await connect(failing);
 
@@ -466,6 +482,8 @@ describe('resources over the protocol (T-4.9, FRM-REQ-087)', () => {
       post: () => Promise.reject(new Error('unused')),
       patch: () => Promise.reject(new Error('unused')),
       del: () => Promise.reject(new Error('unused')),
+      upload: () => Promise.reject(new Error('unused')),
+      bytes: () => Promise.reject(new Error('unused')),
     };
     const { client } = await connect(failing);
 
@@ -713,5 +731,147 @@ describe('what the MCP surface deliberately cannot do', () => {
     // the client to run an inference on its behalf — the same thing by another route.
     expect(client.getServerCapabilities()?.prompts).toBeUndefined();
     await expect(client.listPrompts()).rejects.toThrow();
+  });
+});
+
+describe('attachments over the protocol (FRM-ADR-026)', () => {
+  const PDF = new TextEncoder().encode('%PDF-1.7\n% a design\n%%EOF\n');
+  const attachment = {
+    id: '01a21b28-0000-7000-8000-000000000001',
+    humanId: 'ATT-012',
+    name: 'living-town.pdf',
+    mediaType: 'application/pdf',
+    byteSize: PDF.length,
+    sha256: 'a'.repeat(64),
+    entity: { type: 'project_idea', humanId: 'PI-015' },
+    uploadedBy: 'claude',
+    createdAt: '2026-11-27T00:00:00.000Z',
+    deletedAt: null,
+    url: '/api/attachments/ATT-012',
+    contentUrl: '/api/attachments/ATT-012/content',
+  };
+
+  it('through the shim, reads the local file and sends it as one multipart upload — no gate', async () => {
+    const { client: api, calls } = fakeApi({ '/api/attachments': { ...attachment, auditEventIds: ['e1'] } });
+    const read: string[] = [];
+    const { client } = await connect(api, {
+      readFile: (path) => {
+        read.push(path);
+        return Promise.resolve(PDF);
+      },
+    });
+
+    const result = await client.callTool({
+      name: 'foreman_update',
+      arguments: { id: 'PI-015', attach: '/Users/someone/Design/living-town.pdf' },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(read).toEqual(['/Users/someone/Design/living-town.pdf']);
+    const upload = calls.find((c) => c.method === 'UPLOAD');
+    expect(upload?.path).toBe('/api/attachments');
+    // The name is the file's own, not the path: the operator's directories go nowhere.
+    expect(upload?.body).toEqual({ name: 'living-town.pdf', size: PDF.length, query: { entity: 'PI-015' } });
+    expect(text(result)).toContain('ATT-012');
+  });
+
+  it('through the shim, refuses a file of a type Foreman would refuse before a byte leaves the machine', async () => {
+    const { client: api, calls } = fakeApi();
+    const { client } = await connect(api, {
+      readFile: () => Promise.resolve(new TextEncoder().encode('-----BEGIN OPENSSH PRIVATE KEY-----')),
+    });
+
+    const result = await client.callTool({ name: 'foreman_update', arguments: { id: 'PI-015', attach: '~/.ssh/id_ed25519' } });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/not sent/);
+    expect(calls.some((c) => c.method === 'UPLOAD')).toBe(false);
+  });
+
+  it('with no local disk — the remote /mcp — answers with a one-use upload command and reads nothing', async () => {
+    const { client: api, calls } = fakeApi({
+      '/api/attachments/tickets': {
+        uploadUrl: 'https://foreman.example/uploads/frmup_abc',
+        expiresAt: '2026-11-27T00:15:00.000Z',
+        name: "Bob's design.pdf",
+        entity: 'PI-015',
+        maxBytes: 26214400,
+      },
+    });
+    const { client } = await connect(api);
+
+    const result = await client.callTool({ name: 'foreman_update', arguments: { id: 'PI-015', attach: "~/Desktop/Bob's design.pdf" } });
+
+    expect(result.isError).toBeFalsy();
+    const ticket = calls.find((c) => c.path === '/api/attachments/tickets');
+    expect(ticket?.body).toEqual({ entity: 'PI-015', name: "~/Desktop/Bob's design.pdf" });
+    expect(calls.some((c) => c.method === 'UPLOAD')).toBe(false);
+    const answer = JSON.parse(text(result)) as { attached: boolean; command: string };
+    expect(answer.attached).toBe(false);
+    // Quoted for a POSIX shell, with `~/` left outside the quotes so it still expands.
+    expect(answer.command).toBe(
+      "curl --fail-with-body -sS -T ~/'Desktop/Bob'\\''s design.pdf' 'https://foreman.example/uploads/frmup_abc'",
+    );
+  });
+
+  it('refuses attach mixed with an edit, and on a kind that does not carry files', async () => {
+    const { client } = await connect(fakeApi().client);
+    const mixed = await client.callTool({ name: 'foreman_update', arguments: { id: 'PI-015', attach: 'a.pdf', text: 'x' } });
+    expect(mixed.isError).toBe(true);
+    expect(text(mixed)).toMatch(/own call/);
+    const finding = await client.callTool({ name: 'foreman_update', arguments: { id: 'BND-CR-001', attach: 'a.pdf' } });
+    expect(finding.isError).toBe(true);
+  });
+
+  it('foreman_get ATT-n returns the metadata and the PDF itself as an embedded resource', async () => {
+    const { client: api, calls } = fakeApi({
+      '/api/entities/ATT-012': { type: 'attachment', humanId: 'ATT-012', entity: attachment, backlinks: [] },
+      '/api/attachments/ATT-012/content': { bytes: PDF, contentType: 'application/pdf' },
+    });
+    const { client } = await connect(api);
+
+    const result = await client.callTool({ name: 'foreman_get', arguments: { id: 'ATT-012' } });
+
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'GET /api/entities/ATT-012',
+      'BYTES /api/attachments/ATT-012/content',
+    ]);
+    const content = (result as { content: { type: string; resource?: { mimeType: string; blob: string } }[] }).content;
+    const resource = content.find((part) => part.type === 'resource');
+    expect(resource?.resource?.mimeType).toBe('application/pdf');
+    expect(Buffer.from(resource?.resource?.blob ?? '', 'base64').toString('latin1')).toContain('%PDF-1.7');
+  });
+
+  it('foreman_get sends text as text and an image as an image, and links what is too large to inline', async () => {
+    const md = { ...attachment, humanId: 'ATT-013', name: 'n.md', mediaType: 'text/markdown', byteSize: 9, contentUrl: '/api/attachments/ATT-013/content' };
+    const big = { ...attachment, humanId: 'ATT-014', byteSize: 50 * 1024 * 1024, contentUrl: '/api/attachments/ATT-014/content' };
+    const { client: api, calls } = fakeApi({
+      '/api/entities/ATT-013': { type: 'attachment', humanId: 'ATT-013', entity: md, backlinks: [] },
+      '/api/attachments/ATT-013/content': { bytes: new TextEncoder().encode('# Heading'), contentType: 'text/markdown' },
+      '/api/entities/ATT-014': { type: 'attachment', humanId: 'ATT-014', entity: big, backlinks: [] },
+    });
+    const { client } = await connect(api);
+
+    expect(text(await client.callTool({ name: 'foreman_get', arguments: { id: 'ATT-013' } }))).toContain('# Heading');
+    const large = await client.callTool({ name: 'foreman_get', arguments: { id: 'ATT-014' } });
+    expect(text(large)).toMatch(/over the .* sent inline/);
+    expect(calls.some((c) => c.path === '/api/attachments/ATT-014/content')).toBe(false);
+  });
+
+  it('foreman_delete ATT-n asks first, then soft-deletes through the attachments route', async () => {
+    const { client: api, calls } = fakeApi();
+    let asked = '';
+    const { client } = await connect(api, {
+      elicitation: (message) => {
+        asked = message;
+        return { confirm: true };
+      },
+    });
+
+    const result = await client.callTool({ name: 'foreman_delete', arguments: { id: 'ATT-012' } });
+
+    expect(asked).toMatch(/can be undone/);
+    expect(result.isError).toBeFalsy();
+    expect(calls.find((c) => c.method === 'DELETE')?.path).toBe('/api/attachments/ATT-012');
   });
 });

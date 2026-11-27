@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { ReadStream } from 'node:fs';
-import { BLOB_MEDIA_TYPES, type Blob, type BlobMediaType } from '@foreman/shared';
+import { BLOB_MEDIA_TYPES, type Blob, type BlobMediaType, type StoredMediaType } from '@foreman/shared';
 import { Prisma, type Db } from '../db.js';
 import { record, type Actor } from './audit.js';
 import { NotFound } from './errors.js';
@@ -83,7 +83,7 @@ function shape(row: { id: string; sha256: string; mediaType: string; byteSize: n
   return {
     id: row.id,
     sha256: row.sha256,
-    mediaType: row.mediaType as BlobMediaType,
+    mediaType: row.mediaType as StoredMediaType,
     byteSize: row.byteSize,
     url: `/api/blobs/${row.sha256}`,
   };
@@ -143,7 +143,8 @@ export async function storeBlob(
   db: Db,
   actor: Actor,
   dir: string,
-  input: { bytes: Buffer; mediaType: BlobMediaType },
+  // Any stored type: `POST /api/blobs` and attachments each decide what they let in (FRM-ADR-026).
+  input: { bytes: Buffer; mediaType: StoredMediaType },
 ): Promise<StoredBlob> {
   const sha256 = createHash('sha256').update(input.bytes).digest('hex');
   await writeOnce(dir, sha256, input.bytes);

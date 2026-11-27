@@ -86,6 +86,12 @@ const Env = z.object({
   FOREMAN_BLOB_DIR: z.string().min(1).default('./blobs'),
   /** The largest upload accepted, in bytes (FRM-REQ-191). 10 MiB unless a deployment says otherwise. */
   FOREMAN_BLOB_MAX_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+  /**
+   * The largest attachment accepted, in bytes (FRM-REQ-253). Its own figure, because a design PDF
+   * is routinely bigger than a screenshot. 25 MiB unless a deployment says otherwise: an upload is
+   * held in memory while it is hashed, so this bounds what one request can take.
+   */
+  FOREMAN_ATTACHMENT_MAX_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
 
   /** Where the built console lives. Set in the image; absent in development, where Vite serves it. */
   CONSOLE_DIST: z.string().optional(),

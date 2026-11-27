@@ -8,6 +8,7 @@
 import {
   AUDIT_EVENT_ID_HEADER,
   AUDIT_EVENT_IDS_HEADER,
+  type Attachment,
   type AuditEventsResponse,
   type AuditEventUndoability,
   type BriefDeployed,
@@ -304,6 +305,14 @@ export type Audited<T> = T & { auditEventIds: string[] };
 /** What a DELETE (204) gives back: the events it recorded, read from its headers. */
 export interface Deleted {
   auditEventIds: string[];
+}
+
+/** `GET /api/attachments?entity=` — the files on one entity, and the rules for adding one. */
+export interface AttachmentList {
+  items: Attachment[];
+  total: number;
+  maxBytes: number;
+  allowed: string[];
 }
 
 /** One status that moved because something beneath it did (ADR-018, `RolledUp` on the server). */
@@ -1367,6 +1376,18 @@ export const foreman = {
     api.get<ScreenDetail>(`/api/projects/${code}/screens/${humanId}`),
   /** The bytes first; a proposal or capture then names them by SHA. */
   uploadBlob: (file: Blob) => api.upload<UploadedBlob>('/api/blobs', 'file', file),
+
+  // ── Attachments (FRM-ADR-026) ──────────────────────────────────────────────
+  /** What is filed on one entity; with `deleted`, the deleted ones too, after the live. */
+  attachments: (entity: string, options: { deleted?: boolean } = {}) =>
+    api.get<AttachmentList>(
+      `/api/attachments?entity=${encodeURIComponent(entity)}${options.deleted === true ? '&deleted=true' : ''}`,
+    ),
+  /** One file, multipart, filed on `entity` under the file's own name. */
+  attach: (entity: string, file: File) =>
+    api.upload<Audited<Attachment>>(`/api/attachments?entity=${encodeURIComponent(entity)}`, 'file', file),
+  deleteAttachment: (humanId: string) => api.del(`/api/attachments/${humanId}`),
+  restoreAttachment: (humanId: string) => api.post<Audited<Attachment>>(`/api/attachments/${humanId}/restore`),
   addProposal: (code: string, humanId: string, body: ScreenProposalCreate) =>
     api.post<ScreenVersion>(`/api/projects/${code}/screens/${humanId}/proposals`, body),
   recordVerdict: (

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { GroupAccent, Priority, Size } from '../enums.js';
-import { AnyId, HumanId, parseAnyId, ProjectCode } from '../ids.js';
+import { ATTACHMENT_PREFIX, AnyId, HumanId, parseAnyId, ProjectCode } from '../ids.js';
 import { GroupArg } from './groups.js';
 import { IdeaFieldKey } from './record.js';
 import { TASK_BODY_MAX, TaskFiles } from './spine.js';
@@ -197,18 +197,21 @@ const FINDING_FIELDS = ['text', 'fixedCommitSha'] as const;
 /** Not a human ID's type segment: what a bare project code is keyed by in the tables below. */
 export const PROJECT_ID_TYPE = 'PROJECT';
 export const UPDATE_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  REQ: ['text', 'priority', 'phase'],
-  T: ['text', 'size', 'doneWhen', 'body', 'phase', 'files'],
-  P: ['text', 'size'],
+  REQ: ['text', 'priority', 'phase', 'attach'],
+  T: ['text', 'size', 'doneWhen', 'body', 'phase', 'files', 'attach'],
+  P: ['text', 'size', 'attach'],
   CR: FINDING_FIELDS,
   DA: FINDING_FIELDS,
   FR: FINDING_FIELDS,
   API: FINDING_FIELDS,
   IDEA: ['text', 'body', 'reason'],
-  PI: ['text', 'body', 'reason', 'section'],
+  PI: ['text', 'body', 'reason', 'section', 'attach'],
+  // An ADR's body is written through the API (its sections are not `text`), but a file can be
+  // filed on one: the paper a decision was made from is exactly what an attachment is for.
+  ADR: ['attach'],
   // A project, addressed by its bare code (FRM-REQ-238): `text` is its name, `body` its pitch,
   // and `group` moves it — to the end of that group's order, or with null out of every group.
-  [PROJECT_ID_TYPE]: ['text', 'body', 'group'],
+  [PROJECT_ID_TYPE]: ['text', 'body', 'group', 'attach'],
 };
 
 const KIND_NAMES: Readonly<Record<string, string>> = {
@@ -221,6 +224,7 @@ const KIND_NAMES: Readonly<Record<string, string>> = {
   API: 'finding',
   IDEA: 'idea',
   PI: 'project idea',
+  ADR: 'ADR',
   [PROJECT_ID_TYPE]: 'project',
 };
 
@@ -288,9 +292,31 @@ export const UpdateInput = z.strictObject({
   ),
   /** Project only: move it to this group (`GRP-001` or a slug), or null for none (FRM-REQ-238). */
   group: GroupArg.nullish().describe('GRP-n or slug; null ungroups'),
+  /**
+   * A local file to attach (FRM-ADR-026): PDF, image, Markdown or text. One field rather than a
+   * thirteenth tool, because the ceiling is full (ADR-002) — attaching *is* a change to what an
+   * entity carries. The stdio shim reads the file and sends it; the remote `/mcp` cannot see the
+   * caller's disk, so it answers with a one-use upload command to run where the file is. Either way
+   * the bytes travel as an HTTP body, never as base64 through the model (FRM-ADR-020).
+   */
+  attach: z.string().min(1).max(1024).optional().describe('Local file path to attach'),
 }).superRefine((value, ctx) => {
   const type = updateTargetType(value.id);
   const takes = type === undefined ? undefined : UPDATE_FIELDS[type];
+  // Attaching is its own write with its own answer; mixing it with an edit would make one call
+  // half-succeed in a way nobody could read back from the result.
+  if (value.attach !== undefined) {
+    const others = Object.entries(value).filter(
+      ([field, given]) => given !== undefined && field !== 'id' && field !== 'attach',
+    );
+    if (others.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['attach'],
+        message: `attach a file on its own call — leave out ${others.map(([f]) => f).join(', ')}`,
+      });
+    }
+  }
   // An ID this tool cannot change at all is refused by the tool, with its own message.
   if (type === undefined || takes === undefined) return;
   for (const [field, given] of Object.entries(value)) {
@@ -360,14 +386,16 @@ export type SetStatusInput = z.infer<typeof SetStatusInput>;
  * Soft, like every delete here — the row is hidden, its ID is never reused, and `foreman_undo`'s
  * absence is not a problem because the console's undo reads the same audit event.
  */
-const DELETABLE = ['IDEA', 'PI'];
+// An **attachment** (`ATT-012`, FRM-ADR-026) passes the same test: nothing cites a file — it
+// hangs off the entity, which keeps every citation it had — so deleting one loses no reference.
+const DELETABLE = ['IDEA', 'PI', ATTACHMENT_PREFIX];
 
 export const DeleteInput = z.strictObject({
   id: AnyId.refine((value) => DELETABLE.includes(parseAnyId(value)?.type ?? ''), {
     message:
-      'only an idea or a project idea can be deleted over MCP — anything else is cited by ' +
-      'something, and the console is where you can see what the deletion takes with it',
-  }).describe('The idea to delete, e.g. BND-IDEA-004 or PI-007.'),
+      'only an idea, a project idea or an attachment can be deleted over MCP — anything else is ' +
+      'cited by something, and the console is where you can see what the deletion takes with it',
+  }).describe('e.g. BND-IDEA-004, PI-007 or ATT-012'),
 });
 export type DeleteInput = z.infer<typeof DeleteInput>;
 

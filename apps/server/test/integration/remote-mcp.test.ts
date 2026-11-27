@@ -195,6 +195,48 @@ describe.skipIf(url === undefined)('the remote MCP endpoint', () => {
   });
 
   describe('what it will not do', () => {
+    /** One JSON-RPC call over /mcp, as the linked account, answered as its `result`. */
+    const rpc = async (method: string, params: unknown) => {
+      const res = await fetch(`${origin}/mcp`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          authorization: `Bearer ${GOOD}`,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      });
+      const body = await res.text();
+      const line = body.split('\n').find((l) => l.includes('"result"')) ?? body;
+      return (JSON.parse(line.replace(/^data: /, '')) as { result: { content: { text: string }[]; isError?: boolean } }).result;
+    };
+
+    it('never reads its own disk to attach a file: it hands back a one-use upload command (FRM-ADR-026)', async () => {
+      const created = await rpc('tools/call', {
+        name: 'foreman_create',
+        arguments: { kind: 'project_idea', text: 'RMCP attach target' },
+      });
+      const idea = (JSON.parse(created.content[0]?.text ?? '{}') as { humanId: string }).humanId;
+      expect(idea).toMatch(/^PI-\d+$/);
+
+      // A real file on the server's own disk, named the way an attacker would want it read.
+      const result = await rpc('tools/call', {
+        name: 'foreman_update',
+        arguments: { id: idea, attach: '/etc/hosts.txt' },
+      });
+      expect(result.isError ?? false, result.content[0]?.text).toBe(false);
+      const answer = JSON.parse(result.content[0]?.text ?? '{}') as { attached: boolean; command: string };
+      expect(answer.attached).toBe(false);
+      expect(answer.command).toMatch(/^curl --fail-with-body -sS -T '\/etc\/hosts.txt' 'https:\/\/foreman.example.test\/uploads\/frmup_/);
+      // Nothing was filed: the server sent no bytes of its own anywhere.
+      const target = await db.projectIdea.findFirst({ where: { humanId: idea } });
+      expect(await db.attachment.count({ where: { entityId: target?.id ?? '' } })).toBe(0);
+
+      await db.attachmentTicket.deleteMany({ where: { entityHumanId: idea } });
+      await db.auditEvent.deleteMany({ where: { OR: [{ entityType: 'attachment_ticket', actor: EMAIL }, { entityHumanId: idea }] } });
+      await db.projectIdea.deleteMany({ where: { title: 'RMCP attach target' } });
+    });
+
     it('answers GET and DELETE plainly, because it keeps no session', async () => {
       for (const method of ['GET', 'DELETE']) {
         const res = await fetch(`${origin}/mcp`, {

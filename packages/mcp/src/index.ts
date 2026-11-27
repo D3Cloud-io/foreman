@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createClient } from './client.js';
 import { createServer } from './server.js';
@@ -37,5 +40,13 @@ if (baseUrl === undefined || token === undefined) {
   process.exit(1);
 }
 
-const server = createServer({ client: createClient({ baseUrl, token }) });
+/**
+ * The one capability the shim has that the remote `/mcp` must not: reading a file on this machine,
+ * for `foreman_update { attach }` (FRM-ADR-026). `~/` is the operator's home, and a relative path
+ * is relative to where Claude launched the shim.
+ */
+const readLocal = async (path: string): Promise<Uint8Array> =>
+  readFile(path.startsWith('~/') ? resolve(homedir(), path.slice(2)) : resolve(path));
+
+const server = createServer({ client: createClient({ baseUrl, token }), readFile: readLocal });
 await server.connect(new StdioServerTransport());
